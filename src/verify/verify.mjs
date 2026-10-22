@@ -1,6 +1,6 @@
-import { existsSync, mkdirSync, readdirSync, rmSync, symlinkSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { spawn } from "node:child_process";
@@ -182,6 +182,49 @@ export function reusableChecks({ previous, plan, mainDelta }) {
   return { reuse, rerun };
 }
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function holderAlive(lock) {
+  let pid = 0;
+  try {
+    pid = Number.parseInt(readFileSync(lock, "utf8").trim(), 10);
+  } catch {
+    return { alive: false, pid: 0 };
+  }
+  if (!Number.isInteger(pid) || pid <= 0) return { alive: false, pid: 0 };
+  try {
+    process.kill(pid, 0);
+    return { alive: true, pid };
+  } catch {
+    return { alive: false, pid };
+  }
+}
+
+/**
+ * 固定检出目录同一时刻只允许一个验证使用。
+ * 等不到锁就返回 null，由调用方改用临时目录：宁可牺牲缓存，也不让两个任务互相等。
+ */
+async function acquireCheckoutLock({ dir, timeoutMs = 120_000, log }) {
+  const lock = join(dir, "lock");
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    try {
+      writeFileSync(lock, String(process.pid), { flag: "wx" });
+      return () => rmSync(lock, { force: true });
+    } catch {
+      const { alive, pid } = holderAlive(lock);
+      // 持锁进程已不存在（崩溃或被杀）：清掉残留锁，立即重试。
+      if (!alive) {
+        rmSync(lock, { force: true });
+        continue;
+      }
+      log(`[verify] 另一个验证正在进行(pid ${pid})，等待固定检出目录`);
+      await sleep(500);
+    }
+  }
+  return null;
+}
+
 function checkoutRootFor(root) {
   const base = process.env.HARNESS_CACHE_DIR || join(homedir(), ".cache", "harness");
   const dir = join(
@@ -198,8 +241,7 @@ function checkoutRootFor(root) {
  * 前端 typecheck 的 tsBuildInfoFile 记录的是绝对路径，目录一变增量缓存必然失效，
  * 固定目录后同一个仓库的第二次验证可以命中缓存。
  */
-function prepareCheckout({ root, headCommit, log }) {
-  const parent = checkoutRootFor(root);
+function prepareCheckout({ root, headCommit, log, parent }) {
   const checkout = join(parent, "work");
   if (existsSync(join(checkout, ".git"))) {
     const moved = git(root, ["-C", checkout, "checkout", "--force", "--detach", headCommit]);
@@ -255,7 +297,15 @@ export async function verify({
   const priorMainDelta = previous.ok ? changedPaths(root, previous.record.baseCommit, baseCommit) : [];
 
   mkdirSync(dataDir(root), { recursive: true });
-  const { checkout } = prepareCheckout({ root, headCommit, log });
+  const sharedParent = checkoutRootFor(root);
+  const releaseLock = await acquireCheckoutLock({ dir: sharedParent, log });
+  let parent = sharedParent;
+  if (!releaseLock) {
+    // 等不到锁就用独立临时目录：牺牲缓存，保证两个任务能同时验证。
+    parent = mkdtempSync(join(tmpdir(), "harness-checkout-fallback-"));
+    log("[verify] 未能获得固定检出目录的锁，本次使用临时目录（增量缓存不生效）");
+  }
+  const { checkout } = prepareCheckout({ root, headCommit, log, parent });
   const mainRoot = mainWorktreeRoot(root);
   const env = project.config.env ?? {};
   const started = new Date().toISOString();
@@ -347,8 +397,8 @@ export async function verify({
     });
     return { status, record, results, notExecuted, advisory, changed };
   } finally {
-    if (!keepCheckout) {
-      git(root, ["worktree", "prune"]);
-    }
+    if (!keepCheckout) git(root, ["worktree", "prune"]);
+    if (releaseLock) releaseLock();
+    if (parent !== sharedParent) rmSync(parent, { recursive: true, force: true });
   }
 }
