@@ -1,10 +1,36 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { loadTrustedProject, mainBranch } from "../lib/config.mjs";
 import { commonDir, git, repoRoot } from "../lib/git.mjs";
 import { resolvePolicy } from "../policy/resolve.mjs";
 import { packageVersion, MARK_START } from "./managed.mjs";
 import { shimPath, verifyVersion, versionDir } from "./install.mjs";
+
+// 读取 Codex 用户配置里是否已有本项目钩子的 trusted_hash 记录。
+// 路径要按真实路径比较：git 常返回 /private/var/...，用户配置里可能写成 /var/...，两者是同一目录。
+function codexTrustState(root) {
+  const file = join(process.env.CODEX_HOME || join(homedir(), ".codex"), "config.toml");
+  if (!existsSync(file)) return false;
+  const text = readFileSync(file, "utf8");
+  const candidates = new Set([root]);
+  try {
+    const real = realpathSync(root);
+    candidates.add(real);
+    // macOS 上 /var 与 /private/var 是同一目录的两种写法，两种都要比对。
+    candidates.add(real.replace(/^\/private\//, "/"));
+  } catch {
+    // 软链接解析失败时只比对原始路径。
+  }
+  for (const candidate of candidates) {
+    const marker = `[hooks.state."${candidate}/.codex/hooks.json`;
+    const index = text.indexOf(marker);
+    if (index < 0) continue;
+    const section = text.slice(index, index + 800);
+    if (/trusted_hash\s*=\s*"sha256:/.test(section)) return true;
+  }
+  return false;
+}
 
 function gitHooksDir(root) {
   const hooksPath = git(root, ["config", "--get", "core.hooksPath"]).stdout.trim();
@@ -48,11 +74,17 @@ export function doctor({ cwd = process.cwd() } = {}) {
 
   const codex = join(root, ".codex", "hooks.json");
   const codexOk = existsSync(codex) && readFileSync(codex, "utf8").includes("codex-hook.mjs");
+  // Codex 要求钩子先被信任一次；信任记录写在工作目录的 config.toml 的 [hooks.state] 下。
+  const codexTrusted = codexTrustState(root);
   checks.push({
     id: "client:codex",
-    ok: codexOk,
-    verified: false,
-    detail: codexOk ? "钩子文件已就位；Codex 需在宿主要求时批准项目钩子，执行路径尚未实测" : "未接入 .codex/hooks.json",
+    ok: codexOk && codexTrusted,
+    verified: codexTrusted,
+    detail: !codexOk
+      ? "未接入 .codex/hooks.json"
+      : codexTrusted
+        ? "钩子已接入且已信任，拦截生效"
+        : "钩子已接入但尚未信任：在 Codex 里运行 /hooks 批准一次，否则命令不会经过门禁",
   });
 
   const dsh = join(root, ".harness", "dsh-plugin");

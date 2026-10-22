@@ -109,7 +109,7 @@ const VERIFY = {
 };
 
 /** 建一个带 harness 配置的临时仓库，并把当前源码发布进隔离的版本目录。 */
-export function makeRepo({ files = {}, project = {}, install = true } = {}) {
+export function makeRepo({ files = {}, project = {}, install = true, trustCodex = true } = {}) {
   const base = mkdtempSync(join(tmpdir(), "harness-test-"));
   const root = join(base, "repo");
   mkdirSync(root);
@@ -118,6 +118,8 @@ export function makeRepo({ files = {}, project = {}, install = true } = {}) {
     HARNESS_KEY_DIR: join(base, "key"),
     HARNESS_STORE: join(base, "store"),
     HARNESS_CACHE_DIR: join(base, "cache"),
+    // 夹具自带 Codex 用户目录，避免读到本机真实配置，也便于模拟“已信任钩子”。
+    CODEX_HOME: join(base, "codex-home"),
   };
 
   REPO_ENV.set(root, env);
@@ -138,6 +140,9 @@ export function makeRepo({ files = {}, project = {}, install = true } = {}) {
   write(root, "AGENTS.md", "# 项目规范\n\n<!-- harness:start -->\n## Harness\n<!-- harness:end -->\n");
   commit(root, "chore: 初始化\n\n- 写入测试配置\n- 建立初始提交", { "README.md": "demo\n", ...files });
 
+  const codexHome = join(base, "codex-home");
+  mkdirSync(codexHome, { recursive: true });
+
   if (install) {
     const published = sh(root, process.execPath, [join(PACKAGE_ROOT, "bin", "harness.mjs"), "install"], env);
     if (published.status !== 0) throw new Error(`安装失败: ${published.stderr}`);
@@ -146,6 +151,12 @@ export function makeRepo({ files = {}, project = {}, install = true } = {}) {
     const bypass = { ...env, HARNESS_MAIN_BYPASS: "1" };
     git(root, "add", "-A", bypass);
     git(root, "commit", "-q", "--no-verify", "-m", "chore: 忽略门禁入口\n\n- 入口由 install 生成\n- 不入库", bypass);
+    if (trustCodex !== false) {
+      writeFileSync(
+        join(codexHome, "config.toml"),
+        `[hooks.state."${root}/.codex/hooks.json:pre_tool_use:0:0"]\ntrusted_hash = "sha256:${"a".repeat(64)}"\n`,
+      );
+    }
   }
 
   return {

@@ -50,7 +50,18 @@ function isDir(path) {
 /** 把当前源码树装进版本目录，并写内容哈希清单。 */
 export function publishVersion({ version = packageVersion() } = {}) {
   const target = versionDir(version);
-  if (existsSync(target)) return { version, dir: target, existed: true };
+  const incoming = hashTree(PACKAGE_ROOT, ["src", "assets", "bin", "package.json", "VERSION"]);
+  if (existsSync(target)) {
+    const installedFile = join(target, "MANIFEST.json");
+    if (existsSync(installedFile)) {
+      const installed = JSON.parse(readFileSync(installedFile, "utf8"));
+      if (JSON.stringify(installed.files) === JSON.stringify(incoming.files)) {
+        return { version, dir: target, existed: true };
+      }
+    }
+    // 内容不一致：替换旧目录，避免装着过期代码。
+    rmSync(target, { recursive: true, force: true });
+  }
   const tmp = `${target}.tmp-${process.pid}`;
   mkdirSync(tmp, { recursive: true });
   for (const entry of ["src", "assets", "bin", "package.json", "VERSION"]) {
@@ -60,7 +71,7 @@ export function publishVersion({ version = packageVersion() } = {}) {
     if (isDir(source)) copyTree(source, dest);
     else copyFileSync(source, dest);
   }
-  const manifest = hashTree(tmp);
+  const manifest = hashTree(tmp, ["src", "assets", "bin", "package.json", "VERSION"]);
   writeFileSync(join(tmp, "MANIFEST.json"), `${JSON.stringify(manifest, null, 2)}\n`);
   mkdirSync(storeRoot(), { recursive: true });
   copyTree(tmp, target);
@@ -68,7 +79,8 @@ export function publishVersion({ version = packageVersion() } = {}) {
   return { version, dir: target, existed: false, files: Object.keys(manifest.files).length };
 }
 
-function hashTree(root) {
+// 只统计实际分发的目录，根目录下的 README、测试等不参与比对。
+function hashTree(root, entries) {
   const files = {};
   const walk = (dir) => {
     for (const entry of readdirSafe(dir)) {
@@ -80,7 +92,12 @@ function hashTree(root) {
       }
     }
   };
-  walk(root);
+  for (const entry of entries) {
+    const full = join(root, entry);
+    if (!existsSync(full)) continue;
+    if (isDir(full)) walk(full);
+    else files[relative(root, full).split("\\").join("/")] = createHash("sha256").update(readFileSync(full)).digest("hex");
+  }
   return { version: packageVersion(), files };
 }
 

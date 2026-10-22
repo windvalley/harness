@@ -132,13 +132,21 @@ describe("安装与自检", () => {
     assert.match(readFileSync(join(repo.root, ".harness/config.json"), "utf8"), /保留/);
   });
 
-  test("doctor 报告各项状态，写明未实测的客户端", () => {
+  test("doctor 报告各项状态，已信任的客户端不再标未实测", () => {
     const repo = setup();
     const result = repo.cli("doctor");
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /client:claude/);
-    assert.match(result.stdout, /client:codex/);
-    assert.match(result.stdout, /未实测/);
+    assert.match(result.stdout, /client:codex: 钩子已接入且已信任/);
+    assert.match(result.stdout, /client:dsh/);
+  });
+
+  test("Codex 钩子未信任时 doctor 明确要求先批准", () => {
+    const repo = makeRepo({ trustCodex: false });
+    repos.push(repo);
+    const result = repo.cli("doctor");
+    assert.notEqual(result.status, 0);
+    assert.match(result.stdout, /尚未信任/);
   });
 
   test("已安装版本内容被改动时 doctor 报错", () => {
