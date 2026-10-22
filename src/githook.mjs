@@ -33,8 +33,9 @@ export function checkStaged({ root, resolved }) {
     .filter(Boolean);
   if (paths.length === 0) return { decision: "allow" };
 
+  // layer=agent 的规则只约束 Agent 的实时工具调用；git 层看不出写入者，跳过它们。
   const writeRules = resolved.rules.filter(
-    (rule) => rule.kind === "write-protect" || rule.kind === "content-forbid",
+    (rule) => (rule.kind === "write-protect" || rule.kind === "content-forbid") && rule.layer !== "agent",
   );
   for (const rule of writeRules) {
     for (const path of paths) {

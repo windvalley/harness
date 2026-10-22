@@ -15,7 +15,8 @@
       ],
       "allow": [],
       "reason": "门禁的执行器入口不由 Agent 修改，否则可以关掉拦截而不留下改动记录",
-      "fix": "需要调整入口时由用户执行 harness install 重新生成；规则与配置可以直接改，合并前会由用户确认"
+      "fix": "需要调整入口时由用户执行 harness install 重新生成；规则与配置可以直接改，合并前会由用户确认",
+      "layer": "agent"
     },
     {
       "id": "protect-executor-via-shell",

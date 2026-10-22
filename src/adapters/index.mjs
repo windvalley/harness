@@ -1,5 +1,5 @@
 import { currentBranch, isLinkedWorktree, repoRoot } from "../lib/git.mjs";
-import { loadTrustedProject } from "../lib/config.mjs";
+import { loadGuardProject } from "../lib/config.mjs";
 import { appendLedger } from "../lib/store.mjs";
 import { evaluateCall, formatDenial } from "../policy/engine.mjs";
 import { resolvePolicy } from "../policy/resolve.mjs";
@@ -31,10 +31,11 @@ export function guard({ adapter, payload, log = () => {} }) {
   const cwd = payload?.cwd || process.cwd();
   let project;
   try {
-    project = loadTrustedProject(cwd);
+    project = loadGuardProject(cwd);
   } catch (error) {
     return { decision: "error", message: error.message };
   }
+  if (!project) return { decision: "allow" };
 
   const normalized = adapter.normalize(payload, { root: project.root });
   if (!normalized) return { decision: "allow" };

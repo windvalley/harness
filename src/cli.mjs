@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
-import { loadTrustedProject } from "./lib/config.mjs";
+import { loadGuardProject, loadTrustedProject } from "./lib/config.mjs";
 import { git, repoRoot } from "./lib/git.mjs";
 import { readLedger } from "./lib/store.mjs";
 import { resolvePolicy, ruleStats } from "./policy/resolve.mjs";
@@ -157,7 +157,9 @@ function cmdGithook(argv) {
   const [name] = argv;
   const cwd = process.cwd();
   const root = repoRoot(cwd);
-  const project = loadTrustedProject(cwd);
+  const project = loadGuardProject(cwd);
+  // 没接入 harness 的仓库（或钩子残留）直接放行，不能挡住正常的 git 操作。
+  if (!project) return 0;
   const resolved = resolvePolicy(project.policy);
 
   if (name === "pre-commit") {

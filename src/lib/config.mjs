@@ -59,6 +59,29 @@ export function loadProject(cwd, { fromRef, root = repoRoot(cwd) } = {}) {
   };
 }
 
+/**
+ * 拦截层使用的配置来源。
+ * 主分支已有配置就读主分支，保持信任根不变；
+ * 主分支还没有（例如 init 之后的第一次提交）时退回工作区，让配置本身能被提交进去；
+ * 两边都没有配置时返回 null，表示这个仓库没有接入 harness，钩子应当放行。
+ */
+export function loadGuardProject(cwd) {
+  const root = repoRoot(cwd);
+  let ref;
+  try {
+    ref = trustedMainRef(root);
+  } catch {
+    ref = null;
+  }
+  if (ref && showBlob(root, ref, `${PROJECT_DIR}/config.json`) !== null) {
+    return loadProject(root, { fromRef: ref, root });
+  }
+  if (existsSync(join(root, PROJECT_DIR, "config.json"))) {
+    return { ...loadProject(root, { root }), bootstrap: true };
+  }
+  return null;
+}
+
 export function loadTrustedProject(cwd) {
   const root = repoRoot(cwd);
   return loadProject(root, { fromRef: trustedMainRef(root), root });
@@ -68,9 +91,17 @@ export function mainBranch(project) {
   return project.config.mainBranch || "main";
 }
 
+export const GATE_FILES = [
+  ".harness/config.json",
+  ".harness/policy.json",
+  ".harness/verify.json",
+  ".harness/golden/**",
+  ".harness/rules/**",
+];
+
 export function gatePaths(project) {
-  const paths = project.config.governance?.gatePaths ?? [];
-  return [".harness/**", ...paths];
+  const extra = project.config.governance?.gatePaths ?? [];
+  return [...GATE_FILES, ...extra];
 }
 
 export function acceptanceDir(project) {
