@@ -107,6 +107,30 @@ export function parseVerdict(structured) {
   return structured;
 }
 
+/** 按顶层目录把改动分组，给出每组的大小，便于把一次大改拆成几次可评审的提交。 */
+export function splitSuggestion(root, baseCommit, branchCommit, totalChars, maxChars = MAX_DIFF_CHARS) {
+  const paths = gitOk(root, ["diff", "--name-only", "--no-renames", baseCommit, branchCommit]).split("\n").filter(Boolean);
+  const groups = new Map();
+  for (const path of paths) {
+    const top = path.includes("/") ? path.split("/")[0] : "(根目录)";
+    if (!groups.has(top)) groups.set(top, []);
+    groups.get(top).push(path);
+  }
+  const rows = [...groups.entries()]
+    .map(([top, files]) => {
+      const size = files.reduce(
+        (sum, file) => sum + gitOk(root, ["diff", "--no-color", "-U8", baseCommit, branchCommit, "--", file]).length,
+        0,
+      );
+      return { top, files: files.length, size };
+    })
+    .sort((a, b) => b.size - a.size);
+  const lines = rows.map((row) => `  ${row.top}: ${row.files} 个文件，约 ${row.size} 字符`);
+  const need = Math.ceil(totalChars / maxChars);
+  lines.push(`  当前共 ${totalChars} 字符，至少拆成 ${need} 次提交，优先按上面的顺序分组`);
+  return lines.join("\n");
+}
+
 export function blockingFindings(findings, blockSeverities) {
   return findings.filter((item) => blockSeverities.includes(item.severity));
 }
@@ -145,8 +169,10 @@ export async function reviewBranch({ cwd, branch, log = console.error, reviewer 
   const baseCommit = gitOk(root, ["merge-base", mainRef, branchCommit]);
   const diffText = gitOk(root, ["diff", "--no-color", "-U8", baseCommit, branchCommit]);
   if (diffText.length > MAX_DIFF_CHARS) {
+    // 不静默截断，也不只说“请拆小”：直接按目录给出可执行的分组建议。
     throw new Error(
-      `变更 diff 有 ${diffText.length} 字符，超过独立评审上限 ${MAX_DIFF_CHARS}，不能只评审一部分就放行。请把任务拆成更小的分支`,
+      `变更 diff 有 ${diffText.length} 字符，超过独立评审上限 ${MAX_DIFF_CHARS}，不能只评审一部分就放行。\n` +
+        `按目录拆分建议（每组单独一个分支验收）：\n${splitSuggestion(root, baseCommit, branchCommit, diffText.length)}`,
     );
   }
 

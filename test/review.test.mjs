@@ -185,3 +185,26 @@ describe("L3 判据", () => {
     assert.match(result.stdout, /FAIL governance/);
   });
 });
+
+describe("评审的拆分提示", () => {
+  test("diff 过大时给出按目录的分组建议", async () => {
+    const { splitSuggestion } = await import("../src/review/review.mjs");
+    const repo = setup();
+    repo.branch("task/big", {
+      "backend/a.js": "x".repeat(120_000),
+      "frontend/b.vue": "y".repeat(120_000),
+    });
+    const base = git(repo.root, "merge-base", "main", "task/big");
+    const head = git(repo.root, "rev-parse", "task/big");
+    const suggestion = splitSuggestion(repo.root, base, head, 240_000, 50_000);
+    assert.match(suggestion, /backend/);
+    assert.match(suggestion, /frontend/);
+    assert.match(suggestion, /至少拆成 5 次/);
+
+    fakeReviewer(repo, APPROVE);
+    assert.equal(repo.cli("verify", "--branch", "task/big").status, 0);
+    const review = repo.cli("review", "--branch", "task/big");
+    assert.equal(review.status, 1);
+    assert.match(review.stderr, /按目录拆分建议/);
+  });
+});
