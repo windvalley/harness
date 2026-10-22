@@ -25,6 +25,20 @@ DeepSeek Harness 需要在你自己的终端注册一次插件：
 dsh plugin --profile <名称> add <项目路径>/.harness/dsh-plugin
 ```
 
+## 客户端支持
+
+git 层（`pre-commit`、`commit-msg`、`reference-transaction`）对所有客户端生效，因此即使实时拦截没接上，提交与主分支保护仍然有效。
+
+| 客户端 | 实时拦截 | 状态 |
+| --- | --- | --- |
+| Claude Code（CLI） | `PreToolUse`，拒绝时退出码 2 | 已实测 |
+| Claude 桌面版 | 同一套钩子实现 | 仅静态确认，未端到端实测 |
+| Codex CLI | `.codex/hooks.json` 的 `PreToolUse` | 已实测；需先信任钩子 |
+| Codex 桌面版（ChatGPT.app 内置引擎） | 同上 | 已实测；需先信任钩子 |
+| DeepSeek Harness | Cordis 插件 `tools/pre-execute` | 插件已生成，需自行注册，未在运行中的宿主实测 |
+
+**Codex 需要先信任钩子。** 未信任时命令不会经过门禁，只有 git 层生效。在 Codex 里运行 `/hooks`，进入 `Review hooks` 后按 `t` 信任。信任记录写进 `config.toml` 的 `[hooks.state."<项目>/.codex/hooks.json:pre_tool_use:0:0"]`，绑定钩子内容哈希：重新安装或改动了钩子命令，需要再批准一次。
+
 ## 一次任务
 
 ```bash
@@ -79,11 +93,24 @@ cd <项目> && node ~/github/harness/bin/harness.mjs upgrade
 
 运行 `harness help` 查看全部命令。常用的体检命令：
 
+- `harness status --branch <分支>`：只读汇总，指出还差哪几步才能合并。
 - `harness doctor`：安装与接入自检，未实测的客户端标 `[?]`。
 - `harness conformance`：逐项判定 L3 判据，样本不足的项标 `PEND`。
 - `harness metrics`：按周度量。
-- `harness golden`：重放黄金任务。
+- `harness golden`：重放黄金任务。接入时自带 14 个用例，改了规则后运行，原有判定退化会直接失败。
 - `harness rules`：列出解析后的规则。
+
+## 卸载与版本
+
+```bash
+harness uninstall --dry-run   # 先看会删什么
+harness uninstall             # 删除生成物，保留 .harness/ 下的配置与用例
+harness uninstall --purge     # 连 .harness/ 一起删
+harness versions              # 列出已安装的版本
+harness prune --dry-run       # 清理旧版本，默认只保留当前版本
+```
+
+卸载不会删除全局的版本目录，其他接入的项目不受影响。
 
 ## 开发
 
