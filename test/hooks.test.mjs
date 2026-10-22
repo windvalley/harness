@@ -3,6 +3,7 @@ import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, wr
 import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
 import { commit, CONFIG, git, makeRepo, sh, write, writeReview } from "./helpers.mjs";
+import { PACKAGE_ROOT as PACKAGE_ROOT_TEST } from "./helpers.mjs";
 import { packageVersion as currentVersion } from "../src/install/managed.mjs";
 
 let repos = [];
@@ -198,6 +199,17 @@ describe("安装与自检", () => {
     assert.deepEqual(empty.checks.map((check) => check.id), ["lint", "manual-check", "visual-hint"]);
 
     for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("包内只有一份版本号，版本目录清单覆盖源码、资源与入口", () => {
+    // 版本号只来自 package.json；两份来源迟早对不上。
+    const root = PACKAGE_ROOT_TEST;
+    assert.equal(existsSync(join(root, "VERSION")), false, "包根目录不应再有 VERSION 文件");    const repo = setup();
+    const manifest = JSON.parse(readFileSync(join(repo.env.HARNESS_STORE, currentVersion(), "MANIFEST.json"), "utf8"));
+    assert.equal(manifest.version, currentVersion());
+    assert.ok(Object.keys(manifest.files).some((rel) => rel.startsWith("src/")), "应包含源码");
+    assert.ok(Object.keys(manifest.files).some((rel) => rel.startsWith("assets/")), "应包含资源");
+    assert.ok(Object.keys(manifest.files).includes("bin/harness.mjs"), "应包含入口");
   });
 
   test("init 自带黄金任务，且开箱全部通过", () => {

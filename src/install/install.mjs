@@ -50,7 +50,7 @@ function isDir(path) {
 /** 把当前源码树装进版本目录，并写内容哈希清单。 */
 export function publishVersion({ version = packageVersion() } = {}) {
   const target = versionDir(version);
-  const incoming = hashTree(PACKAGE_ROOT, ["src", "assets", "bin", "package.json", "VERSION"]);
+  const incoming = hashTree(PACKAGE_ROOT, ["src", "assets", "bin", "package.json"]);
   if (existsSync(target)) {
     const installedFile = join(target, "MANIFEST.json");
     if (existsSync(installedFile)) {
@@ -64,14 +64,14 @@ export function publishVersion({ version = packageVersion() } = {}) {
   }
   const tmp = `${target}.tmp-${process.pid}`;
   mkdirSync(tmp, { recursive: true });
-  for (const entry of ["src", "assets", "bin", "package.json", "VERSION"]) {
+  for (const entry of ["src", "assets", "bin", "package.json"]) {
     const source = join(PACKAGE_ROOT, entry);
     if (!existsSync(source)) continue;
     const dest = join(tmp, entry);
     if (isDir(source)) copyTree(source, dest);
     else copyFileSync(source, dest);
   }
-  const manifest = hashTree(tmp, ["src", "assets", "bin", "package.json", "VERSION"]);
+  const manifest = hashTree(tmp, ["src", "assets", "bin", "package.json"]);
   writeFileSync(join(tmp, "MANIFEST.json"), `${JSON.stringify(manifest, null, 2)}\n`);
   mkdirSync(storeRoot(), { recursive: true });
   copyTree(tmp, target);
