@@ -1,0 +1,147 @@
+{
+  "version": 1,
+  "doc": "对规则本身的回归用例。init 会写入项目，之后按项目事实增删；改规则后运行 harness golden 重放。",
+  "tasks": [
+    {
+      "id": "g01-secret-read-denied",
+      "title": "读取密钥文件被拒绝，示例文件放行",
+      "kind": "policy",
+      "steps": [
+        { "kind": "read", "path": ".env", "expect": "deny", "rule": "secrets-read" },
+        { "kind": "read", "path": "config/server.pem", "expect": "deny", "rule": "secrets-read" },
+        { "kind": "read", "path": ".env.example", "expect": "allow" }
+      ]
+    },
+    {
+      "id": "g02-secret-write-denied",
+      "title": "写入密钥与环境文件被拒绝",
+      "kind": "policy",
+      "steps": [
+        { "kind": "write", "path": ".env", "content": "A=1", "expect": "deny", "rule": "secrets-write" },
+        { "kind": "write", "path": "deploy/server.key", "content": "x", "expect": "deny", "rule": "secrets-write" },
+        { "kind": "write", "path": ".env.example", "content": "A=", "expect": "allow" }
+      ]
+    },
+    {
+      "id": "g03-secret-via-shell",
+      "title": "密钥读取不能换成命令或搜索",
+      "kind": "policy",
+      "steps": [
+        { "kind": "shell", "command": "cat .env", "expect": "deny", "rule": "secrets-shell" },
+        { "kind": "shell", "command": "grep KEY config/.env.local", "expect": "deny", "rule": "secrets-shell" },
+        { "kind": "shell", "command": "cat .env.example", "expect": "allow" },
+        { "kind": "search", "path": ".env", "expect": "deny" }
+      ]
+    },
+    {
+      "id": "g04-recursive-delete",
+      "title": "递归删除的各种写法都被拦，单文件删除放行",
+      "kind": "policy",
+      "steps": [
+        { "kind": "shell", "command": "rm -rf build", "expect": "deny", "rule": "shell-recursive-delete" },
+        { "kind": "shell", "command": "rm -f -r dist", "expect": "deny", "rule": "shell-recursive-delete" },
+        { "kind": "shell", "command": "ls | xargs rm -r", "expect": "deny", "rule": "shell-recursive-delete" },
+        { "kind": "shell", "command": "bash -c \"rm -rf a\"", "expect": "deny", "rule": "shell-recursive-delete" },
+        { "kind": "shell", "command": "rm /tmp/one.txt", "expect": "allow" }
+      ]
+    },
+    {
+      "id": "g05-discard-changes",
+      "title": "丢弃改动与强推被拦，正常命令放行",
+      "kind": "policy",
+      "steps": [
+        { "kind": "shell", "command": "git reset --hard HEAD~1", "expect": "deny", "rule": "git-discard-changes" },
+        { "kind": "shell", "command": "git clean -fd", "expect": "deny", "rule": "git-discard-changes" },
+        { "kind": "shell", "command": "git push --force origin x", "expect": "deny", "rule": "git-force-push" },
+        { "kind": "shell", "command": "git stash pop", "expect": "deny", "rule": "git-stash" },
+        { "kind": "shell", "command": "git status --short", "expect": "allow" }
+      ]
+    },
+    {
+      "id": "g06-command-variants",
+      "title": "git 全局选项与内联变量不构成绕过",
+      "kind": "policy",
+      "steps": [
+        { "kind": "shell", "command": "git -C /tmp/x stash", "expect": "deny", "rule": "git-stash" },
+        { "kind": "shell", "command": "git -c core.pager=cat reset --hard", "expect": "deny", "rule": "git-discard-changes" },
+        { "kind": "shell", "command": "git commit --no-verify -m x", "expect": "deny", "rule": "git-no-verify" },
+        { "kind": "shell", "command": "git commit -m \"docs: 禁止 git stash\"", "expect": "allow" }
+      ]
+    },
+    {
+      "id": "g07-main-write-guard",
+      "title": "主分支只能在非主分支侧合并，直接写 main 被拦",
+      "kind": "policy",
+      "steps": [
+        { "kind": "shell", "command": "git merge main", "expect": "deny", "rule": "main-write-on-branch", "onMainBranch": true },
+        { "kind": "shell", "command": "git merge main", "expect": "allow", "onMainBranch": false },
+        { "kind": "shell", "command": "git update-ref refs/heads/main abc", "expect": "deny", "rule": "main-ref-plumbing" },
+        { "kind": "shell", "command": "git push origin main", "expect": "deny", "rule": "main-ref-plumbing" },
+        { "kind": "shell", "command": "git push -u origin task/x", "expect": "allow" }
+      ]
+    },
+    {
+      "id": "g08-bypass-switches",
+      "title": "门禁绕过开关被拦，门禁执行器入口受保护",
+      "kind": "policy",
+      "steps": [
+        { "kind": "shell", "command": "HARNESS_MERGE_TOKEN=1 git commit -m x", "expect": "deny", "rule": "harness-bypass-switches" },
+        { "kind": "shell", "command": "git config core.hooksPath /dev/null", "expect": "deny", "rule": "harness-bypass-switches" },
+        { "kind": "write", "path": ".harness/bin/harness", "content": "x", "expect": "deny", "rule": "protect-executor-entry" },
+        { "kind": "write", "path": ".harness/policy.json", "content": "x", "expect": "allow" }
+      ]
+    },
+    {
+      "id": "g09-gate-via-shell",
+      "title": "门禁执行器不能用命令改写",
+      "kind": "policy",
+      "steps": [
+        { "kind": "shell", "command": "sed -i 's/a/b/' .claude/settings.json", "expect": "deny", "rule": "protect-executor-via-shell" },
+        { "kind": "shell", "command": "echo {} > .codex/hooks.json", "expect": "deny", "rule": "protect-executor-via-shell" },
+        { "kind": "shell", "command": "cat .harness/bin/harness", "expect": "allow" }
+      ]
+    },
+    {
+      "id": "g10-doc-only-light",
+      "title": "只改文档走轻量路径",
+      "kind": "verify-plan",
+      "changed": ["docs/guide.md", "README.md"],
+      "expectDocOnly": true,
+      "forbidChecks": ["lint"]
+    },
+    {
+      "id": "g11-source-change-uses-gate",
+      "title": "改源码选中必过检查",
+      "kind": "verify-plan",
+      "changed": ["src/app.js"],
+      "expectChecks": ["lint"],
+      "expectDocOnly": false
+    },
+    {
+      "id": "g12-extended-and-advisory",
+      "title": "extended 进未执行项，advisory 只提示",
+      "kind": "verify-plan",
+      "changed": ["src/app.js"],
+      "expectNotExecuted": ["manual-check"],
+      "expectAdvisory": ["visual-hint"]
+    },
+    {
+      "id": "g13-deletion-only",
+      "title": "纯删除文件的改动不能让选择器选到不存在的目标",
+      "kind": "verify-plan",
+      "changed": ["src/removed.js"],
+      "deleted": true,
+      "expectChecks": ["lint"],
+      "expectDocOnly": false
+    },
+    {
+      "id": "g14-mixed-deletion-not-doc-only",
+      "title": "删除源码同时改文档，不能被判成仅文档",
+      "kind": "verify-plan",
+      "changed": ["src/removed.js", "docs/x.md"],
+      "deletedPaths": ["src/removed.js"],
+      "expectDocOnly": false,
+      "expectChecks": ["lint"]
+    }
+  ]
+}

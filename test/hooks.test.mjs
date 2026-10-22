@@ -2,7 +2,7 @@ import { strict as assert } from "node:assert";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
-import { git, makeRepo, sh, write } from "./helpers.mjs";
+import { commit, git, makeRepo, sh, write } from "./helpers.mjs";
 
 let repos = [];
 afterEach(() => {
@@ -142,6 +142,29 @@ describe("安装与自检", () => {
     const second = repo.rawCli("init");
     assert.equal(second.status, 0, second.stderr);
     assert.match(readFileSync(join(repo.root, ".harness/config.json"), "utf8"), /保留/);
+  });
+
+  test("init 自带黄金任务，且开箱全部通过", () => {
+    const repo = makeRepo();
+    repos.push(repo);
+    const tasks = JSON.parse(readFileSync(join(repo.root, ".harness/golden/tasks.json"), "utf8"));
+    assert.ok(tasks.tasks.length >= 10, "应写入起始黄金任务");
+    const golden = repo.cli("golden");
+    assert.equal(golden.status, 0, golden.stdout + golden.stderr);
+    assert.match(golden.stdout, new RegExp(`${tasks.tasks.length}/${tasks.tasks.length} 通过`));
+  });
+
+  test("改坏规则后黄金任务能发现退化", () => {
+    const repo = makeRepo();
+    repos.push(repo);
+    // 关掉递归删除规则，g04 应当失败。
+    const policy = JSON.parse(readFileSync(join(repo.root, ".harness/policy.json"), "utf8"));
+    policy.disabled = [...(policy.disabled ?? []), "shell-recursive-delete"];
+    writeFileSync(join(repo.root, ".harness/policy.json"), `${JSON.stringify(policy, null, 2)}\n`);
+    commit(repo.root, "chore: 关闭规则\n\n- 测试用\n- 验证黄金任务");
+    const golden = repo.cli("golden");
+    assert.notEqual(golden.status, 0);
+    assert.match(golden.stdout, /FAIL g04/);
   });
 
   test("doctor 报告各项状态，已信任的客户端不再标未实测", () => {

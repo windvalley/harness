@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import { PACKAGE_ROOT } from "../policy/resolve.mjs";
 import { commonDir, git, repoRoot } from "../lib/git.mjs";
 import { loadKey } from "../lib/store.mjs";
-import { packageVersion, writeRules } from "./managed.mjs";
+import { packageVersion, writeGolden, writeRules } from "./managed.mjs";
 
 // 代码装在用户目录并按版本不可变；仓库里只放 shim 与配置。
 // 这样改门禁代码不落在任何任务分支里，任务分支也就无法放宽自己的门禁。
@@ -319,6 +319,7 @@ export function installAll({ cwd }) {
   loadKey();
   const published = publishVersion();
   writeRules({ root, version: published.version });
+  writeGolden({ root });
   const entries = writeHookEntries({ root, version: published.version });
   const shim = writeShim({ root });
   const hooks = writeGitHooks({ root });

@@ -72,7 +72,16 @@ function starterVerify() {
       requires: ["frontend/node_modules"],
     });
   }
-  checks.push({ id: "lint", tier: "gate", when: ["**/*"], cmd: ["true"] });
+  // 通用起始检查：只匹配常见源码扩展名，避免文档改动也触发，从而保留仅文档的轻量路径。
+  checks.push({
+    id: "lint",
+    tier: "gate",
+    when: ["**/*.js", "**/*.ts", "**/*.tsx", "**/*.go", "**/*.py", "**/*.rs", "**/*.java", "src/**", "lib/**", "app/**"],
+    cmd: ["true"],
+  });
+  // 两个示例档位，接入后按项目实际替换：extended 记未执行并给补验方式，advisory 只提示。
+  checks.push({ id: "manual-check", tier: "extended", when: ["src/**"], reason: "需要人工确认的检查，示例项", howToVerify: "按项目实际情况填写补验命令" });
+  checks.push({ id: "visual-hint", tier: "advisory", when: ["src/**"], hint: "界面类改动建议人工过一眼，示例项" });
   return {
     version: 1,
     docOnly: { match: ["docs/**", "**/*.md"], exclude: [] },
@@ -103,7 +112,10 @@ export function initProject({ cwd = process.cwd(), force = false } = {}) {
   create("verify.json", starterVerify());
   if (!existsSync(join(dir, "golden", "tasks.json"))) {
     mkdirSync(join(dir, "golden"), { recursive: true });
-    writeFileSync(join(dir, "golden", "tasks.json"), `${JSON.stringify({ version: 1, tasks: [] }, null, 2)}\n`);
+    // 自带一组针对预设规则的回归用例：没有它们的项目，改规则不会有任何检查能发现退化。
+    const starter = join(assetPath("golden"), "starter.json");
+    const body = existsSync(starter) ? readFileSync(starter, "utf8") : `${JSON.stringify({ version: 1, tasks: [] }, null, 2)}\n`;
+    writeFileSync(join(dir, "golden", "tasks.json"), body);
     written.push(".harness/golden/tasks.json");
   }
   mkdirSync(join(dir, "acceptance"), { recursive: true });

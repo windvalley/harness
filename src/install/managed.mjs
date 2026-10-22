@@ -74,6 +74,19 @@ export function writeRules({ root, version }) {
   return written;
 }
 
+/** 首次接入时写入起始黄金任务；已有文件不覆盖，避免冲掉项目自己的用例。 */
+export function writeGolden({ root }) {
+  const file = join(root, ".harness", "golden", "tasks.json");
+  if (existsSync(file)) return file;
+  mkdirSync(join(file, ".."), { recursive: true });
+  const starter = assetPath("golden/starter.json");
+  const body = existsSync(starter)
+    ? readFileSync(starter, "utf8")
+    : `${JSON.stringify({ version: 1, tasks: [] }, null, 2)}\n`;
+  writeFileSync(file, body);
+  return file;
+}
+
 export function managedBlockBody() {
   return `## Harness
 

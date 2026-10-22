@@ -99,11 +99,16 @@ const POLICY = {
 const VERIFY = {
   version: 1,
   docOnly: { match: ["docs/**", "**/*.md"], exclude: [] },
+  // 与 init 生成的起始检查保持一致，这样起始黄金任务在夹具里同样适用。
   checks: [
-    { id: "always", tier: "gate", when: ["**"], cmd: ["node", "-e", "process.exit(0)"] },
-    { id: "files", tier: "gate", when: ["src/**"], cmd: ["node", "-e", "process.exit(0)"] },
-    { id: "manual", tier: "extended", when: ["src/**"], reason: "需要人工确认", howToVerify: "手工检查" },
-    { id: "hint", tier: "advisory", when: ["src/**"], hint: "建议看一眼" },
+    {
+      id: "lint",
+      tier: "gate",
+      when: ["**/*.js", "**/*.ts", "**/*.tsx", "**/*.go", "**/*.py", "**/*.rs", "**/*.java", "src/**", "lib/**", "app/**"],
+      cmd: ["node", "-e", "process.exit(0)"],
+    },
+    { id: "manual-check", tier: "extended", when: ["src/**"], reason: "需要人工确认的检查，示例项", howToVerify: "按项目实际情况填写补验命令" },
+    { id: "visual-hint", tier: "advisory", when: ["src/**"], hint: "界面类改动建议人工过一眼，示例项" },
   ],
   fullSuiteTriggers: { doc: "", paths: [] },
 };
