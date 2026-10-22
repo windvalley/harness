@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { loadGuardProject, loadTrustedProject } from "./lib/config.mjs";
 import { git, repoRoot } from "./lib/git.mjs";
-import { readLedger } from "./lib/store.mjs";
+import { keyStatus, readLedger, rotateKey, scanRecords } from "./lib/store.mjs";
 import { resolvePolicy, ruleStats } from "./policy/resolve.mjs";
 import { evaluateCall } from "./policy/engine.mjs";
 import { guard, renderDenial } from "./adapters/index.mjs";
@@ -52,6 +52,7 @@ const USAGE = `harness <命令> [参数]
   prune    [--keep <v,...>] [--dry-run]              清理旧版本，默认只保留当前版本
   publish  [--version <v>]                           把当前代码装进版本目录
   version                                            打印版本
+  key      <status|rotate> [--yes]                   证据密钥现状；rotate 由人执行，会作废全部已有记录
 
 客户端与钩子入口
   githook  <pre-commit|commit-msg|reference-transaction>   由 git 钩子调用
@@ -309,6 +310,71 @@ function cmdEscalate(argv) {
   }
 }
 
+const RECORD_CODE_LABELS = {
+  key_rotated: "由另一把密钥签发",
+  signature: "签名不符",
+  key_missing: "密钥缺失无法校验",
+  key_invalid: "密钥格式不正确无法校验",
+  mismatch: "与目标不一致",
+  unparsable: "无法解析",
+};
+
+function describeScan() {
+  let scan;
+  try {
+    scan = scanRecords(repoRoot(process.cwd()));
+  } catch {
+    // 不在 git 仓库里时只报告密钥本身。
+    return null;
+  }
+  const parts = Object.entries(scan.byCode).map(([code, count]) => `${RECORD_CODE_LABELS[code] ?? code} ${count} 条`);
+  return `本仓库记录: 共 ${scan.total} 条，当前密钥可校验 ${scan.ok} 条${parts.length ? `；${parts.join("，")}` : ""}`;
+}
+
+function cmdKey(argv) {
+  const [action = "status", ...rest] = argv;
+  const { values } = parseArgs({ args: rest, options: { yes: { type: "boolean", default: false } } });
+  if (action === "status") {
+    const status = keyStatus();
+    const lines = [`证据密钥: ${status.file}`];
+    if (!status.exists) {
+      lines.push("  不存在。下次运行 verify、review 或 install 时会自动生成；已有记录将无法校验");
+    } else {
+      lines.push(status.valid ? `  指纹: ${status.fingerprint}` : `  不可用: ${status.reason}`);
+      const mode = status.mode.toString(8).padStart(3, "0");
+      lines.push(status.private ? `  权限: ${mode}，仅本人可读` : `  权限: ${mode}，其他用户可读，需要由人收紧为 600`);
+    }
+    const scan = describeScan();
+    if (scan) lines.push(scan);
+    print(lines.join("\n"));
+    return status.exists && status.valid && status.private ? 0 : 1;
+  }
+  if (action === "rotate") {
+    if (!values.yes) {
+      const scan = describeScan();
+      print(
+        [
+          "轮换会把当前密钥移入 retired/ 并生成新密钥。",
+          "此后所有已有的验证证据、独立评审与门禁确认都会失效，进行中的分支需要重新 verify、review，涉及门禁的还要重新 confirm。",
+          "适用场景: 密钥可能泄露、密钥文件损坏，或者需要统一作废旧记录。",
+          scan ?? "",
+          "确认后加 --yes 执行。",
+        ]
+          .filter(Boolean)
+          .join("\n"),
+      );
+      return 0;
+    }
+    const result = rotateKey();
+    print(`已轮换证据密钥，新指纹 ${result.fingerprint}${result.previous ? `，旧指纹 ${result.previous}` : ""}`);
+    if (result.retired) print(`旧密钥已移到 ${result.retired}，仅供误操作时由人手工恢复`);
+    print("已有记录全部失效：进行中的分支需要重新运行 harness verify 与 harness review。");
+    return 0;
+  }
+  process.stderr.write("用法: harness key <status|rotate> [--yes]\n");
+  return 2;
+}
+
 function currentBranchForStatus() {
   const result = git(repoRoot(process.cwd()), ["symbolic-ref", "--quiet", "--short", "HEAD"]);
   return result.status === 0 ? result.stdout.trim() : "";
@@ -443,6 +509,8 @@ export async function main(argv) {
         return cmdCheck(rest);
       case "escalate":
         return cmdEscalate(rest);
+      case "key":
+        return cmdKey(rest);
       default:
         process.stderr.write(`未知命令: ${command}\n\n${USAGE}`);
         return 2;

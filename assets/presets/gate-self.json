@@ -44,6 +44,14 @@
       ],
       "reason": "这些开关会让门禁失效，只能由人在自己的终端设置",
       "fix": "不要设置或读取这些变量；确需应急请告知用户并由用户在自己的终端执行"
+    },
+    {
+      "id": "key-rotate-human-only",
+      "kind": "shell-forbid",
+      "scope": "whole",
+      "patterns": ["\\bharness(\\.mjs)?\\s+key\\s+rotate\\b[^|;&]*--yes\\b"],
+      "reason": "轮换证据密钥会作废所有任务已有的证据、评审与确认，影响其他正在进行的任务",
+      "fix": "需要轮换时告知用户，由用户在自己的终端执行 harness key rotate --yes；只查看现状用 harness key status"
     }
   ]
 }

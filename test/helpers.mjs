@@ -167,6 +167,7 @@ export function makeRepo({ files = {}, project = {}, install = true, trustCodex 
   return {
     root,
     env,
+    keyDir: join(base, "key"),
     cli(...args) {
       return sh(root, join(root, ".harness/bin/harness"), args, env);
     },

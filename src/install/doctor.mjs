@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { loadTrustedProject, mainBranch } from "../lib/config.mjs";
 import { commonDir, git, repoRoot } from "../lib/git.mjs";
+import { keyStatus } from "../lib/store.mjs";
 import { resolvePolicy } from "../policy/resolve.mjs";
 import { packageVersion, MARK_START } from "./managed.mjs";
 import { shimPath, verifyVersion, versionDir } from "./install.mjs";
@@ -57,6 +58,19 @@ export function doctor({ cwd = process.cwd() } = {}) {
     id: "store",
     ok: integrity.ok,
     detail: integrity.ok ? `版本 ${version} 已安装(${integrity.files} 个文件)，内容与清单一致` : integrity.reason,
+  });
+
+  const key = keyStatus();
+  checks.push({
+    id: "key",
+    ok: Boolean(key.exists && key.valid && key.private),
+    detail: !key.exists
+      ? `缺少证据密钥 ${key.file}，运行 harness install 生成`
+      : !key.valid
+        ? key.reason
+        : key.private
+          ? `证据密钥指纹 ${key.fingerprint}，权限仅本人可读`
+          : `证据密钥 ${key.file} 其他用户可读，需要由人收紧为 600`,
   });
 
   const shim = shimPath(root);

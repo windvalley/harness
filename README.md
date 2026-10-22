@@ -79,6 +79,8 @@ git 层（`pre-commit`、`commit-msg`、`reference-transaction`）对所有客�
 - 主分支只能由 `harness merge` 更新：`reference-transaction` 钩子校验只有合并工具能生成的令牌。
 - 门禁配置改动的人工确认绑定合并结果的 tree，内容再变确认即失效。
 - 签名密钥在你的用户目录里，能防误操作和提示注入，防不了拥有本机权限的人。
+- 每条记录带密钥指纹。记录失效时会区分“密钥已轮换”“密钥丢失”“内容被改动”，并给出该重跑的命令。
+- 密钥损坏或怀疑泄露时，由人在自己的终端运行 `harness key rotate --yes`：旧密钥移入 `retired/`，已有记录全部作废，进行中的分支重新 verify 与 review 即可。Agent 只能运行不带 `--yes` 的预览。
 
 ## 升级
 
@@ -95,6 +97,7 @@ cd <项目> && node ~/github/harness/bin/harness.mjs upgrade
 
 - `harness status --branch <分支>`：只读汇总，指出还差哪几步才能合并。
 - `harness doctor`：安装与接入自检，未实测的客户端标 `[?]`。
+- `harness key status`：证据密钥的指纹与权限，以及本仓库有多少记录能被当前密钥校验。
 - `harness conformance`：逐项判定 L3 判据，样本不足的项标 `PEND`。
 - `harness metrics`：按周度量。
 - `harness golden`：重放黄金任务。接入时自带 14 个用例，改了规则后运行，原有判定退化会直接失败。

@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
 import { commit, git, makeRepo, sh, write, writeReview } from "./helpers.mjs";
@@ -310,6 +310,75 @@ describe("status 与 uninstall", () => {
     const result = repo.cli("uninstall", "--purge");
     assert.equal(result.status, 0, result.stderr);
     assert.equal(existsSync(join(repo.root, ".harness")), false);
+  });
+});
+
+describe("证据密钥", () => {
+  test("轮换后旧证据给出明确原因，重跑即恢复", () => {
+    const repo = setup();
+    repo.branch("task/k", { "src/a.js": "x\n" });
+    assert.equal(repo.cli("verify", "--branch", "task/k").status, 0);
+
+    // 不带 --yes 只预览，不能真的换掉密钥
+    const keyFile = join(repo.keyDir, "evidence.key");
+    const original = readFileSync(keyFile, "utf8");
+    const preview = repo.cli("key", "rotate");
+    assert.equal(preview.status, 0, preview.stderr);
+    assert.match(preview.stdout, /加 --yes 执行/);
+    assert.equal(readFileSync(keyFile, "utf8"), original);
+
+    const rotated = repo.cli("key", "rotate", "--yes");
+    assert.equal(rotated.status, 0, rotated.stderr);
+    assert.match(rotated.stdout, /已轮换证据密钥/);
+    assert.notEqual(readFileSync(keyFile, "utf8"), original);
+    assert.equal(readdirSync(join(repo.keyDir, "retired")).length, 1, "旧密钥应移入 retired/");
+
+    const status = repo.cli("status", "--branch", "task/k");
+    assert.equal(status.status, 1);
+    assert.match(status.stdout, /另一把密钥签发/);
+    assert.match(status.stdout, /harness verify --branch/);
+    assert.match(repo.cli("key", "status").stdout, /由另一把密钥签发 1 条/);
+
+    assert.equal(repo.cli("verify", "--branch", "task/k").status, 0);
+    assert.doesNotMatch(repo.cli("status", "--branch", "task/k").stdout, /缺验证证据/);
+  });
+
+  test("密钥丢失时说明旧记录作废，重跑会生成新密钥", () => {
+    const repo = setup();
+    repo.branch("task/k", { "src/a.js": "x\n" });
+    assert.equal(repo.cli("verify", "--branch", "task/k").status, 0);
+    rmSync(join(repo.keyDir, "evidence.key"));
+
+    const status = repo.cli("status", "--branch", "task/k");
+    assert.match(status.stdout, /缺少证据密钥/);
+    assert.match(status.stdout, /会生成新密钥/);
+    const doctor = repo.cli("doctor");
+    assert.notEqual(doctor.status, 0);
+    assert.match(doctor.stdout, /key: 缺少证据密钥/);
+
+    assert.equal(repo.cli("verify", "--branch", "task/k").status, 0);
+    assert.ok(existsSync(join(repo.keyDir, "evidence.key")));
+    assert.doesNotMatch(repo.cli("status", "--branch", "task/k").stdout, /缺验证证据/);
+  });
+
+  test("密钥格式不正确时拒绝使用，不静默签名", () => {
+    const repo = setup();
+    repo.branch("task/k", { "src/a.js": "x\n" });
+    writeFileSync(join(repo.keyDir, "evidence.key"), "short\n");
+    const verified = repo.cli("verify", "--branch", "task/k");
+    assert.notEqual(verified.status, 0);
+    assert.match(verified.stderr, /格式不正确/);
+    const status = repo.cli("key", "status");
+    assert.equal(status.status, 1);
+    assert.match(status.stdout, /不可用/);
+  });
+
+  test("密钥对其他用户可读时 doctor 报错", () => {
+    const repo = setup();
+    chmodSync(join(repo.keyDir, "evidence.key"), 0o644);
+    const doctor = repo.cli("doctor");
+    assert.notEqual(doctor.status, 0);
+    assert.match(doctor.stdout, /其他用户可读/);
   });
 });
 
