@@ -1,8 +1,9 @@
 import { strict as assert } from "node:assert";
-import { chmodSync, existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
 import { commit, CONFIG, git, makeRepo, sh, write, writeReview } from "./helpers.mjs";
+import { packageVersion as currentVersion } from "../src/install/managed.mjs";
 
 let repos = [];
 afterEach(() => {
@@ -241,7 +242,7 @@ describe("安装与自检", () => {
 
   test("已安装版本内容被改动时 doctor 报错", () => {
     const repo = setup();
-    const file = join(repo.env.HARNESS_STORE, "0.1.0/src/policy/engine.mjs");
+    const file = join(repo.env.HARNESS_STORE, `${currentVersion()}/src/policy/engine.mjs`);
     writeFileSync(file, `${readFileSync(file, "utf8")}\n// 被改动\n`);
     const result = repo.cli("doctor");
     assert.notEqual(result.status, 0);
@@ -440,21 +441,17 @@ describe("证据密钥", () => {
 describe("版本管理", () => {
   test("versions 列出已安装版本，prune 保留指定版本", () => {
     const repo = setup();
-    // 手工造两个旧版本目录，模拟多版本累积
+    // 手工造一个更老的版本目录，模拟多版本累积
     const store = repo.env.HARNESS_STORE;
-    for (const v of ["0.0.9", "0.1.0"]) {
-      const dir = join(store, v);
-      if (!existsSync(dir)) {
-        const installed = sh(repo.root, process.execPath, ["-e", "0"], repo.env);
-        assert.equal(installed.status, 0);
-      }
-    }
+    const older = "0.0.9";
+    mkdirSync(join(store, older), { recursive: true });
     const listed = repo.cli("versions");
     assert.equal(listed.status, 0, listed.stderr);
-    assert.match(listed.stdout, /0\.1\.0/);
+    assert.match(listed.stdout, new RegExp(currentVersion().replaceAll(".", "\\.")));
+    assert.match(listed.stdout, /0\.0\.9/);
 
     const dry = repo.cli("prune", "--dry-run");
     assert.equal(dry.status, 0, dry.stderr);
-    assert.match(dry.stdout, /将删除/);
+    assert.match(dry.stdout, /0\.0\.9/);
   });
 });
