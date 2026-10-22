@@ -120,6 +120,28 @@ export function verifyVersion({ version = packageVersion() } = {}) {
   return drift.length === 0 ? { ok: true, files: Object.keys(manifest.files).length } : { ok: false, reason: drift.join("; ") };
 }
 
+/** 列出已安装的全部版本，按语义化版本排序。 */
+export function listVersions() {
+  const root = storeRoot();
+  if (!existsSync(root)) return [];
+  return readdirSafe(root)
+    .filter((name) => /^\d+\.\d+\.\d+/.test(name) && isDir(join(root, name)))
+    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+}
+
+/** 清理旧版本目录；keep 指定要保留的版本，其余删除。 */
+export function pruneVersions({ keep = [], dryRun = false } = {}) {
+  const root = storeRoot();
+  const keepSet = new Set(keep);
+  const removed = [];
+  for (const version of listVersions()) {
+    if (keepSet.has(version)) continue;
+    removed.push(version);
+    if (!dryRun) rmSync(join(root, version), { recursive: true, force: true });
+  }
+  return { removed, kept: [...keepSet], dryRun };
+}
+
 export function shimPath(root) {
   return join(root, ".harness", "bin", "harness");
 }

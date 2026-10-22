@@ -312,3 +312,25 @@ describe("status 与 uninstall", () => {
     assert.equal(existsSync(join(repo.root, ".harness")), false);
   });
 });
+
+describe("版本管理", () => {
+  test("versions 列出已安装版本，prune 保留指定版本", () => {
+    const repo = setup();
+    // 手工造两个旧版本目录，模拟多版本累积
+    const store = repo.env.HARNESS_STORE;
+    for (const v of ["0.0.9", "0.1.0"]) {
+      const dir = join(store, v);
+      if (!existsSync(dir)) {
+        const installed = sh(repo.root, process.execPath, ["-e", "0"], repo.env);
+        assert.equal(installed.status, 0);
+      }
+    }
+    const listed = repo.cli("versions");
+    assert.equal(listed.status, 0, listed.stderr);
+    assert.match(listed.stdout, /0\.1\.0/);
+
+    const dry = repo.cli("prune", "--dry-run");
+    assert.equal(dry.status, 0, dry.stderr);
+    assert.match(dry.stdout, /将删除/);
+  });
+});

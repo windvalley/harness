@@ -70,7 +70,11 @@ export function doctor({ cwd = process.cwd() } = {}) {
 
   const claude = join(root, ".claude", "settings.json");
   const claudeOk = existsSync(claude) && readFileSync(claude, "utf8").includes("claude-hook.mjs");
-  checks.push({ id: "client:claude", ok: claudeOk, detail: claudeOk ? "PreToolUse 已接入" : "未接入 .claude/settings.json" });
+  checks.push({
+    id: "client:claude",
+    ok: claudeOk,
+    detail: claudeOk ? "PreToolUse 已接入（CLI 已验证；桌面版仅静态确认，未端到端实测）" : "未接入 Claude Code 的项目设置文件",
+  });
 
   const codex = join(root, ".codex", "hooks.json");
   const codexOk = existsSync(codex) && readFileSync(codex, "utf8").includes("codex-hook.mjs");
@@ -83,7 +87,7 @@ export function doctor({ cwd = process.cwd() } = {}) {
     detail: !codexOk
       ? "未接入 .codex/hooks.json"
       : codexTrusted
-        ? "钩子已接入且已信任，拦截生效"
+        ? "钩子已接入且已信任，拦截生效（CLI 与桌面版内置引擎均已实测）"
         : "钩子已接入但尚未信任：在 Codex 里运行 /hooks 批准一次，否则命令不会经过门禁",
   });
 

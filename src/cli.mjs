@@ -20,7 +20,7 @@ import { computeMetrics, formatMetrics } from "./golden/metrics.mjs";
 import { initProject, upgradeProject } from "./install/init.mjs";
 import { uninstall } from "./install/uninstall.mjs";
 import { branchStatus, formatStatus } from "./status.mjs";
-import { installAll, publishVersion, verifyVersion, versionDir } from "./install/install.mjs";
+import { installAll, listVersions, pruneVersions, publishVersion, verifyVersion, versionDir } from "./install/install.mjs";
 import { doctor, formatDoctor } from "./install/doctor.mjs";
 import { conformance, formatConformance } from "./conformance.mjs";
 import { packageVersion } from "./install/managed.mjs";
@@ -48,6 +48,8 @@ const USAGE = `harness <命令> [参数]
   install                                            重新生成项目的入口与钩子
   upgrade                                            升级项目到当前版本
   uninstall [--purge] [--dry-run]                    解除接入；--purge 连 .harness/ 一起删
+  versions                                           列出已安装的版本
+  prune    [--keep <v,...>] [--dry-run]              清理旧版本，默认只保留当前版本
   publish  [--version <v>]                           把当前代码装进版本目录
   version                                            打印版本
 
@@ -368,6 +370,22 @@ export async function main(argv) {
           print("保留:");
           for (const item of outcome.kept) print(`  ${item}`);
         }
+        return 0;
+      }
+      case "versions": {
+        const current = packageVersion();
+        for (const version of listVersions()) print(`${version}${version === current ? "  (当前)" : ""}`);
+        return 0;
+      }
+      case "prune": {
+        const { values } = parseArgs({
+          args: rest,
+          options: { keep: { type: "string" }, "dry-run": { type: "boolean", default: false } },
+        });
+        const keep = values.keep ? values.keep.split(",").map((v) => v.trim()).filter(Boolean) : [packageVersion()];
+        const outcome = pruneVersions({ keep, dryRun: values["dry-run"] });
+        print(`${outcome.dryRun ? "将删除" : "已删除"} ${outcome.removed.length} 个旧版本: ${outcome.removed.join(", ") || "(无)"}`);
+        print(`保留: ${outcome.kept.join(", ")}`);
         return 0;
       }
       case "upgrade": {
