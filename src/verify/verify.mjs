@@ -44,7 +44,8 @@ function execute(cmd, args, { cwd, env, timeoutMs }) {
     }, timeoutMs);
     child.on("error", (error) => {
       clearTimeout(timer);
-      resolvePromise({ exit: 127, durationMs: Math.round(performance.now() - started), tail: String(error.message) });
+      // 命令本身不存在（例如没装 cargo）与检查失败要分开：前者是环境问题，给出安装提示更有用。
+      resolvePromise({ exit: 127, durationMs: Math.round(performance.now() - started), tail: String(error.message), spawnError: error.code ?? "unknown" });
     });
     child.on("close", (code) => {
       clearTimeout(timer);
@@ -357,11 +358,16 @@ export async function verify({
         cmd: item.cmd.join(" "),
         cwd: item.cwd,
         exit: outcome.exit,
+        spawnError: outcome.spawnError,
         durationMs: outcome.durationMs,
         note: item.note,
         tail: outcome.exit === 0 ? undefined : outcome.tail,
       });
       log(`[verify]    exit=${outcome.exit} ${outcome.durationMs}ms`);
+      if (outcome.spawnError) {
+        // 命令不存在时不要报成“检查失败”：该装工具，不是改代码。
+        log(`[verify] 注意: 未找到命令 ${item.cmd[0]}，这项检查没有真正执行`);
+      }
       if (outcome.exit !== 0 && config.failFast !== false) break;
     }
 

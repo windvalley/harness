@@ -120,6 +120,25 @@ describe("验证与证据", () => {
     assert.match(result.stderr, /FAIL bad/);
   });
 
+  test("命令不存在时说明是环境问题，与检查失败区分", () => {
+    const repo = setup({
+      project: {
+        ".harness/verify.json": {
+          version: 1,
+          docOnly: { match: [], exclude: [] },
+          checks: [{ id: "missing-tool", tier: "gate", when: ["**"], cmd: ["harness-no-such-command-xyz"] }],
+          fullSuiteTriggers: { paths: [] },
+        },
+      },
+    });
+    repo.branch("task/a", { "a.txt": "a\n" });
+    const result = repo.cli("verify", "--branch", "task/a");
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /未找到命令 harness-no-such-command-xyz/);
+    const record = JSON.parse(readFileSync(join(repo.env.HARNESS_DATA_DIR, "evidence", `${git(repo.root, "rev-parse", "task/a")}.json`), "utf8"));
+    assert.equal(record.checks[0].spawnError, "ENOENT");
+  });
+
   test("主分支前进但未触及检查范围时复用证据", () => {
     const repo = setup({
       project: {
