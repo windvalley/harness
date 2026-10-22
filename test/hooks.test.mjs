@@ -162,6 +162,43 @@ describe("安装与自检", () => {
     assert.match(status.stderr, /只有 main/);
   });
 
+  test("起始检查按项目技术栈生成，未知技术栈不会被塞进不可用的检查", async () => {
+    const { starterVerify } = await import("../src/install/init.mjs");
+    const { mkdtempSync, mkdirSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const dirs = [];
+    const stack = (files) => {
+      const dir = mkdtempSync(join(tmpdir(), "harness-stack-"));
+      dirs.push(dir);
+      for (const [rel, content] of Object.entries(files)) {
+        mkdirSync(join(dir, rel, ".."), { recursive: true });
+        writeFileSync(join(dir, rel), content);
+      }
+      return starterVerify({ cwd: dir });
+    };
+
+    const rust = stack({ "rust/Cargo.toml": "[workspace]\n" });
+    const cargo = rust.checks.find((check) => check.id === "cargo-test");
+    assert.equal(cargo.cwd, "rust");
+    assert.deepEqual(cargo.cmd, ["cargo", "test", "--all-targets"]);
+    // target 由 cargo 自己创建，不能作为前置条件，否则全新克隆永远跳过这项检查
+    assert.equal(cargo.requires, undefined);
+
+    const rootRust = stack({ "Cargo.toml": "[package]\n" });
+    assert.equal(rootRust.checks.find((check) => check.id === "cargo-test").cwd, undefined);
+
+    // 没有 pytest 配置的 Python 项目不生成 pytest 检查
+    assert.equal(stack({ "app/main.py": "print(1)\n" }).checks.some((check) => check.id === "pytest"), false);
+    const pytest = stack({ "pyproject.toml": "[tool.pytest.ini_options]\n", "app/main.py": "print(1)\n" });
+    assert.equal(pytest.checks.find((check) => check.id === "pytest").tier, "gate");
+
+    // 只有文档的项目不生成语言检查，只保留通用项
+    const empty = stack({ "README.md": "demo\n" });
+    assert.deepEqual(empty.checks.map((check) => check.id), ["lint", "manual-check", "visual-hint"]);
+
+    for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
+  });
+
   test("init 自带黄金任务，且开箱全部通过", () => {
     const repo = makeRepo();
     repos.push(repo);

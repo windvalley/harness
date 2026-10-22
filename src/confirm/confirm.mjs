@@ -3,6 +3,7 @@ import { gatePaths, loadTrustedProject, mainBranch } from "../lib/config.mjs";
 import { matchAny } from "../lib/glob.mjs";
 import { changedPaths, gitOk } from "../lib/git.mjs";
 import { appendLedger, writeRecord } from "../lib/store.mjs";
+import { resolvePolicy } from "../policy/resolve.mjs";
 import { planMergeResult } from "../merge/merge.mjs";
 
 export const CONFIRM_KIND = "confirm";
@@ -21,7 +22,7 @@ export function confirmSummary({ cwd, branch }) {
   const gateTouched = paths.filter((path) => matchAny(path, gate));
   const codeTouched = gateTouched.filter((path) => path.startsWith(".harness/"));
 
-  const ruleDiff = describeRuleDiff({ root, project, mainCommit: planned.mainCommit, resultCommit: planned.resultCommit });
+  const ruleDiff = describeRuleDiff({ root, mainCommit: planned.mainCommit, resultCommit: planned.resultCommit });
   const checkDiff = describeCheckDiff({ root, project, mainCommit: planned.mainCommit, resultCommit: planned.resultCommit });
 
   return {
@@ -38,22 +39,52 @@ export function confirmSummary({ cwd, branch }) {
   };
 }
 
-function describeRuleDiff({ root, project, mainCommit, resultCommit }) {
+/**
+ * 规则差异按“生效规则”比较，而不是只看项目自有的 rules 数组。
+ * 只统计自有 rules 会漏掉 disabled 关掉某条预设规则的情况，而那正是最需要人看见的改动。
+ */
+function describeRuleDiff({ root, mainCommit, resultCommit }) {
   const path = ".harness/policy.json";
   const before = safeJson(root, mainCommit, path);
   const after = safeJson(root, resultCommit, path);
   if (!before || !after) return null;
-  const ids = (value) => new Set((value.rules ?? []).map((rule) => rule.id));
-  const beforeIds = ids(before);
-  const afterIds = ids(after);
+  const beforeRules = safeResolve(before);
+  const afterRules = safeResolve(after);
+  if (!beforeRules || !afterRules) {
+    return { before: null, after: null, added: [], removed: [], presetsBefore: before.presets ?? [], presetsAfter: after.presets ?? [] };
+  }
+  const beforeIds = new Set(beforeRules.rules.map((rule) => rule.id));
+  const afterIds = new Set(afterRules.rules.map((rule) => rule.id));
   return {
     before: beforeIds.size,
     after: afterIds.size,
     added: [...afterIds].filter((id) => !beforeIds.has(id)),
     removed: [...beforeIds].filter((id) => !afterIds.has(id)),
+    overlays: overlaidRules(beforeRules.rules, afterRules.rules),
     presetsBefore: before.presets ?? [],
     presetsAfter: after.presets ?? [],
   };
+}
+
+function safeResolve(policy) {
+  try {
+    return resolvePolicy(policy);
+  } catch {
+    return null;
+  }
+}
+
+// 同 id 但内容不同的规则（项目里覆盖了预设），确认时也要点名，否则改宽了某条规则看不出来。
+function overlaidRules(before, after) {
+  const beforeById = new Map(before.map((rule) => [rule.id, rule]));
+  const changed = [];
+  for (const rule of after) {
+    const prior = beforeById.get(rule.id);
+    if (!prior) continue;
+    const strip = (item) => JSON.stringify({ ...item, preset: undefined });
+    if (strip(prior) !== strip(rule)) changed.push(rule.id);
+  }
+  return changed;
 }
 
 function describeCheckDiff({ root, project, mainCommit, resultCommit }) {
@@ -106,10 +137,11 @@ export function formatSummary(summary) {
     ...summary.gateTouched.slice(0, 20).map((path) => `  ${path}`),
   ];
   if (summary.ruleDiff) {
-    const { before, after, added, removed, presetsBefore, presetsAfter } = summary.ruleDiff;
-    lines.push(`拦截规则: ${before} -> ${after}`);
+    const { before, after, added, removed, overlays = [], presetsBefore, presetsAfter } = summary.ruleDiff;
+    lines.push(`拦截规则: ${before ?? "?"} -> ${after ?? "?"}`);
     if (added.length) lines.push(`  新增: ${added.join(", ")}`);
     if (removed.length) lines.push(`  移除: ${removed.join(", ")}`);
+    if (overlays.length) lines.push(`  内容有改动: ${overlays.join(", ")}`);
     if (presetsBefore.join() !== presetsAfter.join()) {
       lines.push(`  预设: ${presetsBefore.join(",") || "无"} -> ${presetsAfter.join(",") || "无"}`);
     }

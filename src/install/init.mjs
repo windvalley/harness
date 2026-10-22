@@ -48,9 +48,11 @@ function starterPolicy({ mainBranch }) {
   };
 }
 
-function starterVerify() {
-  const hasGo = existsSync("go.mod");
-  const hasFrontend = existsSync("frontend/package.json");
+export function starterVerify({ cwd = process.cwd() } = {}) {
+  const hasGo = existsSync(join(cwd, "go.mod"));
+  const hasFrontend = existsSync(join(cwd, "frontend/package.json"));
+  const hasRust = existsSync(join(cwd, "Cargo.toml")) || existsSync(join(cwd, "rust/Cargo.toml"));
+  const rustDir = existsSync(join(cwd, "Cargo.toml")) ? "" : "rust";
   const checks = [];
   if (hasGo) {
     checks.push(
@@ -73,6 +75,19 @@ function starterVerify() {
       requires: ["frontend/node_modules"],
     });
   }
+  if (hasRust) {
+    // 不写 requires: cargo 自己会创建 target，要求它先存在会让全新克隆永远跳过这项检查。
+    checks.push({
+      id: "cargo-test",
+      tier: "gate",
+      when: rustDir ? ["rust/**/*.rs", "rust/Cargo.toml", "rust/Cargo.lock"] : ["**/*.rs", "Cargo.toml", "Cargo.lock"],
+      ...(rustDir ? { cwd: rustDir } : {}),
+      cmd: ["cargo", "test", "--all-targets"],
+    });
+  }
+  if (hasPytestConfig(cwd)) {
+    checks.push({ id: "pytest", tier: "gate", when: ["**/*.py"], cmd: ["python3", "-m", "pytest", "-q"] });
+  }
   // 通用起始检查：只匹配常见源码扩展名，避免文档改动也触发，从而保留仅文档的轻量路径。
   checks.push({
     id: "lint",
@@ -89,6 +104,16 @@ function starterVerify() {
     checks,
     fullSuiteTriggers: { doc: "影响范围无法限定时扩大到全量", paths: [] },
   };
+}
+
+/** 只有项目自己声明了 pytest 配置时才生成 pytest 检查，避免在没装 pytest 的仓库里凭空失败。 */
+function hasPytestConfig(cwd = process.cwd()) {
+  for (const rel of ["pytest.ini", "setup.cfg", "tests/conftest.py", "conftest.py"]) {
+    if (existsSync(join(cwd, rel))) return true;
+  }
+  const pyproject = join(cwd, "pyproject.toml");
+  if (!existsSync(pyproject)) return false;
+  return /\[tool\.pytest/.test(readFileSync(pyproject, "utf8"));
 }
 
 /**
@@ -126,7 +151,7 @@ export function initProject({ cwd = process.cwd(), force = false } = {}) {
   const version = packageVersion();
   create("config.json", defaultConfig({ mainBranch }));
   create("policy.json", starterPolicy({ mainBranch }));
-  create("verify.json", starterVerify());
+  create("verify.json", starterVerify({ cwd: root }));
   if (!existsSync(join(dir, "golden", "tasks.json"))) {
     mkdirSync(join(dir, "golden"), { recursive: true });
     // 自带一组针对预设规则的回归用例：没有它们的项目，改规则不会有任何检查能发现退化。

@@ -7,6 +7,7 @@
 ### 新增
 
 - 独立评审后端可配置：`auto` 按 `claude`、`codex` 顺序取本机可用的，`command` 用任意命令接入其他工具；`codex` 与 `command` 在临时空目录里运行，并提供严格模式的 JSON Schema 与结果文件占位符。
+- 起始检查按项目技术栈生成：`go.mod` 出 go test 与 build，`frontend/package.json` 出前端类型检查，`Cargo.toml`（含 `rust/Cargo.toml`）出 cargo test，声明了 pytest 的 Python 项目出 pytest。
 - `harness key status` 与 `harness key rotate`：查看密钥指纹、权限与本仓库记录的可校验情况；轮换时旧密钥移入 `retired/`，已有记录全部作废。
 - 记录写入密钥指纹，失效原因区分密钥已轮换、密钥丢失、内容被改动，并给出该重跑的命令。
 - `doctor` 检查密钥是否存在、格式是否正确、是否仅本人可读。
@@ -18,6 +19,8 @@
 - 轮换下来的旧密钥同样受读取保护。
 - 在没有提交的 `main` 仓库上 `init` 不再把主分支写成 `master`；配置里的主分支名与仓库实际不符时给出明确提示，而不是后续每一步都报 rev-parse 失败。
 - 找不到评审后端时说明该改哪里，不再抛 `spawn claude ENOENT`。
+- 确认摘要改为比较生效规则，只改 `disabled` 关掉预设规则时也会点名；规则内容被覆盖时单独列出。
+- cargo 检查不再要求 `target` 目录先存在，否则全新克隆上这项必过检查永远被跳过。
 
 ## [0.1.0] - 2026-10-22
 

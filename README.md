@@ -100,6 +100,7 @@ git 层（`pre-commit`、`commit-msg`、`reference-transaction`）对所有客�
 ## 信任模型
 
 - 门禁的配置一律从主分支的 git 对象读取，代码从按版本安装的目录执行；任务分支里改过的门禁不能决定自己是否放行。
+- 门禁改动的人工确认会按“生效规则”列出增删，包括关掉某条预设规则这种只改 `disabled` 的情况。
 - 证据与评审绑定被验证的分支提交并做 HMAC 签名，密钥在 `~/.local/share/harness/evidence.key`。
 - 主分支只能由 `harness merge` 更新：`reference-transaction` 钩子校验只有合并工具能生成的令牌。
 - 门禁配置改动的人工确认绑定合并结果的 tree，内容再变确认即失效。

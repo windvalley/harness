@@ -227,6 +227,22 @@ describe("合并门禁", () => {
     assert.equal(merged.status, 0, merged.stderr);
   });
 
+  test("确认摘要列出被关掉的预设规则", () => {
+    const repo = setup();
+    // 只改 disabled，不碰自有 rules：这类改动最需要人看见，摘要必须点名。
+    repo.branch("task/gate", {
+      "a.txt": "a\n",
+      ".harness/policy.json": `${JSON.stringify(
+        { version: 1, presets: ["secrets", "git-safety", "gate-self"], disabled: ["git-stash"], rules: [] },
+        null,
+        2,
+      )}\n`,
+    });
+    const summary = repo.cli("confirm", "--branch", "task/gate");
+    assert.equal(summary.status, 0, summary.stderr);
+    assert.match(summary.stdout, /移除: git-stash/);
+  });
+
   test("确认绑定合并结果，内容再变即失效", () => {
     const repo = setup();
     repo.branch("task/gate", {
