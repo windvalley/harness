@@ -188,6 +188,42 @@ printf '%s\\n' "$input" | ${runShim} githook reference-transaction "$1"`,
   return { dir, hooks: results, shim };
 }
 
+function versionImport(version, rel) {
+  return `${versionDir(version)}/src/${rel}`;
+}
+
+/**
+ * 写出 Claude 与 Codex 的钩子入口脚本。
+ * 脚本本身在项目里（客户端按项目路径调用），实际判定逻辑从版本目录导入，
+ * 保证跑的是已安装并校验过的那份代码，任务分支改不动它。
+ */
+export function writeHookEntries({ root, version }) {
+  const dir = join(root, ".harness", "bin");
+  mkdirSync(dir, { recursive: true });
+  const specs = {
+    "claude-hook.mjs": [
+      ["../adapters/claude.mjs", "adapters/claude.mjs"],
+      ["../adapters/index.mjs", "adapters/index.mjs"],
+    ],
+    "codex-hook.mjs": [
+      ["../adapters/codex.mjs", "adapters/codex.mjs"],
+      ["../adapters/index.mjs", "adapters/index.mjs"],
+    ],
+  };
+  const written = [];
+  for (const [name, replacements] of Object.entries(specs)) {
+    let source = readFileSync(join(PACKAGE_ROOT, "assets", "hooks", name), "utf8");
+    for (const [from, to] of replacements) {
+      source = source.split(from).join(versionImport(version, to));
+    }
+    const target = join(dir, name);
+    writeFileSync(target, source);
+    chmodSync(target, 0o755);
+    written.push(target);
+  }
+  return written;
+}
+
 /** Claude Code 的 PreToolUse 钩子配置；保留文件里其他设置。 */
 export function writeClaudeSettings({ root }) {
   const file = join(root, ".claude", "settings.json");
@@ -257,10 +293,11 @@ export function installAll({ cwd }) {
   loadKey();
   const published = publishVersion();
   writeRules({ root, version: published.version });
+  const entries = writeHookEntries({ root, version: published.version });
   const shim = writeShim({ root });
   const hooks = writeGitHooks({ root });
   const claude = writeClaudeSettings({ root });
   const codex = writeCodexHooks({ root });
   const dsh = writeDshPlugin({ root });
-  return { root, published, shim, hooks, claude, codex, dsh };
+  return { root, published, shim, entries, hooks, claude, codex, dsh };
 }
