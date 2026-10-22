@@ -2,7 +2,7 @@ import { strict as assert } from "node:assert";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
-import { commit, git, makeRepo, sh, write } from "./helpers.mjs";
+import { commit, git, makeRepo, sh, write, writeReview } from "./helpers.mjs";
 
 let repos = [];
 afterEach(() => {
@@ -249,5 +249,66 @@ describe("客户端钩子入口", () => {
     const repo = setup();
     const output = sh(repo.root, join(repo.root, ".harness/bin/harness"), ["hook", "--client", "claude"], repo.env, "not json");
     assert.equal(output.status, 2);
+  });
+});
+
+describe("status 与 uninstall", () => {
+  test("status 指出还差哪几步", () => {
+    const repo = setup();
+    repo.branch("task/a", { "src/a.js": "x\n" });
+    const none = repo.cli("status", "--branch", "task/a");
+    assert.equal(none.status, 1);
+    assert.match(none.stdout, /缺验证证据/);
+    assert.match(none.stdout, /缺独立评审/);
+
+    assert.equal(repo.cli("verify", "--branch", "task/a").status, 0);
+    const half = repo.cli("status", "--branch", "task/a");
+    assert.equal(half.status, 1);
+    assert.match(half.stdout, /缺独立评审/);
+    assert.doesNotMatch(half.stdout, /缺验证证据/);
+
+    const head = git(repo.root, "rev-parse", "task/a");
+    writeReview(repo, head, "approve");
+    const ready = repo.cli("status", "--branch", "task/a");
+    assert.equal(ready.status, 0, ready.stdout);
+    assert.match(ready.stdout, /可以合并/);
+  });
+
+  test("status 提示门禁改动待确认", () => {
+    const repo = setup();
+    repo.branch("task/g", {
+      "src/a.js": "x\n",
+      ".harness/policy.json": `${JSON.stringify({ version: 1, presets: ["secrets"], disabled: [], rules: [] }, null, 2)}\n`,
+    });
+    assert.equal(repo.cli("verify", "--branch", "task/g").status, 0);
+    writeReview(repo, git(repo.root, "rev-parse", "task/g"), "approve");
+    const status = repo.cli("status", "--branch", "task/g");
+    assert.equal(status.status, 1);
+    assert.match(status.stdout, /门禁改动待确认/);
+  });
+
+  test("uninstall 移除生成物并保留项目配置", () => {
+    const repo = setup();
+    const dry = repo.cli("uninstall", "--dry-run");
+    assert.equal(dry.status, 0, dry.stderr);
+    assert.match(dry.stdout, /git 钩子 pre-commit/);
+    // dry-run 不应真的删掉东西
+    assert.ok(existsSync(join(repo.root, ".harness/bin/harness")));
+
+    const real = repo.cli("uninstall");
+    assert.equal(real.status, 0, real.stderr);
+    assert.equal(existsSync(join(repo.root, ".harness/bin")), false);
+    assert.equal(existsSync(join(repo.root, ".harness/dsh-plugin")), false);
+    assert.ok(existsSync(join(repo.root, ".harness/policy.json")), "项目配置应保留");
+    assert.equal(readFileSync(join(repo.root, "AGENTS.md"), "utf8").includes("harness:start"), false);
+    const preCommit = readFileSync(join(repo.root, ".git/hooks/pre-commit"), "utf8");
+    assert.equal(preCommit.includes("# harness:hook"), false);
+  });
+
+  test("uninstall --purge 连 .harness 一起删", () => {
+    const repo = setup();
+    const result = repo.cli("uninstall", "--purge");
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(existsSync(join(repo.root, ".harness")), false);
   });
 });

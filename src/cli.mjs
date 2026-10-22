@@ -18,6 +18,8 @@ import { answerEscalation, listEscalations, openEscalation, readEscalation, resu
 import { runGolden } from "./golden/golden.mjs";
 import { computeMetrics, formatMetrics } from "./golden/metrics.mjs";
 import { initProject, upgradeProject } from "./install/init.mjs";
+import { uninstall } from "./install/uninstall.mjs";
+import { branchStatus, formatStatus } from "./status.mjs";
 import { installAll, publishVersion, verifyVersion, versionDir } from "./install/install.mjs";
 import { doctor, formatDoctor } from "./install/doctor.mjs";
 import { conformance, formatConformance } from "./conformance.mjs";
@@ -30,6 +32,7 @@ const USAGE = `harness <命令> [参数]
 工程流程
   verify   [--head <ref>] [--base <ref>] [--branch <名称>] [--no-reuse]   对分支验证并写签名证据
   review   --branch <名称>                          独立评审
+  status   --branch <名称>                           只读汇总：还差哪几步才能合并
   confirm  --branch <名称> [--yes]                   查看门禁改动；--yes 记录人工确认
   merge    --branch <名称> [--dry-run]               受控合并到主分支
 
@@ -44,6 +47,7 @@ const USAGE = `harness <命令> [参数]
   init     [--force]                                 在当前项目初始化
   install                                            重新生成项目的入口与钩子
   upgrade                                            升级项目到当前版本
+  uninstall [--purge] [--dry-run]                    解除接入；--purge 连 .harness/ 一起删
   publish  [--version <v>]                           把当前代码装进版本目录
   version                                            打印版本
 
@@ -303,6 +307,11 @@ function cmdEscalate(argv) {
   }
 }
 
+function currentBranchForStatus() {
+  const result = git(repoRoot(process.cwd()), ["symbolic-ref", "--quiet", "--short", "HEAD"]);
+  return result.status === 0 ? result.stdout.trim() : "";
+}
+
 export async function main(argv) {
   const [command, ...rest] = argv;
   if (!command || command === "help" || command === "--help") {
@@ -335,6 +344,30 @@ export async function main(argv) {
         for (const hook of result.hooks.hooks) print(`  git 钩子 ${hook.file}${hook.updated ? "(已接入)" : "(已存在)"}`);
         print(`  Claude PreToolUse: ${result.claude}`);
         print(`  Codex hooks: ${result.codex}`);
+        return 0;
+      }
+      case "status": {
+        const { values } = parseArgs({ args: rest, options: { branch: { type: "string", default: currentBranchForStatus() } } });
+        if (!values.branch) {
+          process.stderr.write("用法: harness status --branch <名称>\n");
+          return 2;
+        }
+        const status = branchStatus({ cwd: process.cwd(), branch: values.branch });
+        print(formatStatus(status));
+        return status.ready ? 0 : 1;
+      }
+      case "uninstall": {
+        const { values } = parseArgs({
+          args: rest,
+          options: { purge: { type: "boolean", default: false }, "dry-run": { type: "boolean", default: false } },
+        });
+        const outcome = uninstall({ cwd: process.cwd(), purge: values.purge, dryRun: values["dry-run"] });
+        print(`${outcome.dryRun ? "将移除" : "已移除"}（${outcome.root}）:`);
+        for (const item of outcome.removed) print(`  ${item}`);
+        if (outcome.kept.length > 0) {
+          print("保留:");
+          for (const item of outcome.kept) print(`  ${item}`);
+        }
         return 0;
       }
       case "upgrade": {
