@@ -1,0 +1,13 @@
+{
+  "name": "harness",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local closed-loop development harness: policy gates, verified evidence, controlled merge.",
+  "bin": { "harness": "./bin/harness.mjs" },
+  "scripts": {
+    "test": "node --test 'test/*.test.mjs'",
+    "conformance": "node bin/harness.mjs conformance"
+  },
+  "engines": { "node": ">=20" }
+}

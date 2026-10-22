@@ -1,0 +1,48 @@
+{
+  "id": "gate-self",
+  "description": "保护门禁的执行器入口与本机密钥；规则与配置本身允许 Agent 修改，改动在合并前由人确认",
+  "rules": [
+    {
+      "id": "protect-executor-entry",
+      "kind": "write-protect",
+      "paths": [
+        ".harness/bin/**",
+        ".harness/hooks/**",
+        ".claude/settings.json",
+        ".claude/settings.local.json",
+        ".codex/hooks.json",
+        ".githooks/**"
+      ],
+      "allow": [],
+      "reason": "门禁的执行器入口不由 Agent 修改，否则可以关掉拦截而不留下改动记录",
+      "fix": "需要调整入口时由用户执行 harness install 重新生成；规则与配置可以直接改，合并前会由用户确认"
+    },
+    {
+      "id": "protect-executor-via-shell",
+      "kind": "shell-forbid",
+      "scope": "whole",
+      "patterns": [
+        "\\b(sed|perl|awk|tee|cp|mv|rm|truncate|install|ln|chmod|dd)\\b[^|;&]*(\\.harness/(bin|hooks)/|\\.claude/settings|\\.codex/hooks\\.json|\\.githooks/)",
+        ">>?\\s*\\S*(\\.harness/(bin|hooks)/|\\.claude/settings|\\.codex/hooks\\.json|\\.githooks/)",
+        "\\b(node|python3?|ruby|bash|sh)\\b\\s+(-e|-c|-p)\\b[^|;&]*(\\.harness/(bin|hooks)/|\\.claude/settings|\\.codex/hooks\\.json|\\.githooks/)"
+      ],
+      "reason": "不能用命令行改写门禁的执行器入口",
+      "fix": "需要重装入口时由用户执行 harness install"
+    },
+    {
+      "id": "harness-bypass-switches",
+      "kind": "shell-forbid",
+      "scope": "whole",
+      "patterns": [
+        "HARNESS_MERGE_TOKEN",
+        "HARNESS_DATA_DIR",
+        "HARNESS_KEY_DIR",
+        "HARNESS_REVIEWER_BIN",
+        "\\bgit\\s+config\\b.*\\b(harness\\.guardMain|core\\.hooksPath)\\b",
+        "\\bgit\\b.*\\s-c\\s+(harness\\.guardMain|core\\.hooksPath)="
+      ],
+      "reason": "这些开关会让门禁失效，只能由人在自己的终端设置",
+      "fix": "不要设置或读取这些变量；确需应急请告知用户并由用户在自己的终端执行"
+    }
+  ]
+}

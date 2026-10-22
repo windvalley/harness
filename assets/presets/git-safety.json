@@ -1,0 +1,78 @@
+{
+  "id": "git-safety",
+  "description": "拦截不可逆的 Git 操作，以及绕过证据与评审直接更新主分支",
+  "rules": [
+    {
+      "id": "shell-recursive-delete",
+      "kind": "shell-forbid",
+      "patterns": ["^\\s*rm\\s+-r\\b", "-exec\\s+rm\\s+(\\S+\\s+)*-[a-zA-Z]*[rR]"],
+      "reason": "递归删除属于批量不可逆操作，必须逐项取得用户授权",
+      "fix": "列出要删除的具体路径并请用户确认；自己创建的临时文件用 rm 单文件删除"
+    },
+    {
+      "id": "git-discard-changes",
+      "kind": "shell-forbid",
+      "patterns": [
+        "\\bgit\\s+reset\\s+(.*\\s)?--hard\\b",
+        "\\bgit\\s+clean\\s+(.*\\s)?-[a-zA-Z]*f",
+        "\\bgit\\s+checkout\\s+(--\\s+)?\\.\\s*$",
+        "\\bgit\\s+checkout\\s+--\\s",
+        "\\bgit\\s+restore\\s+(?!.*--staged)(.*\\s)?\\.\\s*$",
+        "\\bgit\\s+restore\\s+(?!.*--staged)(.*\\s)?--worktree\\b",
+        "\\bgit\\s+branch\\s+(.*\\s)?-D\\b"
+      ],
+      "reason": "会丢弃未提交改动或删除分支，必须逐项取得用户授权",
+      "fix": "先用 git status 确认范围；需要暂存用临时 WIP 提交;确需丢弃请用户明确点名该文件或分支"
+    },
+    {
+      "id": "git-force-push",
+      "kind": "shell-forbid",
+      "patterns": [
+        "\\bgit\\s+push\\s+(.*\\s)?(--force\\b|--force-with-lease\\b|-f\\b)",
+        "\\bgit\\s+push\\b.*\\s\\+\\S+"
+      ],
+      "reason": "强制推送会覆盖远端历史",
+      "fix": "普通推送到任务分支；确需强推请用户明确授权具体分支"
+    },
+    {
+      "id": "git-stash",
+      "kind": "shell-forbid",
+      "patterns": ["\\bgit\\s+stash\\b"],
+      "reason": "stash 栈在所有 Worktree 间共享，静默 pop 会丢别人的未提交改动",
+      "fix": "用临时 WIP 提交暂存: git add <具体文件> && git commit -m 'wip: 暂存'"
+    },
+    {
+      "id": "git-no-verify",
+      "kind": "shell-forbid",
+      "patterns": [
+        "\\bgit\\s+commit\\b.*--no-verify\\b",
+        "\\bgit\\s+commit\\b.*\\s-n\\b",
+        "\\bgit\\s+merge\\b.*--no-verify\\b",
+        "\\bgit\\s+push\\b.*--no-verify\\b"
+      ],
+      "reason": "直接用 --no-verify 会绕过提交信息与钩子校验",
+      "fix": "让钩子正常执行；合并到本地主分支一律用 harness merge"
+    },
+    {
+      "id": "main-write-on-branch",
+      "kind": "shell-forbid",
+      "when": "on-main",
+      "patterns": ["\\bgit\\s+(merge|rebase|cherry-pick|pull|revert)\\b", "\\bgit\\s+reset\\b"],
+      "reason": "在主分支上直接合并、变基或重置会绕过证据与评审门禁",
+      "fix": "切到任务分支工作，完成后运行 harness merge --branch <任务分支>；任务分支可以 git merge main 吸收最新主分支"
+    },
+    {
+      "id": "main-ref-plumbing",
+      "kind": "shell-forbid",
+      "patterns": [
+        "\\bgit\\s+update-ref\\b.*refs/heads/(main|master)\\b",
+        "\\bgit\\s+branch\\s+(-f|--force)\\s+(main|master)\\b",
+        "\\bgit\\s+push\\b.*\\s(main|master)\\b",
+        "\\bgit\\s+push\\b.*\\brefs/heads/(main|master)\\b",
+        "\\bgit\\s+push\\b.*:(main|master)\\b"
+      ],
+      "reason": "本地主分支只允许通过 harness merge 更新，推送主分支需要单独授权",
+      "fix": "完成任务提交后运行 harness merge --branch <任务分支>；需要推送请先取得用户授权并推送任务分支"
+    }
+  ]
+}
