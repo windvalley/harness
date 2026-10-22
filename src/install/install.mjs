@@ -302,6 +302,15 @@ export function writeDshPlugin({ root }) {
   );
   writeFileSync(join(dir, "cordis.patch.yml"), "- insert:\n    - id: harness-guard\n      name: harness-guard\n");
   copyFileSync(join(PACKAGE_ROOT, "assets", "dsh", "index.mjs"), join(dir, "index.mjs"));
+  // 插件被复制到项目里，源码里的相对路径已失效，必须改写为指向已安装版本目录的绝对路径。
+  const entry = join(dir, "index.mjs");
+  const version = packageVersion();
+  const rewritten = readFileSync(entry, "utf8")
+    .split("../../src/adapters/index.mjs")
+    .join(versionImport(version, "adapters/index.mjs"))
+    .split("../../src/adapters/dsh.mjs")
+    .join(versionImport(version, "adapters/dsh.mjs"));
+  writeFileSync(entry, rewritten);
   return dir;
 }
 

@@ -117,6 +117,18 @@ describe("安装与自检", () => {
     assert.match(readFileSync(join(repo.root, ".codex/hooks.json"), "utf8"), /codex-hook/);
   });
 
+  test("DSH 插件被复制到项目后仍能加载", () => {
+    const repo = setup();
+    const entry = join(repo.root, ".harness/dsh-plugin/index.mjs");
+    assert.ok(existsSync(entry), "应生成插件入口");
+    const source = readFileSync(entry, "utf8");
+    // 插件从版本目录导入，不能残留源码树里的相对路径。
+    assert.doesNotMatch(source, /\.\.\/\.\.\/src\//);
+    const loaded = sh(repo.root, process.execPath, ["-e", 'import("./.harness/dsh-plugin/index.mjs").then(m=>console.log(typeof m.apply)).catch(e=>{console.error(e.message);process.exit(1)})'], repo.env);
+    assert.equal(loaded.status, 0, loaded.stderr);
+    assert.equal(loaded.stdout.trim(), "function");
+  });
+
   test("init 会写出配置、规则与托管块，且可重复执行", () => {
     const repo = setup({ install: false, project: { ".harness/config.json": null, ".harness/policy.json": null, ".harness/verify.json": null } });
     const first = repo.rawCli("init");
