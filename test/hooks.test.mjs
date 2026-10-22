@@ -2,7 +2,7 @@ import { strict as assert } from "node:assert";
 import { chmodSync, existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
-import { commit, git, makeRepo, sh, write, writeReview } from "./helpers.mjs";
+import { commit, CONFIG, git, makeRepo, sh, write, writeReview } from "./helpers.mjs";
 
 let repos = [];
 afterEach(() => {
@@ -142,6 +142,24 @@ describe("安装与自检", () => {
     const second = repo.rawCli("init");
     assert.equal(second.status, 0, second.stderr);
     assert.match(readFileSync(join(repo.root, ".harness/config.json"), "utf8"), /保留/);
+  });
+
+  test("init 在没有任何提交的新仓库上按 HEAD 判断主分支名", () => {
+    const repo = setup({ install: false, project: { ".harness/config.json": null, ".harness/policy.json": null, ".harness/verify.json": null } });
+    // 删掉分支等价于刚 git init：refs/heads 下没有任何分支，只有 HEAD 指向 main。
+    git(repo.root, "update-ref", "-d", "refs/heads/main");
+    assert.equal(git(repo.root, "symbolic-ref", "--short", "HEAD"), "main");
+
+    const result = repo.rawCli("init");
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(readFileSync(join(repo.root, ".harness/config.json"), "utf8"), /"mainBranch": "main"/);
+  });
+
+  test("配置里的主分支名与仓库实际不符时给出明确提示", () => {
+    const repo = setup({ project: { ".harness/config.json": { ...CONFIG, mainBranch: "master" } } });
+    const status = repo.cli("status", "--branch", "main");
+    assert.equal(status.status, 1);
+    assert.match(status.stderr, /只有 main/);
   });
 
   test("init 自带黄金任务，且开箱全部通过", () => {

@@ -72,6 +72,31 @@ git 层（`pre-commit`、`commit-msg`、`reference-transaction`）对所有客�
 - `extended`：不自动执行，写进证据的未执行清单并附补验方式。
 - `advisory`：只提示，不计入未执行，适合需要人看一眼的视觉类检查。
 
+## 独立评审的后端
+
+评审是一个不了解实现过程的独立进程，只读验收清单、变更 diff 与验证证据。`review.backend` 决定用哪个工具：
+
+| 取值 | 行为 |
+| --- | --- |
+| `auto`（默认） | 按 `claude`、`codex` 的顺序用本机第一个可用的；都没有时直接报错并提示改用 `command` |
+| `claude` | 固定用 Claude Code CLI |
+| `codex` | 固定用 `codex exec`，模型由 `review.codexModel` 指定 |
+| `command` | 用 `review.command` 给出的命令，接入任何其他工具 |
+
+`command` 后端的约定：提示从 stdin 读入，结果写在 stdout，或者用 `{output}` 占位符指定一个文件路径。以下占位符会被替换成临时文件路径，可以直接传给命令：
+
+- `{schema}`：评审结果要满足的 JSON Schema，严格模式，可直接用于支持结构化输出的工具。
+- `{system}`：评审的系统提示词。
+- `{output}`：期望命令把结果写到这里，存在时优先读它。
+
+输出既可以是 `{"verdict": ..., "requirementFit": ..., "engineeringQuality": ..., "findings": [...]}`，也可以是带 `structured_output` 字段的包装对象；允许包在 Markdown 代码块里。示例：
+
+```json
+{ "command": ["my-reviewer", "--json-schema", "{schema}", "--out", "{output}"] }
+```
+
+`codex` 与 `command` 都在临时空目录里运行，读不到项目文件，也不会被项目里的钩子拦住；`claude` 使用只读工具白名单运行在仓库里。
+
 ## 信任模型
 
 - 门禁的配置一律从主分支的 git 对象读取，代码从按版本安装的目录执行；任务分支里改过的门禁不能决定自己是否放行。

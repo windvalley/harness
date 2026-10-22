@@ -1,5 +1,5 @@
-import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { acceptancePath, loadTrustedProject, mainBranch } from "../lib/config.mjs";
 import { changedPaths, gitOk, run, showBlob } from "../lib/git.mjs";
@@ -83,13 +83,103 @@ export function reviewerArgs({ model, maxBudgetUsd }, settingsFile = "") {
   ];
 }
 
-export function runReviewer({ cwd, prompt, model, maxBudgetUsd, reviewerBin }) {
-  const result = run(reviewerBin || process.env.HARNESS_REVIEWER_BIN || "claude", reviewerArgs({ model, maxBudgetUsd }, userSettingsFile()), {
+export const REVIEW_BACKENDS = ["auto", "claude", "codex", "command"];
+const REVIEW_TIMEOUT_MS = 20 * 60 * 1000;
+
+export function commandExists(bin) {
+  return run("sh", ["-c", 'command -v "$1" >/dev/null 2>&1', "sh", bin]).status === 0;
+}
+
+/**
+ * 选择评审后端。auto 按 claude、codex 的顺序取本机第一个可用的；
+ * 其他编码工具通过 command 后端接入，只要求“stdin 读提示、输出符合结构的 JSON”。
+ */
+export function resolveBackend(config = {}, { has = commandExists, overrideBin = process.env.HARNESS_REVIEWER_BIN } = {}) {
+  const backend = config.backend ?? "auto";
+  if (!REVIEW_BACKENDS.includes(backend)) {
+    throw new Error(`未知的评审后端 ${backend}，可选 ${REVIEW_BACKENDS.join("、")}`);
+  }
+  if (backend === "command") {
+    if (!Array.isArray(config.command) || config.command.length === 0) {
+      throw new Error("review.backend 为 command 时必须在 review.command 里给出命令数组");
+    }
+    return { name: "command", argv: config.command };
+  }
+  // 自测用假评审进程替换 claude，只作用于 claude 后端。
+  if (overrideBin && backend !== "codex") return { name: "claude", bin: overrideBin };
+  if (backend === "claude" || backend === "codex") return { name: backend, bin: backend };
+  for (const name of ["claude", "codex"]) {
+    if (has(name)) return { name, bin: name };
+  }
+  throw new Error(
+    "找不到评审后端：本机既没有 claude 也没有 codex。" +
+      "在 .harness/config.json 里把 review.backend 设为 command，并在 review.command 里给出评审命令，约定见 README",
+  );
+}
+
+/**
+ * OpenAI 的结构化输出要求严格模式：每个对象都关闭额外字段，所有字段都列为必填。
+ * 原本可选的字段改成可空，输出后再去掉空值，与 Claude 的结果对齐。
+ */
+export function strictSchema(schema) {
+  if (schema.type === "object") {
+    const required = new Set(schema.required ?? []);
+    const properties = {};
+    for (const [name, value] of Object.entries(schema.properties ?? {})) {
+      const inner = strictSchema(value);
+      properties[name] = required.has(name) ? inner : nullable(inner);
+    }
+    return { ...schema, properties, required: Object.keys(properties), additionalProperties: false };
+  }
+  if (schema.type === "array") return { ...schema, items: strictSchema(schema.items) };
+  return { ...schema };
+}
+
+function nullable(schema) {
+  const next = { ...schema, type: [schema.type, "null"] };
+  if (Array.isArray(schema.enum)) next.enum = [...schema.enum, null];
+  return next;
+}
+
+function dropNulls(value) {
+  if (Array.isArray(value)) return value.map(dropNulls);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).filter(([, v]) => v !== null).map(([k, v]) => [k, dropNulls(v)]));
+  }
+  return value;
+}
+
+/** 从命令输出里取出 JSON：整段是 JSON 最好，其次取代码块，最后取首尾花括号之间的内容。 */
+export function extractJson(text) {
+  const trimmed = text.trim();
+  const attempts = [trimmed];
+  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fenced) attempts.push(fenced[1].trim());
+  const start = trimmed.indexOf("{");
+  const end = trimmed.lastIndexOf("}");
+  if (start >= 0 && end > start) attempts.push(trimmed.slice(start, end + 1));
+  for (const candidate of attempts) {
+    try {
+      return JSON.parse(candidate);
+    } catch {
+      // 换下一种取法
+    }
+  }
+  throw new Error(`评审输出里找不到 JSON: ${trimmed.slice(0, 200)}`);
+}
+
+function ensureOk(result, label) {
+  if (result.error?.code === "ENOENT") throw new Error(`找不到评审命令 ${label}`);
+  if (result.status !== 0) throw new Error(`评审进程失败(${result.status}): ${(result.stderr || result.stdout).trim().slice(-400)}`);
+}
+
+function runClaude({ cwd, prompt, config, bin }) {
+  const result = run(bin, reviewerArgs({ model: config.model ?? "sonnet", maxBudgetUsd: config.maxBudgetUsd ?? 2 }, userSettingsFile()), {
     cwd,
     input: prompt,
-    timeout: 20 * 60 * 1000,
+    timeout: REVIEW_TIMEOUT_MS,
   });
-  if (result.status !== 0) throw new Error(`评审进程失败(${result.status}): ${result.stderr.trim().slice(-400)}`);
+  ensureOk(result, bin);
   let payload;
   try {
     payload = JSON.parse(result.stdout);
@@ -97,11 +187,75 @@ export function runReviewer({ cwd, prompt, model, maxBudgetUsd, reviewerBin }) {
     throw new Error(`评审进程输出不是 JSON: ${result.stdout.slice(0, 200)}`);
   }
   if (payload.is_error) throw new Error(`评审进程报错: ${payload.result ?? payload.subtype}`);
-  return { structured: parseVerdict(payload.structured_output), costUsd: payload.total_cost_usd ?? null };
+  return { structured: payload.structured_output, costUsd: payload.total_cost_usd ?? null };
+}
+
+// codex 与通用命令都在空的临时目录里运行：评审只依据给出的材料，不读项目文件，也不加载项目里的钩子与规则。
+function withScratch(fn) {
+  const dir = mkdtempSync(join(tmpdir(), "harness-review-"));
+  try {
+    writeFileSync(join(dir, "schema.json"), JSON.stringify(strictSchema(REVIEW_SCHEMA), null, 2));
+    writeFileSync(join(dir, "system.md"), SYSTEM_PROMPT);
+    return fn({ dir, schema: join(dir, "schema.json"), system: join(dir, "system.md"), output: join(dir, "output.json") });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+function runCodex({ prompt, config, bin }) {
+  return withScratch(({ dir, schema, output }) => {
+    const args = [
+      "exec",
+      "--ephemeral",
+      "--skip-git-repo-check",
+      "--sandbox",
+      "read-only",
+      "--cd",
+      dir,
+      "--color",
+      "never",
+      "--output-schema",
+      schema,
+      "--output-last-message",
+      output,
+      ...(config.codexModel ? ["--model", config.codexModel] : []),
+      "-",
+    ];
+    const result = run(bin, args, { cwd: dir, input: `${SYSTEM_PROMPT}\n\n${prompt}`, timeout: REVIEW_TIMEOUT_MS });
+    ensureOk(result, bin);
+    if (!existsSync(output)) throw new Error("codex 没有写出评审结果");
+    return { structured: dropNulls(extractJson(readFileSync(output, "utf8"))), costUsd: null };
+  });
+}
+
+function runCommand({ prompt, argv }) {
+  return withScratch((files) => {
+    const usesOutput = argv.some((arg) => arg.includes("{output}"));
+    const expanded = argv.map((arg) =>
+      arg.replaceAll("{schema}", files.schema).replaceAll("{system}", files.system).replaceAll("{output}", files.output),
+    );
+    const [cmd, ...args] = expanded;
+    const result = run(cmd, args, { cwd: files.dir, input: `${SYSTEM_PROMPT}\n\n${prompt}`, timeout: REVIEW_TIMEOUT_MS });
+    ensureOk(result, cmd);
+    const text = usesOutput && existsSync(files.output) ? readFileSync(files.output, "utf8") : result.stdout;
+    const payload = extractJson(text);
+    return { structured: dropNulls(payload.structured_output ?? payload), costUsd: payload.total_cost_usd ?? null };
+  });
+}
+
+export function runReviewer({ cwd, prompt, config = {} }) {
+  const backend = resolveBackend(config);
+  const outcome =
+    backend.name === "claude"
+      ? runClaude({ cwd, prompt, config, bin: backend.bin })
+      : backend.name === "codex"
+        ? runCodex({ prompt, config, bin: backend.bin })
+        : runCommand({ prompt, argv: backend.argv });
+  return { ...outcome, structured: parseVerdict(outcome.structured), backend: backend.name };
 }
 
 export function parseVerdict(structured) {
-  if (!structured || typeof structured !== "object") throw new Error("评审输出缺少 structured_output");
+  if (!structured || typeof structured !== "object") throw new Error("评审输出缺少结构化结果");
   if (structured.verdict !== "approve" && structured.verdict !== "reject") throw new Error("评审输出 verdict 非法");
   if (!Array.isArray(structured.findings)) throw new Error("评审输出 findings 非法");
   return structured;
@@ -195,12 +349,7 @@ export async function reviewBranch({ cwd, branch, log = console.error, reviewer 
       (acceptance ? `验收清单来自${acceptance.source === "main" ? "主分支" : "任务分支(未确认)"}` : "无验收清单"),
   );
   const prompt = buildPrompt({ acceptance, evidence: evidenceText, diff: diffText, branch });
-  const { structured, costUsd } = reviewer({
-    cwd: root,
-    prompt,
-    model: config.model ?? "sonnet",
-    maxBudgetUsd: config.maxBudgetUsd ?? 2,
-  });
+  const { structured, costUsd, backend } = reviewer({ cwd: root, prompt, config });
 
   const blockSeverities = config.blockSeverities ?? ["high", "critical"];
   const blocking = blockingFindings(structured.findings, blockSeverities);
@@ -222,10 +371,11 @@ export async function reviewBranch({ cwd, branch, log = console.error, reviewer 
     blocking,
     acceptanceSource: acceptance?.source ?? null,
     hadAcceptance: Boolean(acceptance),
+    backend: backend ?? null,
     costUsd,
     reviewedAt: new Date().toISOString(),
   });
-  appendLedger(root, { event: "review", branch, tree: record.reviewedCommit, verdict, blocking: blocking.length, costUsd });
+  appendLedger(root, { event: "review", branch, tree: record.reviewedCommit, verdict, blocking: blocking.length, backend, costUsd });
   return record;
 }
 

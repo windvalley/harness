@@ -110,6 +110,7 @@ async function cmdReview(argv) {
       `  需求符合度: ${record.requirementFit?.rating} - ${record.requirementFit?.evidence ?? ""}`,
       `  工程质量: ${record.engineeringQuality?.rating} - ${record.engineeringQuality?.evidence ?? ""}`,
       `  验收清单来源: ${record.acceptanceSource ?? "无"}`,
+      `  评审后端: ${record.backend ?? "未知"}`,
     ];
     for (const item of record.findings) {
       lines.push(`  [${item.severity}] ${item.file}${item.line ? `:${item.line}` : ""} ${item.summary}`);

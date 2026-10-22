@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { loadTrustedProject, mainBranch } from "../lib/config.mjs";
 import { commonDir, git, repoRoot } from "../lib/git.mjs";
 import { keyStatus } from "../lib/store.mjs";
+import { commandExists, resolveBackend } from "../review/review.mjs";
 import { resolvePolicy } from "../policy/resolve.mjs";
 import { packageVersion, MARK_START } from "./managed.mjs";
 import { shimPath, verifyVersion, versionDir } from "./install.mjs";
@@ -134,6 +135,22 @@ export function doctor({ cwd = process.cwd() } = {}) {
       detail: `${stats.rules} 条拦截规则，${stats.checks} 项验证检查` + (unknown.length ? `；disabled 里有未知规则 ${unknown.join(", ")}` : ""),
     });
     checks.push({ id: "project:main", ok: true, detail: `主分支配置来源: ${mainBranch(project)}` });
+    if (project.config.merge?.requireReview !== false) {
+      try {
+        const reviewConfig = project.config.review ?? {};
+        const backend = resolveBackend(reviewConfig);
+        const label = backend.name === "command" ? `command(${backend.argv[0]})` : backend.name;
+        const how = (reviewConfig.backend ?? "auto") === "auto" ? "，由 auto 选中" : "";
+        const bin = backend.bin ?? backend.argv[0];
+        checks.push(
+          commandExists(bin)
+            ? { id: "review", ok: true, detail: `独立评审后端: ${label}${how}` }
+            : { id: "review", ok: false, detail: `独立评审后端 ${label} 的命令 ${bin} 不在 PATH 里` },
+        );
+      } catch (error) {
+        checks.push({ id: "review", ok: false, detail: error.message });
+      }
+    }
   } catch (error) {
     checks.push({ id: "project:policy", ok: false, detail: error.message });
   }

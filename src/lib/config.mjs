@@ -84,7 +84,15 @@ export function loadGuardProject(cwd) {
 
 export function loadTrustedProject(cwd) {
   const root = repoRoot(cwd);
-  return loadProject(root, { fromRef: trustedMainRef(root), root });
+  const project = loadProject(root, { fromRef: trustedMainRef(root), root });
+  // 配置里的主分支名写错（典型情况：git init 用了 main，配置写了 master）时直接说清楚，
+  // 否则后续每一步都会报 rev-parse 失败，看不出是配置问题。
+  const configured = project.config.mainBranch;
+  if (configured && !refExists(root, `refs/heads/${configured}`)) {
+    const actual = trustedMainRef(root);
+    throw new Error(`配置里的 mainBranch 是 ${configured}，但仓库里只有 ${actual}。把 .harness/config.json 的 mainBranch 改成 ${actual} 并提交`);
+  }
+  return project;
 }
 
 export function mainBranch(project) {

@@ -53,7 +53,7 @@ export function commit(root, message, files = {}) {
   return commitWith(root, repoEnv(root), message, files);
 }
 
-const CONFIG = {
+export const CONFIG = {
   version: 1,
   mainBranch: "main",
   verify: { timeoutSeconds: 60, failFast: true },
@@ -217,6 +217,29 @@ process.stdout.write(JSON.stringify({ is_error: false, total_cost_usd: 0.01, str
   chmodSync(bin, 0o755);
   repo.env.HARNESS_REVIEWER_BIN = bin;
   return bin;
+}
+
+/** 假的 codex：记录参数、工作目录、输入与结构定义，再把给定结果写到 --output-last-message。 */
+export function fakeCodex(repo, structured) {
+  const dir = join(repo.root, "..", "fakebin");
+  mkdirSync(dir, { recursive: true });
+  const log = join(repo.root, "..", "codex-call.json");
+  const bin = join(dir, "codex");
+  writeFileSync(
+    bin,
+    `#!/usr/bin/env node
+import { readFileSync, writeFileSync } from "node:fs";
+const args = process.argv.slice(2);
+const at = (flag) => args[args.indexOf(flag) + 1];
+const stdin = readFileSync(0, "utf8");
+const schema = JSON.parse(readFileSync(at("--output-schema"), "utf8"));
+writeFileSync(${JSON.stringify(log)}, JSON.stringify({ args, cwd: process.cwd(), stdin, schema }));
+writeFileSync(at("--output-last-message"), JSON.stringify(${JSON.stringify(structured)}));
+`,
+  );
+  chmodSync(bin, 0o755);
+  repo.env.PATH = `${dir}:${process.env.PATH}`;
+  return log;
 }
 
 export const APPROVE = {

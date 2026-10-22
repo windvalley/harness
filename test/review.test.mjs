@@ -2,8 +2,8 @@ import { strict as assert } from "node:assert";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
-import { APPROVE, fakeReviewer, git, makeRepo, sh } from "./helpers.mjs";
-import { blockingFindings, buildPrompt, parseVerdict } from "../src/review/review.mjs";
+import { APPROVE, CONFIG, fakeCodex, fakeReviewer, git, makeRepo, sh } from "./helpers.mjs";
+import { blockingFindings, buildPrompt, extractJson, parseVerdict, resolveBackend, REVIEW_SCHEMA, strictSchema } from "../src/review/review.mjs";
 import { validateEscalation } from "../src/escalate/escalate.mjs";
 import { computeMetrics, formatMetrics } from "../src/golden/metrics.mjs";
 
@@ -72,6 +72,93 @@ describe("评审", () => {
     const review = repo.cli("review", "--branch", "task/a");
     assert.equal(review.status, 1);
     assert.match(review.stderr, /必须先有通过的验证证据/);
+  });
+});
+
+describe("评审后端", () => {
+  test("auto 按 claude、codex 顺序选择，都没有时提示配置 command", () => {
+    assert.deepEqual(resolveBackend({}, { has: (bin) => bin === "claude", overrideBin: undefined }), { name: "claude", bin: "claude" });
+    assert.deepEqual(resolveBackend({}, { has: (bin) => bin === "codex", overrideBin: undefined }), { name: "codex", bin: "codex" });
+    assert.throws(() => resolveBackend({}, { has: () => false, overrideBin: undefined }), /command/);
+    assert.throws(() => resolveBackend({ backend: "nope" }, { has: () => false }), /未知的评审后端/);
+    assert.throws(() => resolveBackend({ backend: "command" }, { has: () => true }), /review\.command/);
+  });
+
+  test("严格化后的结构符合 OpenAI 要求", () => {
+    const strict = strictSchema(REVIEW_SCHEMA);
+    assert.equal(strict.additionalProperties, false);
+    assert.deepEqual(strict.required, Object.keys(strict.properties));
+    const finding = strict.properties.findings.items;
+    assert.equal(finding.additionalProperties, false);
+    assert.deepEqual(finding.required, Object.keys(finding.properties));
+    // 原本可选的 line 变成可空，仍留在必填里
+    assert.deepEqual(finding.properties.line.type, ["integer", "null"]);
+    assert.deepEqual(finding.properties.dimension.type, ["string", "null"]);
+    // 原本必填的字段类型不变
+    assert.equal(strict.properties.verdict.type, "string");
+  });
+
+  test("从命令输出里取 JSON，容忍代码块与前后文字", () => {
+    assert.deepEqual(extractJson('{"a":1}'), { a: 1 });
+    assert.deepEqual(extractJson('说明\n```json\n{"a":2}\n```\n结束'), { a: 2 });
+    assert.deepEqual(extractJson('前缀 {"a":3} 后缀'), { a: 3 });
+    assert.throws(() => extractJson("没有 JSON"), /找不到 JSON/);
+  });
+
+  test("codex 后端在空目录里读取材料，写出结果后写入评审记录", () => {
+    const repo = setup({
+      project: { ".harness/config.json": { ...CONFIG, review: { backend: "codex", codexModel: "gpt-x", blockSeverities: ["high", "critical"] } } },
+    });
+    repo.branch("task/c", { "a.txt": "a\n" });
+    const log = fakeCodex(repo, APPROVE);
+    assert.equal(repo.cli("verify", "--branch", "task/c").status, 0);
+
+    const review = repo.cli("review", "--branch", "task/c");
+    assert.equal(review.status, 0, review.stderr);
+    assert.match(review.stderr, /评审后端: codex/);
+
+    const call = JSON.parse(readFileSync(log, "utf8"));
+    assert.equal(call.args[0], "exec");
+    assert.ok(call.args.includes("--ephemeral"));
+    assert.ok(call.args.includes("read-only"));
+    assert.equal(call.args[call.args.indexOf("--model") + 1], "gpt-x");
+    // 评审进程的工作目录是一个临时目录，不是仓库，读不到项目文件
+    assert.doesNotMatch(call.cwd, /repo$/);
+    assert.match(call.stdin, /# 评审对象: task\/c/);
+    assert.match(call.stdin, /不能修改任何文件/);
+    assert.equal(call.schema.additionalProperties, false);
+  });
+
+  test("command 后端支持占位符，输出可直接是结构化结果", () => {
+    const repo = setup({
+      project: {
+        ".harness/config.json": {
+          ...CONFIG,
+          // 读完提示后把结果写到 {output}，验证占位符被替换成真实路径且结果从该文件读取。
+          review: { backend: "command", command: ["sh", "-c", `cat >/dev/null; printf '%s' '${JSON.stringify(APPROVE)}' > "$0"`, "{output}"], blockSeverities: ["high"] },
+        },
+      },
+    });
+    repo.branch("task/d", { "a.txt": "a\n" });
+    assert.equal(repo.cli("verify", "--branch", "task/d").status, 0);
+    const review = repo.cli("review", "--branch", "task/d");
+    assert.equal(review.status, 0, review.stderr);
+    assert.match(review.stderr, /评审后端: command/);
+  });
+
+  test("评审后端不存在时明确报错并要求配置", () => {
+    const repo = setup({
+      project: { ".harness/config.json": { ...CONFIG, review: { backend: "command", command: ["/nonexistent/reviewer"], blockSeverities: ["high"] } } },
+    });
+    repo.branch("task/e", { "a.txt": "a\n" });
+    assert.equal(repo.cli("verify", "--branch", "task/e").status, 0);
+    const review = repo.cli("review", "--branch", "task/e");
+    assert.equal(review.status, 1);
+    assert.match(review.stderr, /找不到评审命令/);
+
+    const doctor = repo.cli("doctor");
+    assert.notEqual(doctor.status, 0);
+    assert.match(doctor.stdout, /不在 PATH 里/);
   });
 });
 

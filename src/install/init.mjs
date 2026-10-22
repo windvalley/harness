@@ -18,7 +18,8 @@ function defaultConfig({ mainBranch }) {
       commitMessagePattern: "^[a-z]+(\\([^)]+\\))?: .+\\n\\n(- .+\\n?)+$",
       forbidMessagePatterns: ["^Co-Authored-By:", "^Co-authored-by:"],
     },
-    review: { model: "sonnet", maxBudgetUsd: 2, blockSeverities: ["high", "critical"] },
+    // backend 取 auto 时按 claude、codex 顺序用本机第一个可用的；其他工具用 command 接入。
+    review: { backend: "auto", model: "sonnet", maxBudgetUsd: 2, codexModel: null, command: null, blockSeverities: ["high", "critical"] },
     intent: { mode: "checklist", dir: "acceptance" },
     governance: { confirmOnGateChange: true, gatePaths: [] },
     escalate: {
@@ -90,9 +91,25 @@ function starterVerify() {
   };
 }
 
+/**
+ * 判断主分支名。
+ * 刚 git init 的仓库还没有任何提交，refs/heads 下两个分支都不存在，只能看 HEAD 指向谁；
+ * 这时如果一律回落 master，就会把 main 仓库的配置写错。
+ */
+export function detectMainBranch(root) {
+  for (const name of ["main", "master"]) {
+    if (refExists(root, `refs/heads/${name}`)) return name;
+  }
+  const head = git(root, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
+  const name = head.status === 0 ? head.stdout.trim() : "";
+  if (name) return name;
+  // 分离头指针且没有 main/master，只能按最通用的约定起名。
+  return "main";
+}
+
 export function initProject({ cwd = process.cwd(), force = false } = {}) {
   const root = repoRoot(cwd);
-  const mainBranch = refExists(root, "refs/heads/main") ? "main" : "master";
+  const mainBranch = detectMainBranch(root);
   const dir = join(root, ".harness");
   mkdirSync(dir, { recursive: true });
   const written = [];
