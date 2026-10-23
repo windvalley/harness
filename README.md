@@ -173,7 +173,9 @@ git 层（`pre-commit`、`commit-msg`、`reference-transaction`）对所有客�
 - `main-worktree-leave-main`：Agent 不能在主 Worktree 里 `git switch`、`git checkout` 到主分支以外。
 - `main-worktree-commit`：git 的 `pre-commit` 拒绝主 Worktree 里的提交，对所有客户端和人都生效，Codex 没有信任钩子时也能兜底。
 
-判定按调用实际落在哪个 Worktree：会话停在主 Worktree 时，改 Linked Worktree 里的文件（包括建在主 Worktree 目录下的，例如 `.claude/worktrees/`）、`cd <目录> && ...`、`git -C <目录> ...` 都按那个 Worktree 算。
+判定按调用实际落在哪个 Worktree：会话停在主 Worktree 时，改 Linked Worktree 里的文件（包括建在主 Worktree 目录下的，例如 `.claude/worktrees/`）按那个 Worktree 算。
+命令按段判定，每段在哪个目录执行跟着前面的 `cd`、`pushd` 推算，`git -C <目录>` 再叠加上去；括号子 shell、`bash -c` 和命令替换里的 `cd` 不影响后面的段。
+目录无法静态确定的段（`cd "$变量"`、`cd -`、`popd`、管道里的 `cd`、`GIT_DIR` 与 `--git-dir`）按最严格处理，带条件的规则都适用。
 `harness merge` 用 `commit-tree` 和快进更新主分支，不经过 `pre-commit`，不受影响。
 需要由人在主 Worktree 手工提交的项目，在 `disabled` 里关掉 `main-worktree-commit`，其余两条照常。
 用命令写文件（例如 `echo > 文件`、构建产物）不在拦截范围内，靠 `harness status` 与 `harness doctor` 提前提示主 Worktree 不洁净来兜底。

@@ -18,7 +18,8 @@
 
 ### 变更
 
-- 实时拦截按调用实际落在哪个 Worktree 判定：会话停在主 Worktree 时，改 Linked Worktree 里的文件、`cd <目录> && ...`、`git -C <目录> ...` 按那个 Worktree 的上下文与相对路径判定。落在本仓库所有 Worktree 之外的调用不受带 `when` 的规则约束。
+- 实时拦截按调用实际落在哪个 Worktree 判定：会话停在主 Worktree 时，改 Linked Worktree 里的文件按那个 Worktree 的上下文与相对路径判定。落在本仓库所有 Worktree 之外的调用不受带 `when` 的规则约束。
+- 命令按段判定所在目录：跟着前面的 `cd`、`pushd` 推算，`git -C` 叠加，括号子 shell、`bash -c` 与命令替换里的 `cd` 不外溢。目录无法静态确定的段按最严格处理，带条件的规则都适用。
 - 黄金任务的步骤没写位置时一律按 Linked Worktree、不在主分支判定，结果不再取决于在哪个 Worktree 里运行 `harness golden`。
 
 ### 修复

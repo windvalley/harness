@@ -1,4 +1,4 @@
-import { homedir } from "node:os";
+import { existsSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import { currentBranch, isLinkedWorktree, locatePath, repoRoot } from "../lib/git.mjs";
 import { loadGuardProject } from "../lib/config.mjs";
@@ -35,42 +35,36 @@ function locatedKinds(resolved) {
   return kinds;
 }
 
-// Agent 常用 cd <目录> && ... 或 git -C <目录> 在别的 Worktree 里执行命令，判定要以那个目录为准。
-const LEADING_CD = /^\s*cd\s+("[^"]+"|'[^']+'|[^\s;&|]+)\s*(?:&&|;)/;
-const GIT_DIR_OPTION = /\bgit\s+-C\s+("[^"]+"|'[^']+'|[^\s;&|]+)/;
-
-function unquote(text) {
-  return text.replace(/^(["'])(.*)\1$/, "$2").replace(/^~(?=\/|$)/, homedir());
+function placeContext(base, place) {
+  if (place.outsideRepo) return { ...base, outsideRepo: true };
+  return { ...base, linkedWorktree: place.linkedWorktree, onMainBranch: place.onMainBranch, branch: place.branch };
 }
 
 /**
- * 一次调用真正落在哪个 Worktree：会话停在主 Worktree 时，也可能改 Linked Worktree 里的文件，
- * 或在那里执行命令。按落点重算上下文，路径改为相对落点所在 Worktree 判定。
+ * 一次读写真正落在哪个 Worktree：会话停在主 Worktree 时，也可能改 Linked Worktree 里的文件。
+ * 按落点重算上下文，路径改为相对落点所在 Worktree 判定。
  */
-function locateCall(call, { root, cwd }, base, kinds) {
-  if (!kinds.has(call.kind)) return { root, call, context: base };
-  let target = null;
-  if (call.kind === "write" || call.kind === "read") target = call.path ? resolve(root, call.path) : null;
-  if (call.kind === "shell") {
-    const command = String(call.command ?? "");
-    const cd = command.match(LEADING_CD);
-    const from = cd ? resolve(cwd, unquote(cd[1])) : cwd;
-    const dashC = command.match(GIT_DIR_OPTION);
-    if (cd || dashC) target = dashC ? resolve(from, unquote(dashC[1])) : from;
+function locatePathCall(call, root, base, kinds) {
+  if (!kinds.has(call.kind) || !call.path || (call.kind !== "write" && call.kind !== "read")) {
+    return { root, call, context: base };
   }
-  if (!target) return { root, call, context: base };
-  const place = locatePath(root, target, { checkIgnore: call.kind !== "shell" });
-  if (place.outsideRepo) return { root, call, context: { ...base, outsideRepo: true } };
-  return {
-    root: place.root,
-    call: call.kind === "shell" ? call : { ...call, path: place.path },
-    context: {
-      ...base,
-      linkedWorktree: place.linkedWorktree,
-      onMainBranch: place.onMainBranch,
-      branch: place.branch,
-      ignored: place.ignored,
-    },
+  const place = locatePath(root, resolve(root, call.path), { checkIgnore: true });
+  if (place.outsideRepo) return { root, call, context: placeContext(base, place) };
+  return { root: place.root, call: { ...call, path: place.path }, context: { ...placeContext(base, place), ignored: place.ignored } };
+}
+
+/**
+ * 命令里 cd、git -C 去到的目录换成那里的上下文。目录不存在时 cd 会失败，
+ * 之后的命令在哪执行取决于分隔符，返回 null 按无法确定处理。
+ */
+function shellLocator(root, base) {
+  const cache = new Map();
+  return (dir) => {
+    if (!cache.has(dir)) {
+      const exists = existsSync(dir) && statSync(dir).isDirectory();
+      cache.set(dir, exists ? placeContext(base, locatePath(root, dir)) : null);
+    }
+    return cache.get(dir);
   };
 }
 
@@ -102,10 +96,12 @@ export function guard({ adapter, payload, log = () => {} }) {
     ? normalized.call.paths.map((path) => ({ ...normalized.call, path, paths: undefined }))
     : [normalized.call];
 
+  // Agent 常用 cd <目录> && ... 或 git -C <目录> 在别的 Worktree 里执行命令，带条件的规则按每段实际所在的目录判定。
+  const locate = kinds.has("shell") ? shellLocator(project.root, context) : undefined;
   let result = { decision: "allow" };
   for (const call of calls) {
-    const located = locateCall(call, { root: project.root, cwd }, context, kinds);
-    result = evaluateCall({ policy: resolved, root: located.root, call: located.call, context: located.context });
+    const located = locatePathCall(call, project.root, context, kinds);
+    result = evaluateCall({ policy: resolved, root: located.root, call: located.call, context: located.context, cwd: resolve(cwd), locate });
     if (result.decision === "deny") break;
   }
 

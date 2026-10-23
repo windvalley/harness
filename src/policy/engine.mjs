@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { isAbsolute, relative, resolve } from "node:path";
 import { matchAny } from "../lib/glob.mjs";
 
@@ -77,13 +78,15 @@ export function evaluatePath({ policy, root, relPath, access, content, existingH
   return { decision: "allow" };
 }
 
-function splitCommands(command) {
-  const parts = [];
+/** 按 shell 分隔符切开命令，命令段与分隔符按出现顺序交替给出：{ seg } 或 { op }。 */
+function tokenizeCommand(command) {
+  const items = [];
   let current = "";
   let quote = "";
-  const flush = () => {
-    if (current.trim()) parts.push(current.trim());
+  const flush = (op) => {
+    if (current.trim()) items.push({ seg: current.trim() });
     current = "";
+    if (op) items.push({ op });
   };
   for (let i = 0; i < command.length; i++) {
     const ch = command[i];
@@ -98,26 +101,33 @@ function splitCommands(command) {
       continue;
     }
     if (ch === "&" || ch === "|") {
-      if (command[i + 1] === ch) i += 1;
-      flush();
+      const doubled = command[i + 1] === ch;
+      if (doubled) i += 1;
+      flush(doubled ? ch + ch : ch);
       continue;
     }
     if (ch === ";" || ch === "\n" || ch === "(" || ch === ")" || ch === "`") {
-      flush();
+      flush(ch);
       continue;
     }
     if (ch === "{" && (i === 0 || /\s/.test(command[i - 1])) && /\s/.test(command[i + 1] ?? " ")) {
-      flush();
+      flush(ch);
       continue;
     }
     if (ch === "}" && /\s|;/.test(command[i - 1] ?? " ") && (i === command.length - 1 || /[\s;]/.test(command[i + 1]))) {
-      flush();
+      flush(ch);
       continue;
     }
     current += ch;
   }
   flush();
-  return parts;
+  return items;
+}
+
+function splitCommands(command) {
+  return tokenizeCommand(command)
+    .filter((item) => item.seg)
+    .map((item) => item.seg);
 }
 
 function stripEnvAssignments(segment) {
@@ -178,8 +188,88 @@ export function expandSegments(command, depth = 0) {
   return result;
 }
 
+// 一个词能否静态确定成路径：变量、命令替换、通配符、cd - 与 ~user 都不能，返回 null。
+function literalWord(word) {
+  if (/^'[^']*'$/.test(word)) return word.slice(1, -1);
+  if (/^"(?:[^"\\]|\\.)*"$/.test(word)) {
+    const inner = word.slice(1, -1);
+    return /[$`\\]/.test(inner) ? null : inner;
+  }
+  if (/[$`\\*?[\]{}"'!]/.test(word) || word === "-" || /^~[^/]/.test(word)) return null;
+  return word.replace(/^~(?=\/|$)/, homedir());
+}
+
+function resolveDir(base, word) {
+  const text = literalWord(word);
+  if (text === null) return null;
+  if (isAbsolute(text)) return resolve(text);
+  return base === null ? null : resolve(base, text);
+}
+
+const WORD = /"(?:[^"\\]|\\.)*"|'[^']*'|\S+/g;
+const CONTROL_PREFIX = /^(?:(?:if|then|else|elif|do|while|until|!|time|builtin|command)\s+)+/;
+
+/** cd 类命令改到哪个目录：不是 cd 返回 undefined，目录无法确定返回 null。 */
+function cdTarget(norm, dir) {
+  const match = norm.replace(CONTROL_PREFIX, "").match(/^(cd|pushd|popd)(?:\s+(.*))?$/);
+  if (!match) return undefined;
+  if (match[1] === "popd") return null;
+  const words = (match[2] ?? "").match(WORD) ?? [];
+  while (/^-[LPe@]+$|^--$/.test(words[0] ?? "")) words.shift();
+  if (words.length === 0) return match[1] === "cd" ? homedir() : null;
+  if (words.length > 1) return null;
+  return resolveDir(dir, words[0]);
+}
+
+const GIT_GLOBAL_OPTIONS =
+  /\bgit\s+((?:(?:-C\s+(?:"[^"]*"|'[^']*'|\S+)|-c\s+\S+|--git-dir(?:=|\s+)\S+|--work-tree(?:=|\s+)\S+|--no-pager|-P|--no-optional-locks|--literal-pathspecs)\s+)+)/;
+
+/** git 命令实际作用的目录：-C 依次叠加；--git-dir、--work-tree 与 GIT_DIR 之类的环境变量让目录无法确定。 */
+function gitDirOf(raw, dir) {
+  if (/(?:^|\s)GIT_(?:DIR|WORK_TREE)=/.test(raw)) return null;
+  const options = raw.match(GIT_GLOBAL_OPTIONS);
+  if (!options) return dir;
+  if (/--git-dir|--work-tree/.test(options[1])) return null;
+  let current = dir;
+  for (const option of options[1].matchAll(/-C\s+("[^"]*"|'[^']*'|\S+)/g)) current = resolveDir(current, option[1]);
+  return current;
+}
+
+/**
+ * 逐段标出命令实际在哪个目录执行（null 表示无法静态确定）。
+ * cd 改变同一 shell 里后续段的目录；括号子 shell、反引号、bash -c、eval 与 $() 里的 cd 不外溢；
+ * 管道或后台执行的 cd 是否生效取决于 shell，之后的目录记为无法确定。
+ */
+export function locateSegments(command, start, depth = 0) {
+  const items = tokenizeCommand(command);
+  const result = [];
+  const stack = [];
+  let dir = start;
+  let inBacktick = false;
+  for (let i = 0; i < items.length; i++) {
+    const { seg, op } = items[i];
+    if (op === "(" || (op === "`" && !inBacktick)) stack.push(dir);
+    if ((op === ")" || (op === "`" && inBacktick)) && stack.length) dir = stack.pop();
+    if (op === "`") inBacktick = !inBacktick;
+    if (!seg) continue;
+    const norm = normalizeSegment(seg);
+    const at = gitDirOf(seg, dir);
+    result.push({ raw: seg, norm, dir: at });
+    if (depth < MAX_NESTING) {
+      for (const inner of nestedCommands(seg)) result.push(...locateSegments(inner, at, depth + 1));
+    }
+    const target = cdTarget(norm, dir);
+    if (target === undefined) continue;
+    const detached = ["|", "&"].includes(items[i - 1]?.op) || ["|", "&"].includes(items[i + 1]?.op);
+    dir = detached ? null : target;
+  }
+  return result;
+}
+
 export function ruleApplies(rule, context) {
   if (!rule.when) return true;
+  // 无法确定在哪个 Worktree 执行时按最严格处理：所有带条件的规则都适用。
+  if (context.unknownPlace) return true;
   // 落在本仓库所有 Worktree 之外（用户目录、/tmp、别的仓库）时，按 Worktree 与分支区分的规则都不适用。
   if (context.outsideRepo) return false;
   if (rule.when === "linked-worktree") return Boolean(context.linkedWorktree);
@@ -193,13 +283,35 @@ function maskQuoted(text) {
   return text.replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g, '""');
 }
 
-export function evaluateShell({ policy, command, context = {} }) {
-  const segments = expandSegments(command);
-  const whole = [{ raw: command, norm: command }];
+const UNKNOWN_PLACE_NOTE =
+  "无法确定这段命令在哪个目录执行，按最严格处理；cd 写成绝对路径，或用 git -C <绝对路径>";
+
+/**
+ * 给每段配上它执行时的上下文。没有 locate 时整条命令共用 context（黄金任务、check 按声明的位置判定）；
+ * 有 locate 时从 cwd 出发推算每段的目录，交给 locate 换成那里的上下文，换不出来按无法确定处理。
+ */
+function segmentsWithContext(command, { context, cwd, locate }) {
+  if (!locate || !cwd) return expandSegments(command).map((segment) => ({ ...segment, context }));
+  const unknown = { ...context, unknownPlace: true };
+  return locateSegments(command, cwd).map(({ dir, ...segment }) => ({
+    ...segment,
+    context: dir === cwd ? context : dir === null ? unknown : (locate(dir) ?? unknown),
+  }));
+}
+
+export function evaluateShell({ policy, command, context = {}, cwd, locate }) {
+  const segments = segmentsWithContext(command, { context, cwd, locate });
+  const whole = [{ raw: command, norm: command, context }];
 
   for (const rule of rulesOfKind(policy, "shell-forbid")) {
-    if (!ruleApplies(rule, context)) continue;
-    const targets = rule.scope === "whole" ? whole : segments;
+    const applies = (target) => ruleApplies(rule, target.context);
+    // 整串规则带条件时，只要有一段落在条件成立的位置就适用。
+    const targets =
+      rule.scope === "whole" ? (applies(whole[0]) || segments.some(applies) ? whole : []) : segments.filter(applies);
+    // 规则只因为无法确定目录才适用时，说明原因，免得提示与实际所在的 Worktree 对不上。
+    const known = (target) => !target.context.unknownPlace && applies(target);
+    const unsure = (target) =>
+      Boolean(rule.when) && (rule.scope === "whole" ? !known(whole[0]) && !segments.some(known) : target.context.unknownPlace);
     for (const target of targets) {
       for (const pattern of rule.patterns ?? []) {
         const re = new RegExp(pattern);
@@ -208,15 +320,15 @@ export function evaluateShell({ policy, command, context = {} }) {
           rule.scope === "whole"
             ? re.test(target.raw)
             : re.test(maskQuoted(target.raw)) || re.test(maskQuoted(target.norm));
-        if (hit) return deny(rule, target.raw);
+        if (hit) return deny(rule, unsure(target) ? `${target.raw}（${UNKNOWN_PLACE_NOTE}）` : target.raw);
       }
     }
   }
 
   for (const rule of rulesOfKind(policy, "shell-secret-access")) {
-    if (!ruleApplies(rule, context)) continue;
     const allowed = new Set(rule.allowVerbs ?? []);
     for (const target of segments) {
+      if (!ruleApplies(rule, target.context)) continue;
       const verb = verbOf(target.norm);
       if (allowed.has(verb) || allowed.has(verb.split(" ")[0])) continue;
       for (const pattern of rule.patterns ?? []) {
@@ -253,10 +365,10 @@ function evaluateSearch({ policy, root, call, context }) {
  * 统一入口：所有客户端先把调用归一为 call，再交给这里判定。
  * call.kind 取 shell / write / read / search / commit，客户端差异只留在适配器里；commit 由 git 的 pre-commit 产生。
  */
-export function evaluateCall({ policy, root, call, context = {} }) {
+export function evaluateCall({ policy, root, call, context = {}, cwd, locate }) {
   switch (call.kind) {
     case "shell":
-      return evaluateShell({ policy, command: String(call.command ?? ""), context });
+      return evaluateShell({ policy, command: String(call.command ?? ""), context, cwd, locate });
     case "write":
       return evaluatePath({
         policy,

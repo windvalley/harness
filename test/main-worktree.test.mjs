@@ -140,4 +140,39 @@ describe("主 Worktree 只用来合并", () => {
     const report = repo.cli("doctor");
     assert.match(report.stdout, /\[!!\] main-worktree: .*stray\.txt/s);
   });
+
+  test("一条命令里先去 Linked Worktree 再回主 Worktree，后面的段按主 Worktree 判定", () => {
+    const { repo, root, linked } = setup();
+    const back = claudeHook(repo, bashCall(root, `cd ${linked} && git status; cd ${root} && git switch -c task/b`));
+    assert.equal(back.status, 2, "回到主 Worktree 之后的切分支要拦");
+    assert.match(back.stderr, /main-worktree-leave-main/);
+    const fromLinked = claudeHook(repo, bashCall(linked, `cd ${root} && git switch -c task/c`));
+    assert.equal(fromLinked.status, 2, "会话在 Linked Worktree，命令却去主 Worktree 切分支");
+  });
+
+  test("子 shell 里的 cd 不影响后面的段", () => {
+    const { repo, root, linked } = setup();
+    const refused = claudeHook(repo, bashCall(root, `(cd ${linked} && git status); git switch -c task/b`));
+    assert.equal(refused.status, 2);
+    assert.match(refused.stderr, /main-worktree-leave-main/);
+    assert.equal(claudeHook(repo, bashCall(root, `(cd ${linked} && git switch -c task/b)`)).status, 0);
+  });
+
+  test("无法确定在哪执行的段按最严格处理", () => {
+    const { repo, root, linked } = setup();
+    for (const command of [
+      `cd "$TARGET" && git switch -c task/b`,
+      `cd ${linked} | cat; git switch -c task/c`,
+      `cd ${join(linked, "missing")} ; git switch -c task/d`,
+      `GIT_DIR=${linked}/.git git switch -c task/e`,
+    ]) {
+      const refused = claudeHook(repo, bashCall(linked, command));
+      assert.equal(refused.status, 2, command);
+      assert.match(refused.stderr, /main-worktree-leave-main/, command);
+      assert.match(refused.stderr, /无法确定这段命令在哪个目录执行/, command);
+    }
+    const certain = claudeHook(repo, bashCall(root, "git switch -c task/f"));
+    assert.equal(certain.status, 2);
+    assert.doesNotMatch(certain.stderr, /无法确定/, "确定在主 Worktree 时不附加说明");
+  });
 });

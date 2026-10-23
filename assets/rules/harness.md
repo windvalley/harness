@@ -44,7 +44,8 @@
 - Agent 不能在主 Worktree 里切离主分支。
 - 任何人都不能在主 Worktree 里提交。
 - 新任务用 `git worktree add -b <任务分支> <路径> <主分支>` 建 Linked Worktree，在那里修改、提交。
-  会话停在主 Worktree 时，改 Linked Worktree 里的文件、`cd <目录> && ...` 或 `git -C <目录> ...` 都按那个 Worktree 判定。
+  会话停在主 Worktree 时，改 Linked Worktree 里的文件按那个 Worktree 判定；命令按段跟着前面的 `cd` 与 `git -C` 推算所在目录。
+  目录无法确定的段（`cd "$变量"`、`cd -`、管道里的 `cd`、`GIT_DIR`）按最严格处理，要在别的 Worktree 执行就写明绝对路径。
 
 ## 例外上报
 
