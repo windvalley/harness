@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
 import { APPROVE, commit, fakeReviewer, git, makeRepo, write, writeReview } from "./helpers.mjs";
@@ -118,6 +118,18 @@ describe("验证与证据", () => {
     const result = repo.cli("verify", "--branch", "task/a");
     assert.equal(result.status, 1);
     assert.match(result.stderr, /FAIL bad/);
+  });
+
+  test("verify --plan 只列出检查，不执行也不写证据", () => {
+    const repo = setup();
+    repo.branch("task/plan", { "src/a.js": "x\n", "docs/x.md": "d\n" });
+    const result = repo.cli("verify", "--plan", "--branch", "task/plan");
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /RUN {2}lint/);
+    assert.match(result.stdout, /TODO manual-check/);
+    assert.match(result.stdout, /HINT visual-hint/);
+    const key = git(repo.root, "rev-parse", "task/plan");
+    assert.equal(existsSync(join(repo.env.HARNESS_DATA_DIR, "evidence", `${key}.json`)), false, "plan 不应写证据");
   });
 
   test("命令不存在时说明是环境问题，与检查失败区分", () => {
@@ -260,6 +272,41 @@ describe("合并门禁", () => {
     const summary = repo.cli("confirm", "--branch", "task/gate");
     assert.equal(summary.status, 0, summary.stderr);
     assert.match(summary.stdout, /移除: git-stash/);
+  });
+
+  test("改坏规则的分支在验证阶段被黄金任务拦下", () => {
+    const repo = setup({
+      project: {
+        ".harness/verify.json": {
+          version: 1,
+          docOnly: { match: [], exclude: [] },
+          checks: [{ id: "harness-golden", tier: "gate", when: [".harness/**"], cmd: [".harness/bin/harness", "golden", "--worktree"] }],
+          fullSuiteTriggers: { paths: [] },
+        },
+        ".harness/golden/tasks.json": {
+          version: 1,
+          tasks: [{ id: "g-rm", kind: "policy", steps: [{ kind: "shell", command: "rm -rf build", expect: "deny" }] }],
+        },
+      },
+    });
+    const policy = JSON.parse(readFileSync(join(repo.root, ".harness/policy.json"), "utf8"));
+    repo.branch("task/weaken", {
+      ".harness/policy.json": `${JSON.stringify({ ...policy, disabled: ["shell-recursive-delete"] }, null, 2)}\n`,
+    });
+    const result = repo.cli("verify", "--branch", "task/weaken");
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stderr, /FAIL harness-golden/);
+  });
+
+  test("升级入口版本属于门禁改动，合并前需要确认", () => {
+    const repo = setup();
+    const shim = readFileSync(join(repo.root, ".harness/bin/harness"), "utf8");
+    repo.branch("task/shim", { "a.txt": "a\n", ".harness/bin/harness": shim.replace(/:-[0-9.]+\}/, ":-9.9.9}") });
+    writeReview(repo, git(repo.root, "rev-parse", "task/shim"), "approve");
+    const refused = repo.cli("merge", "--branch", "task/shim");
+    assert.notEqual(refused.status, 0);
+    assert.match(refused.stderr, /gate_change_unconfirmed/);
+    assert.match(refused.stderr, /\.harness\/bin\/harness/);
   });
 
   test("确认绑定合并结果，内容再变即失效", () => {

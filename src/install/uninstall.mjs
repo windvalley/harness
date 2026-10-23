@@ -2,13 +2,11 @@ import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { commonDir, git, repoRoot } from "../lib/git.mjs";
+import { isHarnessClientHook, stripHookBlock } from "./install.mjs";
 import { removeManagedBlock } from "./managed.mjs";
 
 const HOOK_MARK = "# harness:hook";
-const CLIENT_MARKERS = [
-  [".claude/settings.json", "claude-hook.mjs"],
-  [".codex/hooks.json", "codex-hook.mjs"],
-];
+const CLIENT_FILES = [".claude/settings.json", ".codex/hooks.json"];
 
 function gitHooksDir(root) {
   const hooksPath = git(root, ["config", "--get", "core.hooksPath"]).stdout.trim();
@@ -27,11 +25,11 @@ function plan({ root }) {
   for (const name of ["pre-commit", "commit-msg", "reference-transaction"]) {
     const file = join(hooksDir, name);
     if (existsSync(file) && readFileSync(file, "utf8").includes(HOOK_MARK)) {
-      targets.push({ kind: "hook", rel: `git 钩子 ${name}`, file });
+      targets.push({ kind: "hook", rel: `git 钩子 ${name}`, file, isEmpty: stripHookBlock(readFileSync(file, "utf8")).trim() === "" });
     }
   }
 
-  for (const [rel, marker] of CLIENT_MARKERS) {
+  for (const rel of CLIENT_FILES) {
     const file = join(root, rel);
     if (!existsSync(file)) continue;
     let config;
@@ -42,8 +40,8 @@ function plan({ root }) {
     }
     const list = config?.hooks?.PreToolUse;
     if (!Array.isArray(list)) continue;
-    if (list.some((entry) => (entry.hooks ?? []).some((item) => String(item.command ?? "").includes(marker)))) {
-      targets.push({ kind: "client", rel: `${rel} 的 harness 钩子`, file, marker, config });
+    if (list.some((entry) => (entry.hooks ?? []).some((item) => isHarnessClientHook(item.command)))) {
+      targets.push({ kind: "client", rel: `${rel} 的 harness 钩子`, file, config });
     }
   }
 
@@ -66,16 +64,18 @@ function applyOne(target, root) {
       rmSync(join(root, target.rel), { recursive: true, force: true });
       return;
     case "hook": {
-      const text = readFileSync(target.file, "utf8");
-      const before = text.slice(0, text.indexOf(HOOK_MARK)).replace(/\n+$/, "");
-      writeFileSync(target.file, before ? `${before}\n` : "#!/bin/sh\n");
+      // 钩子文件本身由项目维护时只摘掉 harness 块；整份都是 harness 写的才删除。
+      if (target.isEmpty) {
+        rmSync(target.file, { force: true });
+        return;
+      }
+      const before = stripHookBlock(readFileSync(target.file, "utf8")).replace(/\n+$/, "");
+      writeFileSync(target.file, `${before}\n`);
       return;
     }
     case "client": {
       const config = target.config;
-      const kept = config.hooks.PreToolUse.filter(
-        (entry) => !(entry.hooks ?? []).some((item) => String(item.command ?? "").includes(target.marker)),
-      );
+      const kept = config.hooks.PreToolUse.filter((entry) => !(entry.hooks ?? []).some((item) => isHarnessClientHook(item.command)));
       if (kept.length === 0) delete config.hooks.PreToolUse;
       else config.hooks.PreToolUse = kept;
       if (Object.keys(config.hooks).length === 0) delete config.hooks;

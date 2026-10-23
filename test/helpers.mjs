@@ -151,11 +151,11 @@ export function makeRepo({ files = {}, project = {}, install = true, trustCodex 
   if (install) {
     const published = sh(root, process.execPath, [join(PACKAGE_ROOT, "bin", "harness.mjs"), "install"], env);
     if (published.status !== 0) throw new Error(`安装失败: ${published.stderr}`);
-    // .harness/bin 由 install 生成且不入库；忽略它，避免分支提交把它带走。
-    write(root, ".gitignore", ".harness/bin/\n.harness/dsh-plugin/\n");
+    // 入口 shim 入库，Linked Worktree 检出即可用；只忽略带本机绝对路径的 DSH 插件目录。
+    write(root, ".gitignore", ".harness/dsh-plugin/\n");
     const bypass = { ...env, HARNESS_MAIN_BYPASS: "1" };
     git(root, "add", "-A", bypass);
-    git(root, "commit", "-q", "--no-verify", "-m", "chore: 忽略门禁入口\n\n- 入口由 install 生成\n- 不入库", bypass);
+    git(root, "commit", "-q", "--no-verify", "-m", "chore: 提交门禁入口\n\n- 入口由 install 生成\n- 随仓库分发", bypass);
     if (trustCodex !== false) {
       writeFileSync(
         join(codexHome, "config.toml"),

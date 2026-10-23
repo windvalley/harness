@@ -2,7 +2,7 @@ import { strict as assert } from "node:assert";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
-import { APPROVE, CONFIG, fakeCodex, fakeReviewer, git, makeRepo, sh } from "./helpers.mjs";
+import { APPROVE, commit, CONFIG, fakeCodex, fakeReviewer, git, makeRepo, sh } from "./helpers.mjs";
 import { blockingFindings, buildPrompt, extractJson, parseVerdict, resolveBackend, REVIEW_SCHEMA, strictSchema } from "../src/review/review.mjs";
 import { validateEscalation } from "../src/escalate/escalate.mjs";
 import { computeMetrics, formatMetrics } from "../src/golden/metrics.mjs";
@@ -274,6 +274,26 @@ describe("L3 判据", () => {
 });
 
 describe("评审的拆分提示", () => {
+  test("大量删除时只列删除文件的路径，不因旧内容超限", () => {
+    const repo = setup({
+      files: { "legacy/a.js": "x".repeat(120_000), "legacy/b.js": "y".repeat(120_000) },
+    });
+    git(repo.root, "checkout", "-q", "-b", "task/retire");
+    git(repo.root, "rm", "-q", "-r", "legacy");
+    commit(repo.root, "chore(legacy): 退役旧代码\n\n- 删除旧目录\n- 补充说明", { "NOTES.md": "旧代码已退役\n" });
+    git(repo.root, "checkout", "-q", "main");
+    const log = fakeReviewer(repo, APPROVE);
+    assert.equal(repo.cli("verify", "--branch", "task/retire").status, 0);
+    const review = repo.cli("review", "--branch", "task/retire");
+    assert.equal(review.status, 0, review.stderr);
+    assert.match(review.stderr, /2 个删除的文件只列路径/);
+    const prompt = readFileSync(join(repo.root, "..", "prompt.log"), "utf8");
+    assert.match(prompt, /删除 legacy\/a\.js（原 1 行）/);
+    assert.match(prompt, /NOTES\.md/);
+    assert.doesNotMatch(prompt, /xxxxxxxxxx/);
+    assert.ok(log);
+  });
+
   test("diff 过大时给出按目录的分组建议", async () => {
     const { splitSuggestion } = await import("../src/review/review.mjs");
     const repo = setup();

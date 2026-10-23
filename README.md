@@ -14,10 +14,14 @@ node ~/github/harness/bin/harness.mjs init
 
 1. 在项目里写出 `.harness/`：`config.json`、`policy.json`、`verify.json`、`golden/tasks.json`、`rules/`、`templates/`、`acceptance/`。
 2. 把当前版本代码装进 `~/.local/share/harness/versions/<版本>/`，并写入内容哈希清单。
-3. 写出入口 `.harness/bin/harness`，接入 `pre-commit`、`commit-msg`、`reference-transaction` 三个 git 钩子。
-4. 写出 `.claude/settings.json` 与 `.codex/hooks.json` 的拦截配置，生成 DSH 插件目录 `.harness/dsh-plugin/`，并在 `AGENTS.md` 写入托管块。
+3. 写出入口 `.harness/bin/harness`，接入 `pre-commit`、`commit-msg`、`reference-transaction` 三个 git 钩子。harness 的块插在钩子最前面，原有脚本（例如 husky 的 lint-staged）原样保留在后面。
+4. 写出 `.claude/settings.json` 与 `.codex/hooks.json` 的拦截配置，生成 DSH 插件目录 `.harness/dsh-plugin/`，在 `AGENTS.md` 写入托管块，并把 `.harness/dsh-plugin/` 加进 `.gitignore`。
 
-把 `.harness/bin/` 与 `.harness/dsh-plugin/` 加进 `.gitignore`，其余 `.harness/` 内容提交。接入后运行 `.harness/bin/harness doctor` 自检。
+除 `.harness/dsh-plugin/` 外全部提交，包括入口 `.harness/bin/harness`。入口只依赖 `$HOME` 与版本号，入库后每个 Linked Worktree 检出即可用，不必逐个安装。提交后运行 `.harness/bin/harness doctor` 自检。
+
+git 钩子一律调用主 Worktree 的入口，并且只在主分支上已有 `.harness/config.json` 时生效：接入前的自举提交不受影响，没有接入 harness 的仓库共用同一份钩子也不受影响。
+
+从 0.2 及以前升级的项目：重新运行 `harness install`，它会去掉 `.gitignore` 里的 `.harness/bin/`、删除旧的入口脚本、把钩子块移到最前面，然后提交 `.harness/bin/harness`。
 
 DeepSeek Harness 需要在你自己的终端注册一次插件：
 
@@ -126,7 +130,7 @@ cd <项目> && node ~/github/harness/bin/harness.mjs upgrade
 - `harness key status`：证据密钥的指纹与权限，以及本仓库有多少记录能被当前密钥校验。
 - `harness conformance`：逐项判定 L3 判据，样本不足的项标 `PEND`。
 - `harness metrics`：按周度量。
-- `harness golden`：重放黄金任务。接入时自带 14 个用例，改了规则后运行，原有判定退化会直接失败。
+- `harness golden`：重放黄金任务。接入时自带 14 个用例；默认按主分支配置，`--worktree` 按工作区配置。起始验证配置里的 `harness-golden` 检查会在任务分支的检出里用 `--worktree` 重放，改坏规则的分支在验证阶段就被拦下。
 - `harness rules`：列出解析后的规则。
 
 ## 卸载与版本

@@ -115,8 +115,11 @@ describe("安装与自检", () => {
     for (const name of ["pre-commit", "commit-msg", "reference-transaction"]) {
       assert.match(readFileSync(join(hooksDir, name), "utf8"), /# harness:hook/, name);
     }
-    assert.match(readFileSync(join(repo.root, ".claude/settings.json"), "utf8"), /claude-hook\.mjs|\.harness\/bin/);
-    assert.match(readFileSync(join(repo.root, ".codex/hooks.json"), "utf8"), /codex-hook/);
+    assert.match(readFileSync(join(repo.root, ".claude/settings.json"), "utf8"), /\.harness\/bin\/harness.*hook --client claude/);
+    assert.match(readFileSync(join(repo.root, ".codex/hooks.json"), "utf8"), /\.harness\/bin\/harness.*hook --client codex/);
+    // 入口入库，Linked Worktree 检出后直接可用；带绝对路径的 DSH 插件目录仍在忽略里。
+    assert.equal(git(repo.root, "ls-files", ".harness/bin/harness"), ".harness/bin/harness");
+    assert.match(readFileSync(join(repo.root, ".gitignore"), "utf8"), /\.harness\/dsh-plugin\//);
   });
 
   test("DSH 插件被复制到项目后仍能加载", () => {
@@ -196,7 +199,7 @@ describe("安装与自检", () => {
 
     // 只有文档的项目不生成语言检查，只保留通用项
     const empty = stack({ "README.md": "demo\n" });
-    assert.deepEqual(empty.checks.map((check) => check.id), ["lint", "manual-check", "visual-hint"]);
+    assert.deepEqual(empty.checks.map((check) => check.id), ["lint", "harness-golden", "manual-check", "visual-hint"]);
 
     for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
   });
@@ -447,6 +450,123 @@ describe("证据密钥", () => {
     const doctor = repo.cli("doctor");
     assert.notEqual(doctor.status, 0);
     assert.match(doctor.stdout, /其他用户可读/);
+  });
+});
+
+describe("多 Worktree 与已有钩子", () => {
+  // 按 settings.json 里登记的命令原样执行一次，等价于 Claude Code 调用钩子。
+  function runClaudeSetting(root, env, payload) {
+    const settings = JSON.parse(readFileSync(join(root, ".claude/settings.json"), "utf8"));
+    const command = settings.hooks.PreToolUse.at(-1).hooks[0].command;
+    return sh(root, "sh", ["-c", command], { ...env, CLAUDE_PROJECT_DIR: root }, JSON.stringify(payload));
+  }
+
+  test("新建的 Linked Worktree 不用重新安装就能拦截与校验提交", () => {
+    const repo = setup();
+    const wt = join(repo.root, "..", "wt");
+    git(repo.root, "worktree", "add", "-q", "-b", "task/wt", wt);
+    assert.ok(existsSync(join(wt, ".harness/bin/harness")), "入口应随仓库检出");
+
+    const denied = runClaudeSetting(wt, repo.env, { tool_name: "Bash", tool_input: { command: "git stash" }, cwd: wt });
+    assert.equal(denied.status, 2, denied.stderr);
+    assert.match(denied.stderr, /已拦截/);
+
+    write(wt, SECRET_FILE, "-----BEGIN PRIVATE KEY-----\n");
+    git(wt, "add", "-f", SECRET_FILE, repo.env);
+    const committed = sh(wt, "git", ["commit", "-q", "-m", BASIC], repo.env);
+    assert.notEqual(committed.status, 0, "Linked Worktree 里的提交也要经过 harness");
+    assert.match(committed.stderr, /密钥|已拦截/);
+  });
+
+  test("已有钩子提前退出时 harness 检查仍会执行", () => {
+    const repo = setup({ install: false });
+    // 模拟 husky 一类的钩子：没有前端改动就直接 exit 0。
+    write(repo.root, ".git/hooks/pre-commit", "#!/bin/sh\nexit 0\n");
+    chmodSync(join(repo.root, ".git/hooks/pre-commit"), 0o755);
+    assert.equal(repo.rawCli("install").status, 0);
+    const hook = readFileSync(join(repo.root, ".git/hooks/pre-commit"), "utf8");
+    assert.ok(hook.indexOf("# harness:hook") < hook.indexOf("exit 0"), "harness 块必须排在原有内容之前");
+
+    git(repo.root, "checkout", "-q", "-b", "task/early-exit");
+    write(repo.root, SECRET_FILE, "-----BEGIN PRIVATE KEY-----\n");
+    git(repo.root, "add", "-f", SECRET_FILE);
+    const result = sh(repo.root, "git", ["commit", "-q", "-m", BASIC], repo.env);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /密钥|已拦截/);
+  });
+
+  test("reference-transaction 原有脚本仍能读到标准输入，主分支仍受保护", () => {
+    const repo = setup({ install: false });
+    const capture = join(repo.root, "..", "ref-input.log");
+    write(repo.root, ".git/hooks/reference-transaction", `#!/bin/sh\ncat >> ${JSON.stringify(capture)}\n`);
+    chmodSync(join(repo.root, ".git/hooks/reference-transaction"), 0o755);
+    assert.equal(repo.rawCli("install").status, 0);
+
+    git(repo.root, "branch", "side");
+    assert.match(readFileSync(capture, "utf8"), /refs\/heads\/side/, "原有脚本应收到完整输入");
+
+    git(repo.root, "checkout", "-q", "side");
+    write(repo.root, "a.txt", "a\n");
+    git(repo.root, "add", "-A");
+    git(repo.root, "commit", "-q", "-m", BASIC);
+    const target = git(repo.root, "rev-parse", "side");
+    const refused = sh(repo.root, "git", ["update-ref", "refs/heads/main", target], repo.env);
+    assert.notEqual(refused.status, 0);
+    assert.match(refused.stderr, /只允许由 harness merge 更新/);
+  });
+
+  test("重复安装替换旧版追加在末尾的钩子块", () => {
+    const repo = setup();
+    const file = join(repo.root, ".git/hooks/pre-commit");
+    // 旧版本把块追加在末尾且没有结束标记。
+    writeFileSync(file, "#!/bin/sh\necho original\n# harness:hook pre-commit\nold-command || exit $?\n");
+    assert.equal(repo.cli("install").status, 0);
+    const text = readFileSync(file, "utf8");
+    assert.equal(text.split("# harness:hook pre-commit").length, 2, "只应保留一个块");
+    assert.doesNotMatch(text, /old-command/);
+    assert.match(text, /echo original/);
+  });
+
+  test("项目全局忽略 bin/ 时入口仍能入库", () => {
+    // Go 项目常见的 bin/ 忽略规则会连带忽略 .harness/bin/。
+    const repo = setup({ install: false, files: { ".gitignore": "bin/\n*.log\n" } });
+    assert.equal(repo.rawCli("install").status, 0);
+    const ignored = sh(repo.root, "git", ["check-ignore", "-q", ".harness/bin/harness"], repo.env);
+    assert.notEqual(ignored.status, 0, "入口不应再被忽略");
+    assert.equal(sh(repo.root, "git", ["check-ignore", "-q", "bin/app"], repo.env).status, 0, "项目自己的 bin/ 仍被忽略");
+    const text = readFileSync(join(repo.root, ".gitignore"), "utf8");
+    assert.match(text, /^!\.harness\/bin\/$/m);
+    // 再装一次不重复追加
+    assert.equal(repo.rawCli("install").status, 0);
+    assert.equal(readFileSync(join(repo.root, ".gitignore"), "utf8"), text);
+  });
+
+  test("没有接入 harness 的仓库共用这些钩子时不受影响", () => {
+    const repo = setup();
+    const plain = join(repo.root, "..", "plain");
+    mkdirSync(plain);
+    git(plain, "init", "-q", "-b", "main", {});
+    git(plain, "config", "user.name", "t", {});
+    git(plain, "config", "user.email", "t@e", {});
+    for (const name of ["pre-commit", "commit-msg", "reference-transaction"]) {
+      writeFileSync(join(plain, ".git/hooks", name), readFileSync(join(repo.root, ".git/hooks", name), "utf8"));
+      chmodSync(join(plain, ".git/hooks", name), 0o755);
+    }
+    write(plain, "a.txt", "a\n");
+    git(plain, "add", "-A", {});
+    const result = sh(plain, "git", ["commit", "-q", "-m", "anything"], {});
+    assert.equal(result.status, 0, result.stderr);
+  });
+
+  test("golden --worktree 按工作区里的配置重放，用于验证任务分支改过的规则", () => {
+    const repo = setup();
+    const policy = JSON.parse(readFileSync(join(repo.root, ".harness/policy.json"), "utf8"));
+    policy.disabled = [...(policy.disabled ?? []), "shell-recursive-delete"];
+    writeFileSync(join(repo.root, ".harness/policy.json"), `${JSON.stringify(policy, null, 2)}\n`);
+    assert.equal(repo.cli("golden").status, 0, "默认按主分支配置，未提交的改动不生效");
+    const worktree = repo.cli("golden", "--worktree");
+    assert.notEqual(worktree.status, 0);
+    assert.match(worktree.stdout, /FAIL g04/);
   });
 });
 

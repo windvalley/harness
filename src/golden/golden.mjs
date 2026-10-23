@@ -1,5 +1,5 @@
-import { loadTrustedProject } from "../lib/config.mjs";
-import { isLinkedWorktree } from "../lib/git.mjs";
+import { loadProject, loadTrustedProject } from "../lib/config.mjs";
+import { isLinkedWorktree, repoRoot } from "../lib/git.mjs";
 import { appendLedger } from "../lib/store.mjs";
 import { evaluateCall } from "../policy/engine.mjs";
 import { resolvePolicy } from "../policy/resolve.mjs";
@@ -59,8 +59,12 @@ function checkVerifyPlan(task, project, root) {
   return failures;
 }
 
-export function runGolden({ cwd }) {
-  const project = loadTrustedProject(cwd);
+/**
+ * 默认按主分支上的配置重放，回答“当前生效的门禁是否健康”。
+ * source=worktree 时按工作区里的配置重放，供验证检查在任务分支的检出里确认改过的规则没有退化。
+ */
+export function runGolden({ cwd, source = "main" }) {
+  const project = source === "worktree" ? loadProject(repoRoot(cwd)) : loadTrustedProject(cwd);
   const root = project.root;
   const resolved = resolvePolicy(project.policy);
   const linkedWorktree = isLinkedWorktree(root);

@@ -99,12 +99,19 @@ export function mainBranch(project) {
   return project.config.mainBranch || "main";
 }
 
+// 会改变门禁判定结果的文件：配置、规则、用例，以及执行器入口（入口版本号决定跑哪份门禁代码）。
 export const GATE_FILES = [
   ".harness/config.json",
   ".harness/policy.json",
   ".harness/verify.json",
   ".harness/golden/**",
   ".harness/rules/**",
+  ".harness/bin/**",
+  ".claude/settings.json",
+  ".codex/hooks.json",
+  ".githooks/**",
+  ".husky/**",
+  "**/.husky/**",
 ];
 
 export function gatePaths(project) {

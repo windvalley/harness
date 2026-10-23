@@ -1,7 +1,8 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { parseArgs } from "node:util";
-import { loadGuardProject, loadTrustedProject } from "./lib/config.mjs";
-import { git, repoRoot } from "./lib/git.mjs";
+import { loadGuardProject, loadTrustedProject, mainBranch } from "./lib/config.mjs";
+import { changedPaths, git, gitOk, mergeBase, repoRoot, resolveCommit } from "./lib/git.mjs";
 import { keyStatus, readLedger, rotateKey, scanRecords } from "./lib/store.mjs";
 import { resolvePolicy, ruleStats } from "./policy/resolve.mjs";
 import { evaluateCall } from "./policy/engine.mjs";
@@ -9,7 +10,7 @@ import { guard, renderDenial } from "./adapters/index.mjs";
 import { claude } from "./adapters/claude.mjs";
 import { codex } from "./adapters/codex.mjs";
 import { dsh } from "./adapters/dsh.mjs";
-import { verify } from "./verify/verify.mjs";
+import { planChecks, verify } from "./verify/verify.mjs";
 import { MergeError, mergeTask } from "./merge/merge.mjs";
 import { reviewBranch } from "./review/review.mjs";
 import { approveConfirm, confirmSummary, formatSummary } from "./confirm/confirm.mjs";
@@ -30,7 +31,7 @@ const ADAPTERS = { claude, codex, dsh };
 const USAGE = `harness <命令> [参数]
 
 工程流程
-  verify   [--head <ref>] [--base <ref>] [--branch <名称>] [--no-reuse]   对分支验证并写签名证据
+  verify   [--head <ref>] [--base <ref>] [--branch <名称>] [--no-reuse] [--plan]   对分支验证并写签名证据；--plan 只列出会执行的检查
   review   --branch <名称>                          独立评审
   status   --branch <名称>                           只读汇总：还差哪几步才能合并
   confirm  --branch <名称> [--yes]                   查看门禁改动；--yes 记录人工确认
@@ -40,7 +41,7 @@ const USAGE = `harness <命令> [参数]
   doctor                                             安装与接入自检
   conformance                                        检查 L3 判据
   metrics  [--days <n>]                              按周度量
-  golden                                             重放黄金任务
+  golden   [--worktree]                              重放黄金任务；--worktree 按工作区配置而不是主分支
   rules                                              列出解析后的拦截规则
 
 接入与维护
@@ -74,11 +75,13 @@ async function cmdVerify(argv) {
       head: { type: "string" },
       base: { type: "string" },
       branch: { type: "string" },
+      plan: { type: "boolean", default: false },
       "no-reuse": { type: "boolean", default: false },
       json: { type: "boolean", default: false },
     },
   });
   const cwd = process.cwd();
+  if (values.plan) return cmdVerifyPlan({ cwd, branch: values.branch ?? values.head ?? "HEAD", base: values.base, json: values.json });
   const head = values.branch ?? values.head ?? "HEAD";
   // 证据按“被验证的提交”索引，不按分支名（名字里可能有 /，且分支会移动）。
   const recordKey = values.branch ? git(repoRoot(cwd), ["rev-parse", "--verify", `${values.branch}^{commit}`]).stdout.trim() : undefined;
@@ -95,6 +98,36 @@ async function cmdVerify(argv) {
     process.stderr.write(`\n--- ${item.id} 失败输出(末尾) ---\n${item.tail ?? ""}\n`);
   }
   return outcome.status === "passed" ? 0 : 1;
+}
+
+/** 只算不改：列出这次会选中哪些检查、哪些记为未执行，不执行也不写证据。 */
+function cmdVerifyPlan({ cwd, branch, base, json }) {
+  const project = loadTrustedProject(cwd);
+  const root = project.root;
+  const mainRef = base ?? mainBranch(project);
+  const head = resolveCommit(root, branch);
+  const baseCommit = resolveCommit(root, mainRef);
+  const baseOfHead = mergeBase(root, baseCommit, head);
+  const changed = changedPaths(root, baseOfHead, head);
+  // 已删除的路径不能交给选择器；其余以当前工作区估算（在该分支的 Worktree 里运行时与真实验证一致）。
+  const deleted = new Set(
+    gitOk(root, ["diff", "--name-only", "--diff-filter=D", "--no-renames", baseOfHead, head]).split("\n").filter(Boolean),
+  );
+  const { plan, notExecuted, advisory, docOnly } = planChecks({
+    project,
+    cwd: root,
+    changed,
+    exists: (path) => !deleted.has(path) && existsSync(join(root, path)),
+  });
+  if (json) {
+    print(JSON.stringify({ base: mainRef, head, changed, docOnly, plan, notExecuted, advisory }, null, 2));
+    return 0;
+  }
+  print(`相对 ${mainRef} 变更 ${changed.length} 个文件${docOnly ? "（仅文档）" : ""}`);
+  for (const item of plan) print(`  RUN  ${item.id}  ${item.cmd.join(" ")}${item.cwd && item.cwd !== "." ? `  (cwd ${item.cwd})` : ""}`);
+  for (const item of notExecuted) print(`  TODO ${item.id}  ${item.reason}`);
+  for (const item of advisory) print(`  HINT ${item.id}  ${item.hint}`);
+  return 0;
 }
 
 async function cmdReview(argv) {
@@ -404,7 +437,11 @@ export async function main(argv) {
         print(`已初始化 ${result.root}`);
         for (const item of result.written) print(`  新建 ${item}`);
         print(`  版本 ${result.version} 已安装到 ${versionDir(result.version)}`);
-        print("下一步: 检查 .harness/policy.json 与 .harness/verify.json，提交后运行 harness doctor");
+        print("下一步: 检查 .harness/policy.json 与 .harness/verify.json，连同 .harness/bin/harness 一起提交，然后运行 harness doctor");
+        if (result.install.gitignore.shimIgnored) {
+          process.stderr.write("[harness] 入口仍被 .gitignore 忽略，请手工放行 .harness/bin/harness，否则 Linked Worktree 里没有入口\n");
+          return 1;
+        }
         return 0;
       }
       case "install": {
@@ -413,6 +450,11 @@ export async function main(argv) {
         for (const hook of result.hooks.hooks) print(`  git 钩子 ${hook.file}${hook.updated ? "(已接入)" : "(已存在)"}`);
         print(`  Claude PreToolUse: ${result.claude}`);
         print(`  Codex hooks: ${result.codex}`);
+        if (result.gitignore.shimIgnored) {
+          process.stderr.write(`[harness] 入口仍被 .gitignore 忽略，请手工放行 ${".harness/bin/harness"}，否则 Linked Worktree 里没有入口\n`);
+          return 1;
+        }
+        if (result.shimTracked === false) print(`  下一步: 提交 .harness/bin/harness，否则 Linked Worktree 里没有入口`);
         return 0;
       }
       case "status": {
@@ -486,7 +528,8 @@ export async function main(argv) {
         return 0;
       }
       case "golden": {
-        const { summary, results } = runGolden({ cwd: process.cwd() });
+        const { values } = parseArgs({ args: rest, options: { worktree: { type: "boolean", default: false } } });
+        const { summary, results } = runGolden({ cwd: process.cwd(), source: values.worktree ? "worktree" : "main" });
         print(`黄金任务 ${summary.passed}/${summary.total} 通过 (${(summary.passRate * 100).toFixed(0)}%)`);
         for (const item of results) {
           print(`  ${item.passed ? "PASS" : "FAIL"} ${item.id} ${item.title ?? ""}`);

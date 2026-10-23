@@ -86,8 +86,11 @@
       "kind": "policy",
       "steps": [
         { "kind": "shell", "command": "HARNESS_MERGE_TOKEN=1 git commit -m x", "expect": "deny", "rule": "harness-bypass-switches" },
+        { "kind": "shell", "command": "HARNESS_MAIN_BYPASS=1 git commit -m x", "expect": "deny", "rule": "harness-bypass-switches" },
+        { "kind": "shell", "command": "HARNESS_STORE=/tmp/x .harness/bin/harness merge --branch a", "expect": "deny", "rule": "harness-bypass-switches" },
         { "kind": "shell", "command": "git config core.hooksPath /dev/null", "expect": "deny", "rule": "harness-bypass-switches" },
         { "kind": "write", "path": ".harness/bin/harness", "content": "x", "expect": "deny", "rule": "protect-executor-entry" },
+        { "kind": "write", "path": "frontend/.husky/pre-commit", "content": "x", "expect": "deny", "rule": "protect-executor-entry" },
         { "kind": "write", "path": ".harness/policy.json", "content": "x", "expect": "allow" },
         { "kind": "shell", "command": ".harness/bin/harness key rotate --yes", "expect": "deny", "rule": "key-rotate-human-only" },
         { "kind": "shell", "command": ".harness/bin/harness key status", "expect": "allow" },
@@ -101,6 +104,7 @@
       "steps": [
         { "kind": "shell", "command": "sed -i 's/a/b/' .claude/settings.json", "expect": "deny", "rule": "protect-executor-via-shell" },
         { "kind": "shell", "command": "echo {} > .codex/hooks.json", "expect": "deny", "rule": "protect-executor-via-shell" },
+        { "kind": "shell", "command": "rm .husky/pre-commit", "expect": "deny", "rule": "protect-executor-via-shell" },
         { "kind": "shell", "command": "cat .harness/bin/harness", "expect": "allow" }
       ]
     },

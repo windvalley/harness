@@ -313,6 +313,41 @@ export function buildPrompt({ acceptance, evidence, diff, branch }) {
   ].join("\n\n");
 }
 
+/**
+ * 取评审用的 diff。
+ * 纯删除的改动（例如退役一整套旧门禁代码）不该被整段旧内容挤爆上限：
+ * 删除的文件只给出路径与行数，评审照样能判断“删对了哪些、还剩下哪些引用”。
+ */
+export function reviewDiff(root, baseCommit, branchCommit, maxChars = MAX_DIFF_CHARS) {
+  const full = gitOk(root, ["diff", "--no-color", "-U8", baseCommit, branchCommit]);
+  if (full.length <= maxChars) return { text: full, collapsed: [] };
+
+  const deleted = gitOk(root, ["diff", "--name-status", "--diff-filter=D", "--no-renames", baseCommit, branchCommit])
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => line.split("\t").at(-1));
+  if (deleted.length === 0) return { text: full, collapsed: [] };
+
+  const stats = new Map(
+    gitOk(root, ["diff", "--numstat", "--no-renames", baseCommit, branchCommit])
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => {
+        const [added, removed, path] = line.split("\t");
+        return [path, { added: Number(added) || 0, removed: Number(removed) || 0 }];
+      }),
+  );
+  const withoutDeletes = gitOk(root, ["diff", "--no-color", "-U8", baseCommit, branchCommit, "--", ...deleted.map((path) => `:(exclude)${path}`)]);
+  const summary = deleted.map((path) => {
+    const stat = stats.get(path) ?? { added: 0, removed: 0 };
+    return `- 删除 ${path}（原 ${stat.removed} 行）`;
+  });
+  return {
+    text: [`## 已删除的文件（只列路径，不展开原内容）`, ...summary, "", withoutDeletes].join("\n"),
+    collapsed: deleted,
+  };
+}
+
 export async function reviewBranch({ cwd, branch, log = console.error, reviewer = runReviewer }) {
   const project = loadTrustedProject(cwd);
   const root = project.root;
@@ -321,7 +356,7 @@ export async function reviewBranch({ cwd, branch, log = console.error, reviewer 
 
   const branchCommit = gitOk(root, ["rev-parse", "--verify", `${branch}^{commit}`]);
   const baseCommit = gitOk(root, ["merge-base", mainRef, branchCommit]);
-  const diffText = gitOk(root, ["diff", "--no-color", "-U8", baseCommit, branchCommit]);
+  const { text: diffText, collapsed } = reviewDiff(root, baseCommit, branchCommit);
   if (diffText.length > MAX_DIFF_CHARS) {
     // 不静默截断，也不只说“请拆小”：直接按目录给出可执行的分组建议。
     throw new Error(
@@ -345,8 +380,9 @@ export async function reviewBranch({ cwd, branch, log = console.error, reviewer 
   ].join("\n");
 
   log(
-    `[review] 评审 ${branch}，diff ${diffText.length} 字符，` +
-      (acceptance ? `验收清单来自${acceptance.source === "main" ? "主分支" : "任务分支(未确认)"}` : "无验收清单"),
+    `[review] 评审 ${branch}，diff ${diffText.length} 字符` +
+      (collapsed.length ? `（${collapsed.length} 个删除的文件只列路径）` : "") +
+      `，${acceptance ? `验收清单来自${acceptance.source === "main" ? "主分支" : "任务分支(未确认)"}` : "无验收清单"}`,
   );
   const prompt = buildPrompt({ acceptance, evidence: evidenceText, diff: diffText, branch });
   const { structured, costUsd, backend } = reviewer({ cwd: root, prompt, config });
@@ -372,6 +408,8 @@ export async function reviewBranch({ cwd, branch, log = console.error, reviewer 
     acceptanceSource: acceptance?.source ?? null,
     hadAcceptance: Boolean(acceptance),
     backend: backend ?? null,
+    // 记录哪些删除的文件只给了路径，事后能看出这次评审没有读到这些文件的原内容。
+    collapsedDeletions: collapsed.length ? collapsed : undefined,
     costUsd,
     reviewedAt: new Date().toISOString(),
   });

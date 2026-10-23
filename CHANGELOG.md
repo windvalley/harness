@@ -2,6 +2,31 @@
 
 按 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 组织，版本号遵循语义化版本。
 
+## [0.3.0] - 2026-10-23
+
+在多 Worktree 项目（opsagent）上演练迁移时发现的问题，涉及钩子接入方式，已接入的项目需要重新运行 `harness install` 并提交入口。
+
+### 变更
+
+- 入口 `.harness/bin/harness` 改为入库。原先它被忽略，新建的 Linked Worktree 里没有入口：Claude 钩子报错但不阻断，等于实时拦截静默失效。
+- Claude 与 Codex 的钩子命令直接调用入口（`hook --client`），不再生成带本机绝对路径的 `claude-hook.mjs`、`codex-hook.mjs`。
+- git 钩子块插到原有脚本之前，并带结束标记。原先追加在末尾，遇到 husky 这类“没有前端改动就 exit 0”的 `pre-commit` 时永远执行不到；`reference-transaction` 里原有脚本读完标准输入后，追加的块也拿不到输入。
+- git 钩子调用主 Worktree 的入口，只在主分支已有 `.harness/config.json` 时生效；没有接入 harness 的仓库共用同一份钩子时不受影响。
+- `install` 自动维护 `.gitignore`：加入 `.harness/dsh-plugin/`，去掉旧版要求的 `.harness/bin/`；项目用全局 `bin/` 规则时自动放行 `.harness/bin/`，并在仍被忽略时直接报错。
+
+### 新增
+
+- `harness golden --worktree` 按工作区配置重放；起始验证配置新增 `harness-golden` 检查，改坏规则的分支在验证阶段就被拦下。
+- `harness verify --plan` 只列出会执行的检查、未执行项与提示，不执行也不写证据，替代原项目里的 `verify.plan` 目标。
+- `doctor` 检查入口是否入库。
+- 评审遇到整目录退役这类大量删除时，删除的文件只列路径与行数，不再因为旧内容撑爆 diff 上限而拒绝评审；评审记录里注明哪些删除只看了路径。
+
+### 修复
+
+- `gate-self` 补上 `HARNESS_MAIN_BYPASS`、`HARNESS_STORE`、`HARNESS_VERSION`：后两个能把入口指向别处的代码，等于整体绕过门禁。
+- `gate-self` 的执行器入口保护补上 `.husky/**` 与子目录里的 `.husky/`。
+- 门禁文件范围加入执行器入口：入口版本号、客户端钩子配置与钩子目录的改动在合并前同样需要人工确认。
+
 ## [0.2.0] - 2026-10-22
 
 ### 新增

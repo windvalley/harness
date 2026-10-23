@@ -146,11 +146,15 @@ export function shimPath(root) {
   return join(root, ".harness", "bin", "harness");
 }
 
+/**
+ * 入口 shim 只依赖 $HOME 与固定版本号，因此可以入库：
+ * 每个 Linked Worktree 检出后立刻可用，不用在每棵树里各跑一次 install。
+ */
 export function writeShim({ root, version = packageVersion() }) {
   const file = shimPath(root);
   mkdirSync(join(file, ".."), { recursive: true });
   const body = `#!/bin/sh
-# harness 入口 shim，由 harness install 生成，请勿手工修改。
+# harness 入口 shim，由 harness install 生成，入库随仓库分发，请勿手工修改。
 # 代码在用户目录按版本安装；这里只负责转发，并锁住版本，避免任务分支改代码影响门禁。
 HARNESS_VERSION="\${HARNESS_VERSION:-${version}}"
 HARNESS_STORE="\${HARNESS_STORE:-$HOME/.local/share/harness/versions}"
@@ -168,6 +172,7 @@ exec node "$entry" "$@"
 }
 
 const HOOK_MARK = "# harness:hook";
+const HOOK_END = "# harness:hook-end";
 
 function gitHooksDir(root) {
   const hooksPath = git(root, ["config", "--get", "core.hooksPath"]).stdout.trim();
@@ -175,106 +180,127 @@ function gitHooksDir(root) {
   return join(commonDir(root), "hooks");
 }
 
-function appendHookBlock({ file, block, legacy }) {
-  mkdirSync(join(file, ".."), { recursive: true });
-  const existing = existsSync(file) ? readFileSync(file, "utf8") : "#!/bin/sh\n";
-  if (existing.includes(HOOK_MARK)) return { file, updated: false };
-  const suffix = existsSync(file) && existing.trim().length > 0 ? "\n" : "";
-  writeFileSync(file, `${existing.replace(/\n+$/, "")}${suffix}${block}\n`);
-  chmodSync(file, 0o755);
-  return { file, updated: true };
+/**
+ * 去掉文件里已有的 harness 块。
+ * 旧版本把块追加在末尾且不带结束标记，这种块从标记一直延伸到文件结尾，按到结尾清掉，
+ * 否则重复安装会在同一个钩子里留下两个块。
+ */
+export function stripHookBlock(text) {
+  let next = text;
+  for (;;) {
+    const start = next.search(/^# harness:hook(?!-end)/m);
+    if (start < 0) return next;
+    const end = next.indexOf(HOOK_END, start);
+    if (end < 0) return next.slice(0, start);
+    const lineEnd = next.indexOf("\n", end);
+    next = next.slice(0, start) + (lineEnd < 0 ? "" : next.slice(lineEnd + 1));
+  }
 }
+
+/**
+ * 把 harness 块插到最前面（shebang 之后）。
+ * 追加在末尾会失效：已有的 pre-commit 常见写法是“没有相关改动就 exit 0”，
+ * reference-transaction 则会先把标准输入读完，追加的块既拿不到输入也可能永远不执行。
+ */
+export function insertHookBlock({ file, block }) {
+  mkdirSync(join(file, ".."), { recursive: true });
+  const existing = existsSync(file) ? readFileSync(file, "utf8") : "";
+  const body = stripHookBlock(existing).replace(/\n+$/, "");
+  const lines = body ? body.split("\n") : [];
+  const hasShebang = lines.length > 0 && lines[0].startsWith("#!");
+  const head = hasShebang ? [lines[0]] : ["#!/bin/sh"];
+  const rest = hasShebang ? lines.slice(1) : lines;
+  const next = `${[...head, block.trimEnd(), ...rest].join("\n")}\n`;
+  writeFileSync(file, next);
+  chmodSync(file, 0o755);
+  return { file, updated: existing !== next };
+}
+
+/**
+ * 钩子里定位入口的公共函数，只定义不执行，放在每次引用更新都会跑的钩子里也没有开销。
+ * 用主 Worktree 的入口：门禁代码与配置的信任根在主分支，任务分支不能决定自己是否放行。
+ * main 上没有 .harness/config.json 说明这个仓库还没接入（例如接入前的自举阶段），直接放行。
+ */
+const HOOK_FUNCTIONS = `harness_entry() {
+  printf '%s/.harness/bin/harness' "$(git worktree list --porcelain | sed -n 's/^worktree //p' | sed -n '1p')"
+}
+harness_enabled() {
+  git cat-file -e refs/heads/main:.harness/config.json 2>/dev/null ||
+    git cat-file -e refs/heads/master:.harness/config.json 2>/dev/null
+}`;
 
 /** 把 harness 接进 git 钩子：pre-commit、commit-msg、reference-transaction。 */
 export function writeGitHooks({ root }) {
   const dir = gitHooksDir(root);
-  const shim = relative(dir, shimPath(root)).split("\\").join("/");
-  // 用绝对路径调用：钩子在各种 cwd 下运行，相对路径不可靠。
-  const runShim = `"$(cd "$(git rev-parse --show-toplevel)" && pwd)/.harness/bin/harness"`;
   const results = [];
 
-  results.push(
-    appendHookBlock({
-      file: join(dir, "pre-commit"),
-      block: `${HOOK_MARK} pre-commit
-${runShim} githook pre-commit "$@" || exit $?`,
-    }),
-  );
+  for (const name of ["pre-commit", "commit-msg"]) {
+    results.push(
+      insertHookBlock({
+        file: join(dir, name),
+        // 提交前检查只是提前提示，入口缺失时提示后放行；真正的约束在合并与引用保护。
+        block: `${HOOK_MARK} ${name}
+${HOOK_FUNCTIONS}
+if harness_enabled; then
+  harness_bin="$(harness_entry)"
+  if [ -x "$harness_bin" ]; then
+    "$harness_bin" githook ${name} "$@" || exit $?
+  else
+    printf '[harness] 主 Worktree 缺少 %s，跳过 ${name} 检查；在主 Worktree 运行 harness install 补齐\\n' "$harness_bin" >&2
+  fi
+fi
+${HOOK_END}`,
+      }),
+    );
+  }
 
+  // 标准输入只能读一次：harness 先读走，判定后用 here-doc 原样交还给钩子里原有的脚本。
   results.push(
-    appendHookBlock({
-      file: join(dir, "commit-msg"),
-      block: `${HOOK_MARK} commit-msg
-${runShim} githook commit-msg "$@" || exit $?`,
-    }),
-  );
-
-  results.push(
-    appendHookBlock({
+    insertHookBlock({
       file: join(dir, "reference-transaction"),
       block: `${HOOK_MARK} reference-transaction
-[ "$1" = "prepared" ] || exit 0
-[ "\${HARNESS_MAIN_BYPASS:-}" = "1" ] && exit 0
-input="$(cat)"
-case "$input" in
-  *" refs/heads/main"* | *" refs/heads/master"*) ;;
-  *) exit 0 ;;
-esac
-printf '%s\\n' "$input" | ${runShim} githook reference-transaction "$1"`,
+${HOOK_FUNCTIONS}
+harness_input="$(cat)"
+if [ "$1" = "prepared" ] && [ "\${HARNESS_MAIN_BYPASS:-}" != "1" ] && harness_enabled; then
+  case "$harness_input" in
+    *" refs/heads/main"* | *" refs/heads/master"*)
+      harness_bin="$(harness_entry)"
+      if [ ! -x "$harness_bin" ]; then
+        printf '[harness] 拒绝更新主分支: 主 Worktree 缺少 %s，在主 Worktree 运行 harness install 后重试\\n' "$harness_bin" >&2
+        exit 1
+      fi
+      printf '%s\\n' "$harness_input" | "$harness_bin" githook reference-transaction "$1" || exit $?
+      ;;
+  esac
+fi
+exec 0<<HARNESS_HOOK_INPUT
+$harness_input
+HARNESS_HOOK_INPUT
+${HOOK_END}`,
     }),
   );
 
-  return { dir, hooks: results, shim };
+  return { dir, hooks: results };
 }
 
-function versionImport(version, rel) {
-  return `${versionDir(version)}/src/${rel}`;
+/** 判断一条客户端钩子命令是不是 harness 的；也认旧版生成的入口脚本，升级时一并替换。 */
+export function isHarnessClientHook(command) {
+  const text = String(command ?? "");
+  return /\.harness\/bin\/harness"?\s+hook\s+--client\b/.test(text) || /(claude|codex)-hook\.mjs/.test(text);
 }
 
-/**
- * 写出 Claude 与 Codex 的钩子入口脚本。
- * 脚本本身在项目里（客户端按项目路径调用），实际判定逻辑从版本目录导入，
- * 保证跑的是已安装并校验过的那份代码，任务分支改不动它。
- */
-export function writeHookEntries({ root, version }) {
-  const dir = join(root, ".harness", "bin");
-  mkdirSync(dir, { recursive: true });
-  const specs = {
-    "claude-hook.mjs": [
-      ["../adapters/claude.mjs", "adapters/claude.mjs"],
-      ["../adapters/index.mjs", "adapters/index.mjs"],
-    ],
-    "codex-hook.mjs": [
-      ["../adapters/codex.mjs", "adapters/codex.mjs"],
-      ["../adapters/index.mjs", "adapters/index.mjs"],
-    ],
-  };
-  const written = [];
-  for (const [name, replacements] of Object.entries(specs)) {
-    let source = readFileSync(join(PACKAGE_ROOT, "assets", "hooks", name), "utf8");
-    for (const [from, to] of replacements) {
-      source = source.split(from).join(versionImport(version, to));
-    }
-    const target = join(dir, name);
-    writeFileSync(target, source);
-    chmodSync(target, 0o755);
-    written.push(target);
-  }
-  return written;
-}
+const CLAUDE_HOOK_COMMAND = '"$CLAUDE_PROJECT_DIR/.harness/bin/harness" hook --client claude';
+const CODEX_HOOK_COMMAND = '"$(git rev-parse --show-toplevel)/.harness/bin/harness" hook --client codex';
 
 /** Claude Code 的 PreToolUse 钩子配置；保留文件里其他设置。 */
 export function writeClaudeSettings({ root }) {
   const file = join(root, ".claude", "settings.json");
   mkdirSync(join(file, ".."), { recursive: true });
   const current = existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : {};
-  const hook = {
-    type: "command",
-    command: 'node "$CLAUDE_PROJECT_DIR/.harness/bin/claude-hook.mjs"',
-  };
+  const hook = { type: "command", command: CLAUDE_HOOK_COMMAND };
   const matcher = "Bash|Write|Edit|MultiEdit|NotebookEdit|Read|Grep";
   const pre = current.hooks?.PreToolUse ?? [];
-  const kept = pre.filter((entry) => !(entry.hooks ?? []).some((item) => String(item.command ?? "").includes("claude-hook.mjs")));
+  const kept = pre.filter((entry) => !(entry.hooks ?? []).some((item) => isHarnessClientHook(item.command)));
   current.hooks = { ...(current.hooks ?? {}), PreToolUse: [...kept, { matcher, hooks: [hook] }] };
   writeFileSync(file, `${JSON.stringify(current, null, 2)}\n`);
   return file;
@@ -286,21 +312,40 @@ export function writeCodexHooks({ root }) {
   mkdirSync(join(file, ".."), { recursive: true });
   const config = {
     hooks: {
-      PreToolUse: [
-        {
-          matcher: "*",
-          hooks: [
-            {
-              type: "command",
-              command: 'node "$(git rev-parse --show-toplevel)/.harness/bin/codex-hook.mjs"',
-            },
-          ],
-        },
-      ],
+      PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command: CODEX_HOOK_COMMAND }] }],
     },
   };
   writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`);
   return file;
+}
+
+function versionImport(version, rel) {
+  return `${versionDir(version)}/src/${rel}`;
+}
+
+const SHIM_REL = ".harness/bin/harness";
+
+/**
+ * 维护 .gitignore。
+ * 入口 shim 必须入库：Go 项目常有全局的 `bin/` 忽略规则，会连带忽略 `.harness/bin/`，
+ * 那样 Linked Worktree 里没有入口，客户端拦截与 git 钩子都会静默失效。
+ */
+export function ensureGitignore({ root }) {
+  const file = join(root, ".gitignore");
+  const original = existsSync(file) ? readFileSync(file, "utf8") : "";
+  // 0.2 及以前要求忽略 .harness/bin/，现在入口要入库，把这一行去掉。
+  const lines = original.split("\n").filter((line) => line.trim() !== ".harness/bin/");
+  while (lines.length > 0 && lines.at(-1) === "") lines.pop();
+  const ensure = (line) => {
+    if (!lines.some((item) => item.trim() === line)) lines.push(line);
+    writeFileSync(file, `${lines.join("\n")}\n`);
+  };
+  ensure(".harness/dsh-plugin/");
+  // 父目录被排除时单独放行文件无效，先放行目录本身，仍被忽略再放行文件。
+  const ignored = () => git(root, ["check-ignore", "--quiet", "--no-index", SHIM_REL]).status === 0;
+  if (ignored()) ensure("!.harness/bin/");
+  if (ignored()) ensure(`!${SHIM_REL}`);
+  return { file, shimIgnored: ignored() };
 }
 
 /** DSH 插件目录：Cordis 包，由用户在自己的终端注册到 profile。 */
@@ -342,11 +387,14 @@ export function installAll({ cwd }) {
   const published = publishVersion();
   writeRules({ root, version: published.version });
   writeGolden({ root });
-  const entries = writeHookEntries({ root, version: published.version });
+  // 旧版生成过带本机绝对路径的入口脚本，入口改为 shim 后不再需要。
+  for (const name of ["claude-hook.mjs", "codex-hook.mjs"]) rmSync(join(root, ".harness", "bin", name), { force: true });
   const shim = writeShim({ root });
   const hooks = writeGitHooks({ root });
   const claude = writeClaudeSettings({ root });
   const codex = writeCodexHooks({ root });
   const dsh = writeDshPlugin({ root });
-  return { root, published, shim, entries, hooks, claude, codex, dsh };
+  const gitignore = ensureGitignore({ root });
+  const shimTracked = git(root, ["ls-files", "--error-unmatch", SHIM_REL]).status === 0;
+  return { root, published, shim, hooks, claude, codex, dsh, gitignore, shimTracked };
 }

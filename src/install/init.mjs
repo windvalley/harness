@@ -95,6 +95,8 @@ export function starterVerify({ cwd = process.cwd() } = {}) {
     when: ["**/*.js", "**/*.ts", "**/*.tsx", "**/*.go", "**/*.py", "**/*.rs", "**/*.java", "src/**", "lib/**", "app/**"],
     cmd: ["true"],
   });
+  // 改了规则或用例的分支，在它自己的检出里按它自己的配置重放黄金任务，退化当场暴露。
+  checks.push({ id: "harness-golden", tier: "gate", when: [".harness/**"], cmd: [".harness/bin/harness", "golden", "--worktree"] });
   // 两个示例档位，接入后按项目实际替换：extended 记未执行并给补验方式，advisory 只提示。
   checks.push({ id: "manual-check", tier: "extended", when: ["src/**"], reason: "需要人工确认的检查，示例项", howToVerify: "按项目实际情况填写补验命令" });
   checks.push({ id: "visual-hint", tier: "advisory", when: ["src/**"], hint: "界面类改动建议人工过一眼，示例项" });

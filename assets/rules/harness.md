@@ -29,7 +29,13 @@
 ## 门禁改动
 
 `.harness/config.json`、`policy.json`、`verify.json`、`rules/**` 允许直接修改，改动会被记录并在合并前要求人工确认（`harness confirm --branch <分支>`）。
-`.harness/bin/**` 与 `.harness/hooks/**` 是执行器入口，只能由 `harness install` 重新生成。
+`.harness/bin/**` 是执行器入口，只由 `harness install` 生成；它决定跑哪一份门禁代码，因此改动同样在合并前要求确认，不要手改。
+
+`.husky/**`、`.githooks/**`、`.claude/settings.json`、`.codex/hooks.json` 是客户端与 git 钩子的入口，Agent 不能改写；需要重装时由用户运行 `harness install`。
+
+## 多个 Worktree
+
+入口 `.harness/bin/harness` 随仓库提交，Linked Worktree 检出后即可用。git 钩子调用主 Worktree 的入口，任务分支改不了门禁代码自己的行为。
 
 ## 例外上报
 

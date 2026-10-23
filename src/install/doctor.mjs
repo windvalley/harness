@@ -7,7 +7,7 @@ import { keyStatus } from "../lib/store.mjs";
 import { commandExists, resolveBackend } from "../review/review.mjs";
 import { resolvePolicy } from "../policy/resolve.mjs";
 import { packageVersion, MARK_START } from "./managed.mjs";
-import { shimPath, verifyVersion, versionDir } from "./install.mjs";
+import { isHarnessClientHook, shimPath, verifyVersion, versionDir } from "./install.mjs";
 
 // 读取 Codex 用户配置里是否已有本项目钩子的 trusted_hash 记录。
 // 路径要按真实路径比较：git 常返回 /private/var/...，用户配置里可能写成 /var/...，两者是同一目录。
@@ -43,6 +43,16 @@ function hookInstalled(file) {
   return existsSync(file) && readFileSync(file, "utf8").includes("# harness:hook");
 }
 
+function clientHookInstalled(file) {
+  if (!existsSync(file)) return false;
+  try {
+    const list = JSON.parse(readFileSync(file, "utf8"))?.hooks?.PreToolUse ?? [];
+    return list.some((entry) => (entry.hooks ?? []).some((item) => isHarnessClientHook(item.command)));
+  } catch {
+    return false;
+  }
+}
+
 /**
  * 逐客户端检查安装状态。
  * codex 的钩子是否需要宿主信任，由宿主自己决定；这里只报“文件已就位、执行未验证”，
@@ -75,7 +85,17 @@ export function doctor({ cwd = process.cwd() } = {}) {
   });
 
   const shim = shimPath(root);
-  checks.push({ id: "shim", ok: existsSync(shim), detail: existsSync(shim) ? shim : "缺少 .harness/bin/harness" });
+  // 入口要入库，否则 Linked Worktree 检出后没有入口，客户端钩子与 git 钩子都失效。
+  const shimTracked = existsSync(shim) && git(root, ["ls-files", "--error-unmatch", ".harness/bin/harness"]).status === 0;
+  checks.push({
+    id: "shim",
+    ok: existsSync(shim) && shimTracked,
+    detail: !existsSync(shim)
+      ? "缺少 .harness/bin/harness，运行 harness install"
+      : shimTracked
+        ? `${shim}（已入库，Linked Worktree 直接可用）`
+        : `${shim} 未入库：Linked Worktree 里没有入口，钩子和实时拦截都会失效，提交它`,
+  });
 
   const hooksDir = gitHooksDir(root);
   for (const name of ["pre-commit", "commit-msg", "reference-transaction"]) {
@@ -83,8 +103,7 @@ export function doctor({ cwd = process.cwd() } = {}) {
     checks.push({ id: `git:${name}`, ok: hookInstalled(file), detail: hookInstalled(file) ? file : `${file} 未接入或未生效` });
   }
 
-  const claude = join(root, ".claude", "settings.json");
-  const claudeOk = existsSync(claude) && readFileSync(claude, "utf8").includes("claude-hook.mjs");
+  const claudeOk = clientHookInstalled(join(root, ".claude", "settings.json"));
   checks.push({
     id: "client:claude",
     ok: claudeOk,
@@ -92,7 +111,7 @@ export function doctor({ cwd = process.cwd() } = {}) {
   });
 
   const codex = join(root, ".codex", "hooks.json");
-  const codexOk = existsSync(codex) && readFileSync(codex, "utf8").includes("codex-hook.mjs");
+  const codexOk = clientHookInstalled(codex);
   // Codex 要求钩子先被信任一次；信任记录写在工作目录的 config.toml 的 [hooks.state] 下。
   const codexTrusted = codexTrustState(root);
   checks.push({
@@ -106,15 +125,16 @@ export function doctor({ cwd = process.cwd() } = {}) {
         : "钩子已接入但尚未信任：在 Codex 里运行 /hooks 批准一次，否则命令不会经过门禁",
   });
 
+  // DSH 插件目录带本机绝对路径且不入库，只在跑过 install 的 Worktree 里存在；不装 DSH 的项目也不必生成，因此不算失败。
   const dsh = join(root, ".harness", "dsh-plugin");
   const dshOk = existsSync(join(dsh, "index.mjs"));
   checks.push({
     id: "client:dsh",
-    ok: dshOk,
-    verified: false,
+    ok: true,
+    verified: dshOk,
     detail: dshOk
       ? `插件目录已生成: ${dsh}；需在 DSH 中注册: dsh plugin --profile <名称> add ${dsh}`
-      : "未生成 DSH 插件目录",
+      : "未生成 DSH 插件目录；需要用 DeepSeek Harness 时在本 Worktree 运行 harness install",
   });
 
   const configOk = existsSync(join(root, ".harness", "config.json"));

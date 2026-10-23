@@ -11,7 +11,9 @@
         ".claude/settings.json",
         ".claude/settings.local.json",
         ".codex/hooks.json",
-        ".githooks/**"
+        ".githooks/**",
+        ".husky/**",
+        "**/.husky/**"
       ],
       "allow": [],
       "reason": "门禁的执行器入口不由 Agent 修改，否则可以关掉拦截而不留下改动记录",
@@ -23,9 +25,9 @@
       "kind": "shell-forbid",
       "scope": "whole",
       "patterns": [
-        "\\b(sed|perl|awk|tee|cp|mv|rm|truncate|install|ln|chmod|dd)\\b[^|;&]*(\\.harness/(bin|hooks)/|\\.claude/settings|\\.codex/hooks\\.json|\\.githooks/)",
-        ">>?\\s*\\S*(\\.harness/(bin|hooks)/|\\.claude/settings|\\.codex/hooks\\.json|\\.githooks/)",
-        "\\b(node|python3?|ruby|bash|sh)\\b\\s+(-e|-c|-p)\\b[^|;&]*(\\.harness/(bin|hooks)/|\\.claude/settings|\\.codex/hooks\\.json|\\.githooks/)"
+        "\\b(sed|perl|awk|tee|cp|mv|rm|truncate|install|ln|chmod|dd)\\b[^|;&]*(\\.harness/(bin|hooks)/|\\.claude/settings|\\.codex/hooks\\.json|\\.githooks/|\\.husky/)",
+        ">>?\\s*\\S*(\\.harness/(bin|hooks)/|\\.claude/settings|\\.codex/hooks\\.json|\\.githooks/|\\.husky/)",
+        "\\b(node|python3?|ruby|bash|sh)\\b\\s+(-e|-c|-p)\\b[^|;&]*(\\.harness/(bin|hooks)/|\\.claude/settings|\\.codex/hooks\\.json|\\.githooks/|\\.husky/)"
       ],
       "reason": "不能用命令行改写门禁的执行器入口",
       "fix": "需要重装入口时由用户执行 harness install"
@@ -39,6 +41,9 @@
         "HARNESS_DATA_DIR",
         "HARNESS_KEY_DIR",
         "HARNESS_REVIEWER_BIN",
+        "HARNESS_MAIN_BYPASS",
+        "HARNESS_STORE",
+        "HARNESS_VERSION",
         "\\bgit\\s+config\\b.*\\b(harness\\.guardMain|core\\.hooksPath)\\b",
         "\\bgit\\b.*\\s-c\\s+(harness\\.guardMain|core\\.hooksPath)="
       ],
