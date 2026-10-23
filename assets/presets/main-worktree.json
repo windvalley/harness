@@ -1,0 +1,34 @@
+{
+  "id": "main-worktree",
+  "description": "主 Worktree 只用来合并与运行固定环境：任务改动、切分支与提交都放在独立的 Linked Worktree 里。多个 Agent 或会话并行的项目建议启用",
+  "rules": [
+    {
+      "id": "main-worktree-edit",
+      "kind": "write-protect",
+      "when": "main-worktree",
+      "layer": "agent",
+      "paths": ["**"],
+      "allowIgnored": true,
+      "reason": "主 Worktree 只用来合并与运行固定环境，在这里改文件会让所有任务的 harness merge 因主 Worktree 不洁净而失败",
+      "fix": "在独立的 Linked Worktree 里修改：git worktree add -b <任务分支> <路径> <主分支>，之后在那个目录里工作；被 .gitignore 忽略的本机文件不受这条限制"
+    },
+    {
+      "id": "main-worktree-leave-main",
+      "kind": "shell-forbid",
+      "when": "main-worktree",
+      "patterns": [
+        "\\bgit\\s+switch\\b(?!(?:\\s+-(?:q|-quiet))*\\s+(?:main|master)\\s*$)",
+        "\\bgit\\s+checkout\\b(?!(?:\\s+-(?:q|-quiet))*\\s+(?:main|master)\\s*$)"
+      ],
+      "reason": "主 Worktree 必须停在主分支，切走后所有任务的 harness merge 都会被挡住",
+      "fix": "新任务用 git worktree add -b <任务分支> <路径> <主分支> 建独立的 Linked Worktree；在已有的 Linked Worktree 里切分支，用 cd <那个目录> && git switch <分支>"
+    },
+    {
+      "id": "main-worktree-commit",
+      "kind": "commit-forbid",
+      "when": "main-worktree",
+      "reason": "主 Worktree 只用来合并，提交应在独立的 Linked Worktree 里完成",
+      "fix": "git worktree add -b <任务分支> <路径> <主分支>，在那里提交；确需由人在主 Worktree 手工提交的项目，在 .harness/policy.json 的 disabled 里关掉 main-worktree-commit"
+    }
+  ]
+}

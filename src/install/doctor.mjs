@@ -2,8 +2,9 @@ import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { loadCurrentProject, mainBranch } from "../lib/config.mjs";
-import { git, repoRoot } from "../lib/git.mjs";
+import { git, mainWorktreeRoot, repoRoot } from "../lib/git.mjs";
 import { keyStatus } from "../lib/store.mjs";
+import { mainWorktreeProblems } from "../merge/merge.mjs";
 import { commandExists, resolveBackend } from "../review/review.mjs";
 import { resolvePolicy } from "../policy/resolve.mjs";
 import { packageVersion, MARK_START } from "./managed.mjs";
@@ -155,6 +156,16 @@ export function doctor({ cwd = process.cwd() } = {}) {
       detail: project.bootstrap
         ? `首次接入阶段：${mainBranch(project)} 上还没有配置，按当前工作区的配置自检；合入后以主分支为准`
         : `配置取自主分支 ${mainBranch(project)}`,
+    });
+    const mainRoot = mainWorktreeRoot(root);
+    const mainProblems = mainWorktreeProblems(project, mainRoot);
+    checks.push({
+      id: "main-worktree",
+      ok: mainProblems.length === 0,
+      detail:
+        mainProblems.length === 0
+          ? `${mainRoot} 停在 ${mainBranch(project)} 且洁净，可以接收合并`
+          : `${mainProblems.join("；")}。主 Worktree 未就绪时所有任务的 harness merge 都会被拒绝`,
     });
     if (project.config.merge?.requireReview !== false) {
       try {

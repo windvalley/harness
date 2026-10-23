@@ -50,18 +50,27 @@ function acquireLock(root) {
   return () => rmSync(file, { force: true });
 }
 
-function ensureMainReady(project, mainRoot) {
+/**
+ * 主 Worktree 能否接收合并：必须停在主分支、洁净、没有进行中的 git 操作。
+ * 合并在这里拒绝；status 与 doctor 提前列出同样的问题，不必等到合并时才发现。
+ */
+export function mainWorktreeProblems(project, mainRoot) {
   const branch = mainBranch(project);
+  const problems = [];
   const current = git(mainRoot, ["symbolic-ref", "--quiet", "--short", "HEAD"]).stdout.trim();
-  if (current !== branch) throw new MergeError(`主 Worktree 当前不在 ${branch} 分支(实际 ${current || "detached"})`);
-  if (!isClean(mainRoot)) {
-    throw new MergeError(`主 Worktree 存在未提交或未跟踪文件，先处理后重试:\n${statusShort(mainRoot)}`);
-  }
+  if (current !== branch) problems.push(`主 Worktree 当前不在 ${branch} 分支(实际 ${current || "detached"})`);
+  if (!isClean(mainRoot)) problems.push(`主 Worktree 存在未提交或未跟踪文件，先处理后重试:\n${statusShort(mainRoot)}`);
   for (const marker of ["MERGE_HEAD", "REBASE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "BISECT_LOG"]) {
     const probe = git(mainRoot, ["rev-parse", "--git-path", marker]).stdout.trim();
     const abs = probe.startsWith("/") ? probe : join(mainRoot, probe);
-    if (existsSync(abs)) throw new MergeError(`主 Worktree 存在进行中的 ${marker.replace("_HEAD", "").toLowerCase()} 操作`);
+    if (existsSync(abs)) problems.push(`主 Worktree 存在进行中的 ${marker.replace("_HEAD", "").toLowerCase()} 操作`);
   }
+  return problems;
+}
+
+function ensureMainReady(project, mainRoot) {
+  const [first] = mainWorktreeProblems(project, mainRoot);
+  if (first) throw new MergeError(first);
 }
 
 function checkCommitMessages(project, root, baseCommit, branchCommit) {

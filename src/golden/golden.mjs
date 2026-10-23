@@ -1,11 +1,15 @@
 import { loadCurrentProject, loadProject } from "../lib/config.mjs";
-import { isLinkedWorktree, repoRoot } from "../lib/git.mjs";
+import { repoRoot } from "../lib/git.mjs";
 import { appendLedger } from "../lib/store.mjs";
 import { evaluateCall } from "../policy/engine.mjs";
 import { resolvePolicy } from "../policy/resolve.mjs";
 import { planChecks } from "../verify/verify.mjs";
 
-function checkPolicy(task, resolved, root, linkedWorktree) {
+// 步骤未声明位置时按 Agent 日常工作的位置判定：Linked Worktree、不在主分支。
+// 结果因此与 harness golden 在哪个 Worktree 里运行无关。
+const DEFAULT_CONTEXT = { linkedWorktree: true, onMainBranch: false };
+
+function checkPolicy(task, resolved, root) {
   const failures = [];
   for (const [index, step] of (task.steps ?? []).entries()) {
     const calls = step.paths
@@ -18,7 +22,11 @@ function checkPolicy(task, resolved, root, linkedWorktree) {
         policy: resolved,
         root,
         call,
-        context: { linkedWorktree: step.linkedWorktree ?? linkedWorktree, onMainBranch: step.onMainBranch ?? false },
+        context: {
+          linkedWorktree: step.linkedWorktree ?? DEFAULT_CONTEXT.linkedWorktree,
+          onMainBranch: step.onMainBranch ?? DEFAULT_CONTEXT.onMainBranch,
+          ignored: step.ignored ?? false,
+        },
       });
       decision = result.decision;
       rule = result.rule ?? null;
@@ -67,19 +75,31 @@ export function runGolden({ cwd, source = "main" }) {
   const project = source === "worktree" ? loadProject(repoRoot(cwd)) : loadCurrentProject(cwd);
   const root = project.root;
   const resolved = resolvePolicy(project.policy);
-  const linkedWorktree = isLinkedWorktree(root);
   const tasks = project.golden.tasks ?? [];
+  const active = new Set(resolved.presets);
   const results = tasks.map((task) => {
+    // 只针对可选预设的用例（例如 main-worktree）在预设未启用时跳过，起始用例因此对所有项目都适用。
+    const missing = (task.presets ?? []).filter((id) => !active.has(id));
+    if (missing.length > 0) {
+      return { id: task.id, title: task.title, kind: task.kind, passed: true, skipped: `未启用预设 ${missing.join(", ")}`, failures: [] };
+    }
     const failures =
       task.kind === "policy"
-        ? checkPolicy(task, resolved, root, linkedWorktree)
+        ? checkPolicy(task, resolved, root)
         : task.kind === "verify-plan"
           ? checkVerifyPlan(task, project, root)
           : [`未知的黄金任务类型 ${task.kind}`];
     return { id: task.id, title: task.title, kind: task.kind, passed: failures.length === 0, failures };
   });
-  const passed = results.filter((item) => item.passed).length;
-  const summary = { total: results.length, passed, failed: results.length - passed, passRate: results.length ? passed / results.length : 1 };
+  const ran = results.filter((item) => !item.skipped);
+  const passed = ran.filter((item) => item.passed).length;
+  const summary = {
+    total: ran.length,
+    passed,
+    failed: ran.length - passed,
+    skipped: results.length - ran.length,
+    passRate: ran.length ? passed / ran.length : 1,
+  };
   appendLedger(root, { event: "golden", ...summary, failedIds: results.filter((item) => !item.passed).map((item) => item.id) });
   return { summary, results };
 }

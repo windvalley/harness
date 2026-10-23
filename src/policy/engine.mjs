@@ -50,8 +50,11 @@ function rulesOfKind(policy, kind) {
   return (policy.rules ?? []).filter((rule) => rule.kind === kind);
 }
 
-export function evaluatePath({ policy, root, relPath, access, content, existingHeader }) {
+export function evaluatePath({ policy, root, relPath, access, content, existingHeader, context = {} }) {
   for (const rule of rulesOfKind(policy, access === "read" ? "read-protect" : "write-protect")) {
+    if (!ruleApplies(rule, context)) continue;
+    // 主 Worktree 是否洁净只看 git 能看到的文件；被忽略的本机文件不影响合并，按规则声明放行。
+    if (rule.allowIgnored && context.ignored) continue;
     if (matchAny(relPath, rule.paths ?? []) && !matchAny(relPath, rule.allow ?? [])) {
       return deny(rule, relPath);
     }
@@ -175,7 +178,10 @@ export function expandSegments(command, depth = 0) {
   return result;
 }
 
-function ruleApplies(rule, context) {
+export function ruleApplies(rule, context) {
+  if (!rule.when) return true;
+  // 落在本仓库所有 Worktree 之外（用户目录、/tmp、别的仓库）时，按 Worktree 与分支区分的规则都不适用。
+  if (context.outsideRepo) return false;
   if (rule.when === "linked-worktree") return Boolean(context.linkedWorktree);
   if (rule.when === "main-worktree") return !context.linkedWorktree;
   if (rule.when === "on-main") return Boolean(context.onMainBranch);
@@ -221,9 +227,18 @@ export function evaluateShell({ policy, command, context = {} }) {
   return { decision: "allow" };
 }
 
-function evaluateSearch({ policy, root, call }) {
+/** 提交本身是否允许：由 git 的 pre-commit 调用，对所有客户端与人都生效。 */
+export function evaluateCommit({ policy, context = {} }) {
+  for (const rule of rulesOfKind(policy, "commit-forbid")) {
+    if (!ruleApplies(rule, context)) continue;
+    return deny(rule, context.branch ? `当前分支 ${context.branch}` : "");
+  }
+  return { decision: "allow" };
+}
+
+function evaluateSearch({ policy, root, call, context }) {
   if (call.path) {
-    const byPath = evaluatePath({ policy, root, relPath: toRelative(root, call.path), access: "read" });
+    const byPath = evaluatePath({ policy, root, relPath: toRelative(root, call.path), access: "read", context });
     if (byPath.decision === "deny") return byPath;
   }
   const glob = String(call.glob ?? "");
@@ -236,7 +251,7 @@ function evaluateSearch({ policy, root, call }) {
 
 /**
  * 统一入口：所有客户端先把调用归一为 call，再交给这里判定。
- * call.kind 取 shell / write / read / search，客户端差异只留在适配器里。
+ * call.kind 取 shell / write / read / search / commit，客户端差异只留在适配器里；commit 由 git 的 pre-commit 产生。
  */
 export function evaluateCall({ policy, root, call, context = {} }) {
   switch (call.kind) {
@@ -249,11 +264,14 @@ export function evaluateCall({ policy, root, call, context = {} }) {
         relPath: toRelative(root, call.path),
         access: "write",
         content: typeof call.content === "string" ? call.content : undefined,
+        context,
       });
     case "read":
-      return evaluatePath({ policy, root, relPath: toRelative(root, call.path), access: "read" });
+      return evaluatePath({ policy, root, relPath: toRelative(root, call.path), access: "read", context });
     case "search":
-      return evaluateSearch({ policy, root, call });
+      return evaluateSearch({ policy, root, call, context });
+    case "commit":
+      return evaluateCommit({ policy, context });
     default:
       return { decision: "allow" };
   }

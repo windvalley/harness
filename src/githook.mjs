@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { matchAny } from "./lib/glob.mjs";
-import { git, gitOk, ZERO_OID } from "./lib/git.mjs";
-import { formatDenial } from "./policy/engine.mjs";
+import { currentBranch, git, gitOk, isLinkedWorktree, ZERO_OID } from "./lib/git.mjs";
+import { evaluateCommit, formatDenial } from "./policy/engine.mjs";
 import { resolvePolicy } from "./policy/resolve.mjs";
 import { signPayload, loadKey } from "./lib/store.mjs";
 
@@ -28,6 +28,14 @@ function deny(rule, detail) {
  * 只判路径与新增内容，不判生成文件头（无法区分人工修改与生成器产出）。
  */
 export function checkStaged({ root, resolved }) {
+  // 先判提交本身能不能发生（例如主 Worktree 只用来合并），再判暂存了什么。
+  const branch = currentBranch(root);
+  const commit = evaluateCommit({
+    policy: resolved,
+    context: { linkedWorktree: isLinkedWorktree(root), branch, onMainBranch: ["main", "master"].includes(branch) },
+  });
+  if (commit.decision === "deny") return commit;
+
   const paths = gitOk(root, ["diff", "--cached", "--name-only", "--no-renames"])
     .split("\n")
     .filter(Boolean);

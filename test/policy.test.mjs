@@ -167,6 +167,51 @@ describe("命令判定", () => {
   });
 });
 
+describe("主 Worktree 只用来合并（main-worktree 预设）", () => {
+  const guarded = resolvePolicy({ presets: ["secrets", "git-safety", "gate-self", "main-worktree"], disabled: [], rules: [] });
+  const main = { linkedWorktree: false, onMainBranch: true, branch: "main" };
+  const linked = { linkedWorktree: true, onMainBranch: false, branch: "task/x" };
+  const judge = (call, context) => evaluateCall({ policy: guarded, root: "/repo", call, context });
+
+  test("默认不启用，启用后主 Worktree 里改文件被拒，Linked Worktree 与被忽略的本机文件放行", () => {
+    assert.equal(denies({ kind: "write", path: "src/app.js", content: "x" }, main), false, "未启用预设时不受限制");
+    const edit = judge({ kind: "write", path: "src/app.js", content: "x" }, main);
+    assert.equal(edit.decision, "deny");
+    assert.equal(edit.rule, "main-worktree-edit");
+    assert.equal(judge({ kind: "write", path: "src/app.js", content: "x" }, linked).decision, "allow");
+    assert.equal(judge({ kind: "write", path: "tmp/local.log", content: "x" }, { ...main, ignored: true }).decision, "allow");
+    assert.equal(judge({ kind: "write", path: "/tmp/scratch.txt", content: "x" }, { ...main, outsideRepo: true }).decision, "allow");
+  });
+
+  test("主 Worktree 不能切离主分支，切回主分支与 Linked Worktree 里切分支放行", () => {
+    for (const command of ["git switch task/x", "git switch -c task/x", "git checkout task/x", "git checkout -b task/x", "git checkout HEAD~1", "git checkout main -- src/a.js"]) {
+      const result = judge({ kind: "shell", command }, main);
+      assert.equal(result.decision, "deny", command);
+      assert.equal(result.rule, "main-worktree-leave-main", command);
+    }
+    for (const command of ["git switch main", "git checkout main", "git checkout -q master", "git worktree add -b task/x ../x main", "git status --short"]) {
+      assert.equal(judge({ kind: "shell", command }, main).decision, "allow", command);
+    }
+    assert.equal(judge({ kind: "shell", command: "git switch -c task/y" }, linked).decision, "allow");
+  });
+
+  test("提交只在 Linked Worktree 里发生，关掉规则后主 Worktree 也能提交", () => {
+    const refused = judge({ kind: "commit" }, main);
+    assert.equal(refused.decision, "deny");
+    assert.equal(refused.rule, "main-worktree-commit");
+    assert.match(refused.detail, /当前分支 main/);
+    assert.equal(judge({ kind: "commit" }, linked).decision, "allow");
+    const relaxed = resolvePolicy({ presets: ["main-worktree"], disabled: ["main-worktree-commit"], rules: [] });
+    assert.equal(evaluateCall({ policy: relaxed, root: "/repo", call: { kind: "commit" }, context: main }).decision, "allow");
+  });
+
+  test("每条规则都带原因与修复办法", () => {
+    for (const rule of loadPreset("main-worktree").rules) {
+      assert.ok(rule.reason && rule.fix, rule.id);
+    }
+  });
+});
+
 describe("适配器归一", () => {
   test("三个客户端把同一操作归一为同一 call", () => {
     const claudeCall = claude.normalize({ tool_name: "Bash", tool_input: { command: "git stash" } });

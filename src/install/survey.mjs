@@ -151,6 +151,7 @@ export function formatSurvey(report, { takeOver = false, planned = [], stack = [
   lines.push(`  harness: ${report.harnessOnMain ? "主分支已接入，本次按升级处理" : "主分支尚未接入，本次为首次接入"}`);
   if (report.worktrees > 1) {
     lines.push(`  Worktree: ${report.worktrees} 个；其他 Worktree 在合入 main 之前保持原样，合入后自动用上新门禁`);
+    lines.push("    多个会话并行时建议在 .harness/policy.json 的 presets 里加 main-worktree：主 Worktree 只用来合并，改动与提交放在 Linked Worktree");
   }
   if (stack.length > 0) lines.push(`  技术栈检查: ${stack.join(", ")}`);
   const where = report.hooksDir.rel ?? report.hooksDir.path;

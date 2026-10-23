@@ -60,7 +60,7 @@ const USAGE = `harness <命令> [参数]
 客户端与钩子入口
   githook  <pre-commit|commit-msg|reference-transaction>   由 git 钩子调用
   hook     --client <claude|codex|dsh>               由客户端钩子调用，读 stdin
-  check    --kind <shell|write|read|search> ... [--on-main] [--linked-worktree]   手工判定一次调用
+  check    --kind <shell|write|read|search|commit> ... [--on-main] [--linked-worktree] [--ignored]   手工判定一次调用
 
 人用
   escalate <open|list|show|answer|resume>             例外上报
@@ -294,6 +294,7 @@ function cmdCheck(argv) {
       glob: { type: "string" },
       "on-main": { type: "boolean", default: false },
       "linked-worktree": { type: "boolean", default: false },
+      ignored: { type: "boolean", default: false },
     },
   });
   const project = loadTrustedProject(process.cwd());
@@ -302,7 +303,7 @@ function cmdCheck(argv) {
     values.kind === "shell"
       ? { kind: "shell", command: values.command ?? "" }
       : { kind: values.kind, path: values.path, content: values.content, glob: values.glob };
-  const context = { onMainBranch: values["on-main"], linkedWorktree: values["linked-worktree"] };
+  const context = { onMainBranch: values["on-main"], linkedWorktree: values["linked-worktree"], ignored: values.ignored };
   const result = evaluateCall({ policy: resolved, root: project.root, call, context });
   if (result.decision === "deny") {
     process.stderr.write(`${formatDenialText(result)}\n`);
@@ -606,8 +607,13 @@ export async function main(argv) {
       case "golden": {
         const { values } = parseArgs({ args: rest, options: { worktree: { type: "boolean", default: false } } });
         const { summary, results } = runGolden({ cwd: process.cwd(), source: values.worktree ? "worktree" : "main" });
-        print(`黄金任务 ${summary.passed}/${summary.total} 通过 (${(summary.passRate * 100).toFixed(0)}%)`);
+        const skipped = summary.skipped > 0 ? `，跳过 ${summary.skipped} 项` : "";
+        print(`黄金任务 ${summary.passed}/${summary.total} 通过 (${(summary.passRate * 100).toFixed(0)}%)${skipped}`);
         for (const item of results) {
+          if (item.skipped) {
+            print(`  SKIP ${item.id} ${item.title ?? ""}（${item.skipped}）`);
+            continue;
+          }
           print(`  ${item.passed ? "PASS" : "FAIL"} ${item.id} ${item.title ?? ""}`);
           for (const failure of item.failures) print(`       - ${failure}`);
         }

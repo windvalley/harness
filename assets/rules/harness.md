@@ -37,6 +37,14 @@
 ## 多个 Worktree
 
 入口 `.harness/bin/harness` 随仓库提交，Linked Worktree 检出后即可用。git 钩子调用主 Worktree 的入口，任务分支改不了门禁代码自己的行为。
+`harness merge` 在主 Worktree 里更新主分支，要求它停在主分支、洁净、没有进行中的 git 操作；`harness status` 与 `harness doctor` 会提前列出不满足的项。
+`.harness/policy.json` 的 `presets` 里有 `main-worktree` 时，主 Worktree 只用来合并：
+
+- Agent 不能改主 Worktree 里被 git 跟踪或未忽略的文件，被 `.gitignore` 忽略的本机文件不受限。
+- Agent 不能在主 Worktree 里切离主分支。
+- 任何人都不能在主 Worktree 里提交。
+- 新任务用 `git worktree add -b <任务分支> <路径> <主分支>` 建 Linked Worktree，在那里修改、提交。
+  会话停在主 Worktree 时，改 Linked Worktree 里的文件、`cd <目录> && ...` 或 `git -C <目录> ...` 都按那个 Worktree 判定。
 
 ## 例外上报
 

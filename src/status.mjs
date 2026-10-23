@@ -1,11 +1,11 @@
 import { gatePaths, loadGateProject, mainBranch } from "./lib/config.mjs";
 import { matchAny } from "./lib/glob.mjs";
-import { changedPaths, gitOk, isAncestor, refExists } from "./lib/git.mjs";
+import { changedPaths, gitOk, isAncestor, mainWorktreeRoot, refExists } from "./lib/git.mjs";
 import { readRecord } from "./lib/store.mjs";
 import { EVIDENCE_KIND } from "./verify/verify.mjs";
 import { REVIEW_KIND } from "./review/review.mjs";
 import { CONFIRM_KIND } from "./confirm/confirm.mjs";
-import { planMergeResult } from "./merge/merge.mjs";
+import { mainWorktreeProblems, planMergeResult } from "./merge/merge.mjs";
 
 // 确认记录绑定合并结果的 tree：快进时就是分支的 tree，三方合并时算出合并后的 tree。
 function confirmFor(project, root, branch) {
@@ -43,6 +43,15 @@ export function branchStatus({ cwd, branch }) {
     return result;
   }
   add("branch", "ok", `待合入 ${branchCommit.slice(0, 10)} -> ${mainRef}`);
+
+  // 合并在主 Worktree 里更新主分支，它不就绪时其他条件都满足也合不进去。
+  const mainProblems = mainWorktreeProblems(project, mainWorktreeRoot(root));
+  if (mainProblems.length > 0) {
+    add("main-worktree", "fail", mainProblems.join("；"));
+    result.blockers.push("主 Worktree 未就绪");
+  } else {
+    add("main-worktree", "ok", `主 Worktree 停在 ${mainRef} 且洁净`);
+  }
 
   const evidence = readRecord(root, EVIDENCE_KIND, branchCommit);
   if (!evidence.ok) {

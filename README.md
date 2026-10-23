@@ -159,6 +159,25 @@ git 层（`pre-commit`、`commit-msg`、`reference-transaction`）对所有客�
 | `secrets` | 禁止读取、写入或用命令外发密钥与凭据文件 |
 | `git-safety` | 拦截丢弃改动、强推、stash、`--no-verify`，以及绕过合并工具更新主分支 |
 | `gate-self` | 保护执行器入口与绕过开关；规则与配置本身允许修改，合并前由人确认 |
+| `main-worktree` | 可选，`init` 不启用：主 Worktree 只用来合并，改动、切分支与提交都放在 Linked Worktree |
+
+`secrets`、`git-safety`、`gate-self` 由 `init` 写进 `presets`。
+
+### 多个会话并行时：main-worktree
+
+`harness merge` 在主 Worktree 里更新主分支，要求它停在主分支且洁净。
+只要有一个 Agent 在主 Worktree 里切走分支或留下改动，所有任务的合并都会被挡住。
+多个 Agent 或会话并行的项目，建议在 `.harness/policy.json` 的 `presets` 里加上 `main-worktree`：
+
+- `main-worktree-edit`：Agent 不能改主 Worktree 里的文件，被 `.gitignore` 忽略的本机文件除外。
+- `main-worktree-leave-main`：Agent 不能在主 Worktree 里 `git switch`、`git checkout` 到主分支以外。
+- `main-worktree-commit`：git 的 `pre-commit` 拒绝主 Worktree 里的提交，对所有客户端和人都生效，Codex 没有信任钩子时也能兜底。
+
+判定按调用实际落在哪个 Worktree：会话停在主 Worktree 时，改 Linked Worktree 里的文件（包括建在主 Worktree 目录下的，例如 `.claude/worktrees/`）、`cd <目录> && ...`、`git -C <目录> ...` 都按那个 Worktree 算。
+`harness merge` 用 `commit-tree` 和快进更新主分支，不经过 `pre-commit`，不受影响。
+需要由人在主 Worktree 手工提交的项目，在 `disabled` 里关掉 `main-worktree-commit`，其余两条照常。
+用命令写文件（例如 `echo > 文件`、构建产物）不在拦截范围内，靠 `harness status` 与 `harness doctor` 提前提示主 Worktree 不洁净来兜底。
+起始黄金任务里的 `g16-main-worktree-merge-only` 只在启用这个预设时重放，未启用时记为跳过。
 
 检查的三个档位：
 
@@ -211,7 +230,7 @@ git 层（`pre-commit`、`commit-msg`、`reference-transaction`）对所有客�
 - `harness key status`：证据密钥的指纹与权限，以及本仓库有多少记录能被当前密钥校验。
 - `harness conformance`：逐项判定 L3 判据，样本不足的项标 `PEND`。
 - `harness metrics`：按周度量。
-- `harness golden`：重放黄金任务。接入时自带 14 个用例；默认按主分支配置，`--worktree` 按工作区配置。起始验证配置里的 `harness-golden` 检查会在任务分支的检出里用 `--worktree` 重放，改坏规则的分支在验证阶段就被拦下。
+- `harness golden`：重放黄金任务。接入时自带 16 个用例，针对可选预设的用例在预设未启用时跳过；步骤没写位置时按 Linked Worktree、不在主分支判定；默认按主分支配置，`--worktree` 按工作区配置。起始验证配置里的 `harness-golden` 检查会在任务分支的检出里用 `--worktree` 重放，改坏规则的分支在验证阶段就被拦下。
 - `harness rules`：列出解析后的规则。
 
 ## 卸载与版本

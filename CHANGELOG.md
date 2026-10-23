@@ -2,6 +2,29 @@
 
 按 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 组织，版本号遵循语义化版本。
 
+## [0.5.0] - 2026-10-23
+
+多个会话并行时，主 Worktree 一旦切走分支或留下改动，所有任务的合并都会被挡住，而且要到合并时才发现。
+新增可选预设把主 Worktree 限定为合并站，并让 `status`、`doctor` 提前报告它是否就绪。
+
+### 新增
+
+- 可选预设 `main-worktree`，`init` 不启用：Agent 不能改主 Worktree 里未被忽略的文件、不能在主 Worktree 里切离主分支；`pre-commit` 拒绝主 Worktree 里的提交，对所有客户端和人都生效，可以在 `disabled` 里单独关掉。
+- 路径规则支持 `when` 条件与 `allowIgnored`；新增规则种类 `commit-forbid`，由 `pre-commit` 判定。
+- `status` 与 `doctor` 检查主 Worktree 是否停在主分支、洁净、没有进行中的 git 操作。
+- `check --kind commit` 与 `--ignored`。
+- 起始黄金任务 `g16-main-worktree-merge-only`；黄金任务可以用 `presets` 声明只在某个预设启用时重放，未启用时记为跳过。
+- 多 Worktree 的项目在 `init --dry-run` 里提示可以启用 `main-worktree`。
+
+### 变更
+
+- 实时拦截按调用实际落在哪个 Worktree 判定：会话停在主 Worktree 时，改 Linked Worktree 里的文件、`cd <目录> && ...`、`git -C <目录> ...` 按那个 Worktree 的上下文与相对路径判定。落在本仓库所有 Worktree 之外的调用不受带 `when` 的规则约束。
+- 黄金任务的步骤没写位置时一律按 Linked Worktree、不在主分支判定，结果不再取决于在哪个 Worktree 里运行 `harness golden`。
+
+### 修复
+
+- DSH 插件的注册提示写明 profile 只能是 `desktop` 或 `web`，用自定义名称注册的插件两端都不会加载。
+
 ## [0.4.0] - 2026-10-23
 
 接入已有项目不再需要人工清单：一条命令调查现状，首次接入走和日常任务相同的流程，人只在合并前确认一次。

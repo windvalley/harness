@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { isAbsolute, join, relative, sep } from "node:path";
+import { existsSync, realpathSync, statSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 export const ZERO_OID = "0000000000000000000000000000000000000000";
 
@@ -56,6 +57,36 @@ export function mainWorktreeRoot(cwd) {
   const roots = worktreeRoots(cwd);
   if (roots.length === 0) throw new Error("无法定位主 Worktree");
   return roots[0];
+}
+
+/**
+ * 判断一个路径落在本仓库的哪个 Worktree：会话可能停在主 Worktree，却改 Linked Worktree 里的文件
+ * （Linked Worktree 也可能就建在主 Worktree 的目录下）。路径可能还不存在，从最近的已存在目录起算。
+ * 不属于本仓库任何 Worktree（用户目录、/tmp、.git 内部、别的仓库）时 outsideRepo 为真。
+ */
+export function locatePath(root, target, { checkIgnore = false } = {}) {
+  const abs = isAbsolute(target) ? target : resolve(root, target);
+  let dir = abs;
+  while (!existsSync(dir) && dirname(dir) !== dir) dir = dirname(dir);
+  if (existsSync(dir) && !statSync(dir).isDirectory()) dir = dirname(dir);
+  const probe = git(dir, ["rev-parse", "--path-format=absolute", "--show-toplevel", "--git-dir", "--git-common-dir"]);
+  if (probe.status !== 0) return { outsideRepo: true };
+  const [top, ownGitDir, common] = probe.stdout.trim().split("\n");
+  if (common !== commonDir(root)) return { outsideRepo: true };
+  const branch = currentBranch(top);
+  // git 给出的是真实路径（macOS 上 /var 实为 /private/var），目标也换成真实路径，才能算出正确的相对路径。
+  const real = join(realpathSync(dir), relative(dir, abs));
+  const place = {
+    outsideRepo: false,
+    root: top,
+    path: real,
+    linkedWorktree: ownGitDir !== common,
+    branch,
+    onMainBranch: ["main", "master"].includes(branch),
+  };
+  // 被 .gitignore 忽略的文件不影响主 Worktree 是否洁净；已跟踪的文件 check-ignore 不会报忽略。
+  if (checkIgnore) place.ignored = git(top, ["check-ignore", "-q", "--", relative(top, real) || "."]).status === 0;
+  return place;
 }
 
 export function resolveCommit(cwd, ref) {
