@@ -157,7 +157,7 @@
       "kind": "policy",
       "steps": [
         { "kind": "shell", "command": ".harness/bin/harness confirm --branch task/x --yes", "expect": "deny", "rule": "confirm-human-only" },
-        { "kind": "shell", "command": "node ~/github/harness/bin/harness.mjs confirm --branch task/x --yes", "expect": "deny", "rule": "confirm-human-only" },
+        { "kind": "shell", "command": "node /opt/harness/bin/harness.mjs confirm --branch task/x --yes", "expect": "deny", "rule": "confirm-human-only" },
         { "kind": "shell", "command": ".harness/bin/harness confirm --branch task/x", "expect": "allow" },
         { "kind": "shell", "command": "git merge-base --is-ancestor task/x main", "expect": "allow", "onMainBranch": true },
         { "kind": "shell", "command": "git merge-tree --write-tree main task/x", "expect": "allow", "onMainBranch": true },
