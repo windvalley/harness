@@ -12,6 +12,7 @@
 - Claude 与 Codex 的钩子命令直接调用入口（`hook --client`），不再生成带本机绝对路径的 `claude-hook.mjs`、`codex-hook.mjs`。
 - git 钩子块插到原有脚本之前，并带结束标记。原先追加在末尾，遇到 husky 这类“没有前端改动就 exit 0”的 `pre-commit` 时永远执行不到；`reference-transaction` 里原有脚本读完标准输入后，追加的块也拿不到输入。
 - git 钩子调用主 Worktree 的入口，只在主分支已有 `.harness/config.json` 时生效；没有接入 harness 的仓库共用同一份钩子时不受影响。
+- 入口在本机找不到锁定的版本时退出码固定为 3：`pre-commit` 与 `commit-msg` 提示后放行，主分支引用保护仍然拒绝。钩子随仓库分发后，没装 harness 的机器也能正常提交。
 - `install` 自动维护 `.gitignore`：加入 `.harness/dsh-plugin/`，去掉旧版要求的 `.harness/bin/`；项目用全局 `bin/` 规则时自动放行 `.harness/bin/`，并在仍被忽略时直接报错。
 
 ### 新增

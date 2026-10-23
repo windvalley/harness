@@ -149,7 +149,10 @@ export function shimPath(root) {
 /**
  * 入口 shim 只依赖 $HOME 与固定版本号，因此可以入库：
  * 每个 Linked Worktree 检出后立刻可用，不用在每棵树里各跑一次 install。
+ * 本机没有装这个版本时退出码固定为 3，git 钩子据此区分“没装”与“被拦截”。
  */
+export const SHIM_MISSING_VERSION = 3;
+
 export function writeShim({ root, version = packageVersion() }) {
   const file = shimPath(root);
   mkdirSync(join(file, ".."), { recursive: true });
@@ -160,9 +163,9 @@ HARNESS_VERSION="\${HARNESS_VERSION:-${version}}"
 HARNESS_STORE="\${HARNESS_STORE:-$HOME/.local/share/harness/versions}"
 entry="$HARNESS_STORE/$HARNESS_VERSION/bin/harness.mjs"
 if [ ! -f "$entry" ]; then
-  printf '[harness] 找不到已安装的版本 %s\\n' "$HARNESS_VERSION" >&2
-  printf '请先运行 harness publish 安装该版本，或 harness upgrade 更新版本。\\n' >&2
-  exit 2
+  printf '[harness] 本机没有安装入口锁定的版本 %s\\n' "$HARNESS_VERSION" >&2
+  printf '在 harness 仓库运行 node bin/harness.mjs publish --version %s，或在项目里运行 harness install。\\n' "$HARNESS_VERSION" >&2
+  exit ${SHIM_MISSING_VERSION}
 fi
 exec node "$entry" "$@"
 `;
@@ -238,13 +241,19 @@ export function writeGitHooks({ root }) {
     results.push(
       insertHookBlock({
         file: join(dir, name),
-        // 提交前检查只是提前提示，入口缺失时提示后放行；真正的约束在合并与引用保护。
+        // 提交前检查只是提前提示：入口缺失或本机没装锁定的版本时提示后放行；真正的约束在合并与引用保护。
         block: `${HOOK_MARK} ${name}
 ${HOOK_FUNCTIONS}
 if harness_enabled; then
   harness_bin="$(harness_entry)"
   if [ -x "$harness_bin" ]; then
-    "$harness_bin" githook ${name} "$@" || exit $?
+    "$harness_bin" githook ${name} "$@"
+    harness_status=$?
+    if [ "$harness_status" -eq ${SHIM_MISSING_VERSION} ]; then
+      printf '[harness] 本机没有安装门禁锁定的版本，跳过 ${name} 检查\\n' >&2
+    elif [ "$harness_status" -ne 0 ]; then
+      exit "$harness_status"
+    fi
   else
     printf '[harness] 主 Worktree 缺少 %s，跳过 ${name} 检查；在主 Worktree 运行 harness install 补齐\\n' "$harness_bin" >&2
   fi

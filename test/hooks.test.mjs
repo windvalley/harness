@@ -541,6 +541,24 @@ describe("多 Worktree 与已有钩子", () => {
     assert.equal(readFileSync(join(repo.root, ".gitignore"), "utf8"), text);
   });
 
+  test("本机没装入口锁定的版本时，提交照常进行，主分支仍受保护", () => {
+    const repo = setup();
+    // 模拟另一台机器：入口随仓库检出，但版本目录为空。
+    const env = { ...repo.env, HARNESS_STORE: join(repo.root, "..", "empty-store") };
+    git(repo.root, "checkout", "-q", "-b", "task/no-store", env);
+    write(repo.root, "a.txt", "a\n");
+    git(repo.root, "add", "-A", env);
+    const committed = sh(repo.root, "git", ["commit", "-q", "-m", BASIC], env);
+    assert.equal(committed.status, 0, committed.stderr);
+    assert.match(committed.stderr, /本机没有安装门禁锁定的版本/);
+
+    const target = git(repo.root, "rev-parse", "HEAD", env);
+    git(repo.root, "checkout", "-q", "main", env);
+    const refused = sh(repo.root, "git", ["update-ref", "refs/heads/main", target], env);
+    assert.notEqual(refused.status, 0, "主分支保护不能因为没装版本而放开");
+    assert.match(refused.stderr, /本机没有安装入口锁定的版本/);
+  });
+
   test("没有接入 harness 的仓库共用这些钩子时不受影响", () => {
     const repo = setup();
     const plain = join(repo.root, "..", "plain");
