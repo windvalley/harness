@@ -23,7 +23,7 @@ export function followUps({ mainRoot, changed = [], bootstrap = false }) {
     }
   }
   if (bootstrap && commandExists("dsh") && existsSync(join(mainRoot, ".harness", "dsh-plugin", "index.mjs"))) {
-    notes.push(`DeepSeek Harness 注册插件: dsh plugin --profile <名称> add ${join(mainRoot, ".harness", "dsh-plugin")}`);
+    notes.push(`DeepSeek Harness 注册插件: dsh plugin --profile <desktop|web> add ${join(mainRoot, ".harness", "dsh-plugin")}（桌面版用 desktop，浏览器版用 web）`);
   }
   return notes;
 }

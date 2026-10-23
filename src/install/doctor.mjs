@@ -128,7 +128,7 @@ export function doctor({ cwd = process.cwd() } = {}) {
     ok: true,
     verified: dshOk,
     detail: dshOk
-      ? `插件目录已生成: ${dsh}；需在 DSH 中注册: dsh plugin --profile <名称> add ${dsh}`
+      ? `插件目录已生成: ${dsh}；需在 DSH 中注册: dsh plugin --profile <desktop|web> add ${dsh}（桌面版用 desktop，浏览器版用 web）`
       : "未生成 DSH 插件目录；需要用 DeepSeek Harness 时在本 Worktree 运行 harness install",
   });
 

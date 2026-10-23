@@ -82,8 +82,11 @@ harness 不认识原有工具的配置格式，也不自动转换。
 DeepSeek Harness 需要在你自己的终端注册一次插件：
 
 ```bash
-dsh plugin --profile <名称> add <项目路径>/.harness/dsh-plugin
+dsh plugin --profile <desktop|web> add <项目路径>/.harness/dsh-plugin
 ```
+
+`--profile` 的值必须与你实际使用的 DeepSeek Harness 一致：桌面版用 `desktop`，浏览器版用 `web`。
+插件只装进指定的 profile，用别的名称会新建一个独立 profile，桌面版和浏览器版都不会加载它。
 
 ## 新成员或新机器
 
