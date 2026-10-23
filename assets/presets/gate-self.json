@@ -57,6 +57,14 @@
       "patterns": ["\\bharness(\\.mjs)?\\s+key\\s+rotate\\b[^|;&]*--yes\\b"],
       "reason": "轮换证据密钥会作废所有任务已有的证据、评审与确认，影响其他正在进行的任务",
       "fix": "需要轮换时告知用户，由用户在自己的终端执行 harness key rotate --yes；只查看现状用 harness key status"
+    },
+    {
+      "id": "confirm-human-only",
+      "kind": "shell-forbid",
+      "scope": "whole",
+      "patterns": ["\\bharness(\\.mjs)?\\s+confirm\\b[^|;&]*--yes\\b"],
+      "reason": "门禁改动与首次接入的确认必须由人做出，Agent 代为确认等于没有确认",
+      "fix": "运行不带 --yes 的 harness confirm 把摘要交给用户，由用户在自己的终端执行带 --yes 的命令；在 Claude Code 里用户可以在输入框里用 ! 前缀直接执行"
     }
   ]
 }

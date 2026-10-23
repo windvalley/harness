@@ -1,17 +1,27 @@
-import { gatePaths, loadTrustedProject, mainBranch } from "./lib/config.mjs";
+import { gatePaths, loadGateProject, mainBranch } from "./lib/config.mjs";
 import { matchAny } from "./lib/glob.mjs";
 import { changedPaths, gitOk, isAncestor, refExists } from "./lib/git.mjs";
 import { readRecord } from "./lib/store.mjs";
 import { EVIDENCE_KIND } from "./verify/verify.mjs";
 import { REVIEW_KIND } from "./review/review.mjs";
 import { CONFIRM_KIND } from "./confirm/confirm.mjs";
+import { planMergeResult } from "./merge/merge.mjs";
+
+// 确认记录绑定合并结果的 tree：快进时就是分支的 tree，三方合并时算出合并后的 tree。
+function confirmFor(project, root, branch) {
+  try {
+    return readRecord(root, CONFIRM_KIND, planMergeResult({ project, root, branch }).resultTree);
+  } catch (error) {
+    return { ok: false, reason: error.message };
+  }
+}
 
 /**
  * 只读地汇总“这个分支现在能不能合并”。
  * 不跑任何检查、不调用评审，只读取已有记录并判断是否仍然有效。
  */
 export function branchStatus({ cwd, branch }) {
-  const project = loadTrustedProject(cwd);
+  const project = loadGateProject(cwd, { branch });
   const root = project.root;
   const mainRef = mainBranch(project);
   const result = { branch, mainRef, steps: [], ready: false, blockers: [] };
@@ -70,6 +80,18 @@ export function branchStatus({ cwd, branch }) {
     add("review", "ok", `评审通过（需求符合度 ${review.record.requirementFit?.rating ?? "?"}，工程质量 ${review.record.engineeringQuality?.rating ?? "?"}，清单来源 ${review.record.acceptanceSource ?? "无"}）`);
   }
 
+  if (project.bootstrap) {
+    // 首次接入：分支里的配置就是待确认的信任根，不论改了哪些文件都要人确认。
+    const confirms = confirmFor(project, root, branch);
+    if (confirms.ok) add("gate", "ok", "首次接入的门禁配置已确认");
+    else {
+      add("gate", "fail", `首次接入，合并前需要人确认这份门禁配置：harness confirm --branch ${branch}`);
+      result.blockers.push("首次接入待确认");
+    }
+    result.ready = result.blockers.length === 0;
+    return result;
+  }
+
   // 门禁改动：只判断本次分支改到的文件是否落在门禁范围，真正合并时以合并结果为准。
   const branchPaths = changedPaths(root, evidence.ok ? evidence.record.base : gitOk(root, ["merge-base", mainCommit, branchCommit]), branchCommit);
   const gate = gatePaths(project);
@@ -77,7 +99,7 @@ export function branchStatus({ cwd, branch }) {
   if (gateTouched.length === 0) {
     add("gate", "ok", "本次没有改动门禁配置与规则");
   } else {
-    const confirms = readRecord(root, CONFIRM_KIND, branchCommit);
+    const confirms = confirmFor(project, root, branch);
     const anyConfirm = confirms.ok;
     if (anyConfirm) add("gate", "ok", `门禁改动已确认（${gateTouched.length} 个文件）`);
     else {

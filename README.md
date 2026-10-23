@@ -4,13 +4,29 @@
 
 适用于任何 git 项目与任何编码工具：git 钩子对所有客户端生效；Claude Code、Codex、DeepSeek Harness 另有实时拦截适配。
 
+仓库托管在 <https://github.com/windvalley/harness>。
+
 ## 接入一个项目
+
+**空项目或新项目：**
 
 ```bash
 node ~/github/harness/bin/harness.mjs init
 ```
 
-这一步会做四件事：
+**已有其他门禁的项目，希望换成 harness：**
+
+```bash
+# 先预览，了解现状与将写入的文件
+node ~/github/harness/bin/harness.mjs init --dry-run
+
+# 确认后接管：移除原有主分支保护与 Agent 拦截，换成 harness 的
+node ~/github/harness/bin/harness.mjs init --take-over
+```
+
+接管之后原有工具的配置文件保持原样，可以在接入提交合入之后另开任务删除，也可以与接入一起删。原有工具里的项目规则需要人工判断是否还要：仍需要的改写进 `.harness/policy.json`、`.harness/verify.json`、`.harness/golden/tasks.json`；这些文件 Agent 可以直接改，与接入放在同一个分支里一起过目。
+
+`init` 做以下几件事：
 
 1. 在项目里写出 `.harness/`：`config.json`、`policy.json`、`verify.json`、`golden/tasks.json`、`rules/`、`templates/`、`acceptance/`。
 2. 把当前版本代码装进 `~/.local/share/harness/versions/<版本>/`，并写入内容哈希清单。

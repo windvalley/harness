@@ -1,6 +1,6 @@
 import { closeSync, existsSync, openSync, readFileSync, rmSync, writeSync } from "node:fs";
 import { join } from "node:path";
-import { acceptancePath, gatePaths, loadTrustedProject, mainBranch } from "../lib/config.mjs";
+import { acceptancePath, gatePaths, loadGateProject, mainBranch } from "../lib/config.mjs";
 import { matchAny } from "../lib/glob.mjs";
 import {
   changedPaths,
@@ -12,10 +12,12 @@ import {
   refExists,
   resolveCommit,
   run,
+  statusShort,
   treeOf,
 } from "../lib/git.mjs";
 import { appendLedger, dataDir, readRecord, writeRecord } from "../lib/store.mjs";
 import { EVIDENCE_KIND, reusableChecks, verify } from "../verify/verify.mjs";
+import { entryTouched, followUps } from "../install/followups.mjs";
 import { REVIEW_KIND } from "../review/review.mjs";
 import { MERGE_TOKEN_ENV, mainUpdateToken } from "../githook.mjs";
 
@@ -53,7 +55,7 @@ function ensureMainReady(project, mainRoot) {
   const current = git(mainRoot, ["symbolic-ref", "--quiet", "--short", "HEAD"]).stdout.trim();
   if (current !== branch) throw new MergeError(`主 Worktree 当前不在 ${branch} 分支(实际 ${current || "detached"})`);
   if (!isClean(mainRoot)) {
-    throw new MergeError(`主 Worktree 存在未提交或未跟踪文件，先处理后重试:\n${gitOk(mainRoot, ["status", "--short"])}`);
+    throw new MergeError(`主 Worktree 存在未提交或未跟踪文件，先处理后重试:\n${statusShort(mainRoot)}`);
   }
   for (const marker of ["MERGE_HEAD", "REBASE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "BISECT_LOG"]) {
     const probe = git(mainRoot, ["rev-parse", "--git-path", marker]).stdout.trim();
@@ -144,7 +146,9 @@ export function reuseDecision({ project, root, evidence, review, mainCommit, bra
 }
 
 export async function mergeTask({ cwd, branch, dryRun = false, log = console.error }) {
-  const project = loadTrustedProject(cwd);
+  // 首次接入时主分支还没有配置，按接入分支提议的配置执行，并强制要求人工确认。
+  const project = loadGateProject(cwd, { branch });
+  const bootstrap = Boolean(project.bootstrap);
   const root = project.root;
   const mainRef = mainBranch(project);
   const policy = project.config.merge ?? {};
@@ -169,6 +173,13 @@ export async function mergeTask({ cwd, branch, dryRun = false, log = console.err
 
     const planned = planMergeResult({ project, root, branch });
     const { fastForward, resultTree, resultCommit: newHead } = planned;
+    if (bootstrap && !fastForward) {
+      throw new MergeError(
+        `首次接入要求接入分支包含最新的 ${mainRef}：在分支上 git merge ${mainRef} 或变基后重试`,
+        "bootstrap_not_fast_forward",
+      );
+    }
+    if (bootstrap) log(`[merge] 首次接入：${mainRef} 上还没有门禁配置，按 ${branch} 提议的配置验证，合并前必须由人确认`);
     log(
       fastForward
         ? `[merge] 可 fast-forward: ${mainCommit.slice(0, 10)} -> ${branchCommit.slice(0, 10)}`
@@ -180,14 +191,18 @@ export async function mergeTask({ cwd, branch, dryRun = false, log = console.err
     // 门禁改动：需要人确认过这一版内容。
     const gate = gatePaths(project).flatMap((glob) => [glob]);
     const gateTouched = resultPaths.filter((path) => matchAny(path, gate));
-    if (governance.confirmOnGateChange !== false && gateTouched.length > 0) {
+    // 首次接入引入的是信任根本身，不受 confirmOnGateChange 开关影响，一律要人确认。
+    if (bootstrap || (governance.confirmOnGateChange !== false && gateTouched.length > 0)) {
       const confirm = readRecord(root, "confirm", resultTree);
       if (!confirm.ok || confirm.record.decision !== "approve") {
         throw new MergeError(
           [
-            `本次改动涉及门禁配置或规则(${gateTouched.length} 个文件)，需要你在合并前确认一次。`,
+            bootstrap
+              ? "首次接入会把这个分支里的门禁配置变成主分支的信任根，需要人在合并前确认一次。"
+              : `本次改动涉及门禁配置或规则(${gateTouched.length} 个文件)，需要人在合并前确认一次。`,
             `  ${gateTouched.slice(0, 12).join("\n  ")}`,
-            "查看并确认: harness confirm --branch <分支>",
+            `由人查看并确认: harness confirm --branch ${branch}，确认无误后加 --yes`,
+            "Agent 不能代为确认；在 Claude Code 里可以让用户在输入框执行 ! .harness/bin/harness confirm --branch <分支> --yes",
             "确认后重新运行 harness merge。",
           ].join("\n"),
           "gate_change_unconfirmed",
@@ -229,7 +244,7 @@ export async function mergeTask({ cwd, branch, dryRun = false, log = console.err
       } else {
         if (evidence.ok) log(`[merge] 主分支改动波及 ${reuse.rerunChecks.join(", ") || "多项检查"}，重新验证`);
         else log(`[merge] 没有针对该分支的验证证据(${evidence.reason})，先验证`);
-        const outcome = await verify({ cwd: root, head: newHead, recordKey: branchCommit, base: mainRef, log });
+        const outcome = await verify({ cwd: root, head: newHead, recordKey: branchCommit, base: mainRef, gateBranch: branch, log });
         if (outcome.status !== "passed") {
           throw new MergeError(`验证未通过(${outcome.status})，已拒绝合并`, "verify_failed");
         }
@@ -275,28 +290,60 @@ export async function mergeTask({ cwd, branch, dryRun = false, log = console.err
       );
     }
 
-    const update = run(
-      "git",
-      ["update-ref", "-m", `harness merge ${branch}`, `refs/heads/${mainRef}`, newHead, mainCommit],
-      { cwd: mainRoot, env: { ...process.env, [MERGE_TOKEN_ENV]: mainUpdateToken(mainCommit, newHead) } },
-    );
-    if (update.status !== 0) throw new MergeError(`更新 ${mainRef} 失败: ${update.stderr.trim()}`);
+    if (bootstrap) {
+      // 首次接入用快进合并：git 先检出新文件再更新引用，随分支入库的钩子（例如 husky）此时已是新内容。
+      // 共用钩子目录里的原有主分支保护如果没有被接管，会在这里拒绝，报错给出处理方式。
+      const ff = run("git", ["merge", "--ff-only", "--no-edit", branchCommit], { cwd: mainRoot });
+      if (ff.status !== 0) {
+        // git 先检出文件、再更新引用；引用被钩子拒绝时文件已经换成分支内容。
+        // 合并前已确认主 Worktree 洁净，这里把检出的内容退回主分支，主 Worktree 恢复原样。
+        if (resolveCommit(mainRoot, "HEAD") === mainCommit) run("git", ["reset", "-q", "--hard", mainCommit], { cwd: mainRoot });
+        throw new MergeError(
+          [
+            `快进 ${mainRef} 失败: ${(ff.stderr || ff.stdout).trim().split("\n").slice(-6).join("\n")}`,
+            "如果是原有的主分支保护拒绝了这次更新：在接入分支重新运行 harness init --take-over 由 harness 接管，提交后重新验证、确认并合并；",
+            "或者按原有工具自己的方式合入这个分支。",
+          ].join("\n"),
+          "bootstrap_update_refused",
+        );
+      }
+    } else {
+      const update = run(
+        "git",
+        ["update-ref", "-m", `harness merge ${branch}`, `refs/heads/${mainRef}`, newHead, mainCommit],
+        { cwd: mainRoot, env: { ...process.env, [MERGE_TOKEN_ENV]: mainUpdateToken(mainCommit, newHead) } },
+      );
+      if (update.status !== 0) throw new MergeError(`更新 ${mainRef} 失败: ${update.stderr.trim()}`);
 
-    const sync = run("git", ["read-tree", "-m", "-u", mainCommit, newHead], { cwd: mainRoot });
-    if (sync.status !== 0) {
-      run("git", ["update-ref", "-m", "harness rollback", `refs/heads/${mainRef}`, mainCommit, newHead], {
-        cwd: mainRoot,
-        env: { ...process.env, [MERGE_TOKEN_ENV]: mainUpdateToken(newHead, mainCommit) },
-      });
-      throw new MergeError(`主 Worktree 同步文件失败，已回退 ${mainRef}: ${sync.stderr.trim()}`, "worktree_sync_failed");
+      const sync = run("git", ["read-tree", "-m", "-u", mainCommit, newHead], { cwd: mainRoot });
+      if (sync.status !== 0) {
+        run("git", ["update-ref", "-m", "harness rollback", `refs/heads/${mainRef}`, mainCommit, newHead], {
+          cwd: mainRoot,
+          env: { ...process.env, [MERGE_TOKEN_ENV]: mainUpdateToken(newHead, mainCommit) },
+        });
+        throw new MergeError(`主 Worktree 同步文件失败，已回退 ${mainRef}: ${sync.stderr.trim()}`, "worktree_sync_failed");
+      }
     }
 
     const mainTree = treeOf(mainRoot, "HEAD");
     if (mainTree !== resultTree) throw new MergeError(`合并后 ${mainRef} 的 tree 与预期不一致`, "tree_mismatch");
-    if (!isClean(mainRoot)) throw new MergeError(`合并后主 Worktree 不洁净:\n${gitOk(mainRoot, ["status", "--short"])}`, "worktree_dirty");
+    if (!isClean(mainRoot)) throw new MergeError(`合并后主 Worktree 不洁净:\n${statusShort(mainRoot)}`, "worktree_dirty");
 
-    appendLedger(root, { event: "merge", branch, fastForward, head: newHead, tree: resultTree, base: mainCommit });
+    appendLedger(root, { event: "merge", branch, fastForward, head: newHead, tree: resultTree, base: mainCommit, bootstrap });
     log(`[merge] ${mainRef} 已更新到 ${newHead.slice(0, 12)}`);
+
+    // 入口或钩子变了：用合入后的新入口在主 Worktree 刷新本机这一份（共用钩子目录、DSH 插件目录），不碰入库文件。
+    let refresh = null;
+    if (bootstrap || entryTouched(resultPaths)) {
+      const shim = join(mainRoot, ".harness", "bin", "harness");
+      if (existsSync(shim)) {
+        const result = run(shim, ["install", "--local"], { cwd: mainRoot });
+        refresh = { exit: result.status };
+        if (result.status !== 0) log(`[merge] 注意: 刷新本机钩子失败(exit ${result.status})，在主 Worktree 运行 harness install --local: ${result.stderr.trim().slice(-300)}`);
+        if (!isClean(mainRoot)) log(`[merge] 注意: 刷新后主 Worktree 出现改动，说明分支里的入口不是用当前版本生成的:\n${statusShort(mainRoot)}`);
+      }
+    }
+    const notes = followUps({ mainRoot, changed: resultPaths, bootstrap });
 
     let postMerge = null;
     if (Array.isArray(policy.postMergeCommand) && policy.postMergeCommand.length > 0) {
@@ -313,7 +360,7 @@ export async function mergeTask({ cwd, branch, dryRun = false, log = console.err
       }
     }
 
-    return { dryRun: false, fastForward, newHead, resultTree, gateTouched, postMerge };
+    return { dryRun: false, bootstrap, fastForward, newHead, resultTree, gateTouched, postMerge, refresh, followUps: notes };
   } finally {
     release();
   }

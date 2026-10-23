@@ -1,7 +1,7 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { acceptancePath, loadTrustedProject, mainBranch } from "../lib/config.mjs";
+import { acceptancePath, loadGateProject, mainBranch } from "../lib/config.mjs";
 import { changedPaths, gitOk, run, showBlob } from "../lib/git.mjs";
 import { appendLedger, readRecord, writeRecord } from "../lib/store.mjs";
 
@@ -349,7 +349,7 @@ export function reviewDiff(root, baseCommit, branchCommit, maxChars = MAX_DIFF_C
 }
 
 export async function reviewBranch({ cwd, branch, log = console.error, reviewer = runReviewer }) {
-  const project = loadTrustedProject(cwd);
+  const project = loadGateProject(cwd, { branch });
   const root = project.root;
   const mainRef = mainBranch(project);
   const config = project.config.review ?? {};

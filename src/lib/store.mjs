@@ -14,11 +14,64 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { commonDir } from "./git.mjs";
 
-// 运行数据放在共享 git 目录下，所有 Worktree 共用同一份账本；代码不在这里，升级不会丢数据。
+const OWNER_FILE = "owner.json";
+
+/**
+ * 运行数据放在共享 git 目录下，所有 Worktree 共用同一份账本；代码不在这里，升级不会丢数据。
+ * 目录里写一个归属标记：同名目录已被其他工具占用（例如项目原有的门禁）时改用 harness.d，
+ * 两边的账本、证据互不混淆，原有工具在退役前也照常工作。选择规则只看标记，结果稳定。
+ */
 export function dataDir(cwd) {
-  const dir = process.env.HARNESS_DATA_DIR || join(commonDir(cwd), "harness");
+  if (process.env.HARNESS_DATA_DIR) {
+    mkdirSync(process.env.HARNESS_DATA_DIR, { recursive: true });
+    return process.env.HARNESS_DATA_DIR;
+  }
+  const base = commonDir(cwd);
+  const primary = join(base, "harness");
+  const alternate = join(base, "harness.d");
+  const owned = (dir) => existsSync(join(dir, OWNER_FILE));
+  let dir;
+  if (owned(primary)) dir = primary;
+  else if (owned(alternate)) dir = alternate;
+  else if (!existsSync(primary) || readdirSync(primary).length === 0 || signedByUs(primary)) dir = primary;
+  else dir = alternate;
   mkdirSync(dir, { recursive: true });
+  if (!owned(dir)) writeFileSync(join(dir, OWNER_FILE), `${JSON.stringify({ tool: "harness", createdAt: new Date().toISOString() })}\n`);
   return dir;
+}
+
+/**
+ * 0.3 及以前没有归属标记。目录里有能被本机密钥校验的记录，说明是 harness 自己写的，继续沿用，
+ * 升级后进行中的证据与评审不会因为换目录而失效。
+ */
+function signedByUs(dir) {
+  let secret;
+  try {
+    secret = loadKey({ create: false });
+  } catch {
+    return false;
+  }
+  for (const kind of RECORD_KINDS) {
+    const sub = join(dir, kind);
+    if (!existsSync(sub)) continue;
+    for (const name of readdirSync(sub).filter((item) => item.endsWith(".json")).slice(0, 20)) {
+      try {
+        if (verifySignature(JSON.parse(readFileSync(join(sub, name), "utf8")), secret)) return true;
+      } catch {
+        // 解析失败的记录不作为判断依据
+      }
+    }
+  }
+  return false;
+}
+
+/** 同名数据目录是否被其他工具占用，供接入前调查使用，只读。 */
+export function foreignDataDir(cwd) {
+  if (process.env.HARNESS_DATA_DIR) return null;
+  const primary = join(commonDir(cwd), "harness");
+  if (!existsSync(primary) || existsSync(join(primary, OWNER_FILE))) return null;
+  if (readdirSync(primary).length === 0 || signedByUs(primary)) return null;
+  return primary;
 }
 
 function keyDir() {

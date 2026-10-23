@@ -1,8 +1,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
-import { loadGuardProject, loadTrustedProject, mainBranch } from "./lib/config.mjs";
-import { changedPaths, git, gitOk, mergeBase, repoRoot, resolveCommit } from "./lib/git.mjs";
+import { loadGateProject, loadGuardProject, loadTrustedProject, mainBranch } from "./lib/config.mjs";
+import { changedPaths, git, gitOk, mainWorktreeRoot, mergeBase, repoRoot, resolveCommit } from "./lib/git.mjs";
 import { keyStatus, readLedger, rotateKey, scanRecords } from "./lib/store.mjs";
 import { resolvePolicy, ruleStats } from "./policy/resolve.mjs";
 import { evaluateCall } from "./policy/engine.mjs";
@@ -21,7 +21,9 @@ import { computeMetrics, formatMetrics } from "./golden/metrics.mjs";
 import { initProject, upgradeProject } from "./install/init.mjs";
 import { uninstall } from "./install/uninstall.mjs";
 import { branchStatus, formatStatus } from "./status.mjs";
-import { installAll, listVersions, pruneVersions, publishVersion, verifyVersion, versionDir } from "./install/install.mjs";
+import { installAll, installLocal, listVersions, pruneVersions, publishVersion, verifyVersion, versionDir } from "./install/install.mjs";
+import { formatSurvey } from "./install/survey.mjs";
+import { followUps } from "./install/followups.mjs";
 import { doctor, formatDoctor } from "./install/doctor.mjs";
 import { conformance, formatConformance } from "./conformance.mjs";
 import { packageVersion } from "./install/managed.mjs";
@@ -45,8 +47,8 @@ const USAGE = `harness <命令> [参数]
   rules                                              列出解析后的拦截规则
 
 接入与维护
-  init     [--force]                                 在当前项目初始化
-  install                                            重新生成项目的入口与钩子
+  init     [--dry-run] [--take-over] [--force]       接入或升级当前项目：先调查现状，--dry-run 只预览
+  install  [--take-over] [--local]                   重新生成入口与钩子；--local 只刷新本机共用的钩子与插件目录
   upgrade                                            升级项目到当前版本
   uninstall [--purge] [--dry-run]                    解除接入；--purge 连 .harness/ 一起删
   versions                                           列出已安装的版本
@@ -58,7 +60,7 @@ const USAGE = `harness <命令> [参数]
 客户端与钩子入口
   githook  <pre-commit|commit-msg|reference-transaction>   由 git 钩子调用
   hook     --client <claude|codex|dsh>               由客户端钩子调用，读 stdin
-  check    --kind <shell|write|read|search> ...      手工判定一次调用
+  check    --kind <shell|write|read|search> ... [--on-main] [--linked-worktree]   手工判定一次调用
 
 人用
   escalate <open|list|show|answer|resume>             例外上报
@@ -85,7 +87,7 @@ async function cmdVerify(argv) {
   const head = values.branch ?? values.head ?? "HEAD";
   // 证据按“被验证的提交”索引，不按分支名（名字里可能有 /，且分支会移动）。
   const recordKey = values.branch ? git(repoRoot(cwd), ["rev-parse", "--verify", `${values.branch}^{commit}`]).stdout.trim() : undefined;
-  const outcome = await verify({ cwd, head, base: values.base, reuse: !values["no-reuse"], recordKey });
+  const outcome = await verify({ cwd, head, base: values.base, reuse: !values["no-reuse"], recordKey, gateBranch: values.branch ?? values.head });
   if (values.json) print(JSON.stringify(outcome.record, null, 2));
   const lines = [`验证结果: ${outcome.status}`];
   for (const item of outcome.results) {
@@ -102,7 +104,7 @@ async function cmdVerify(argv) {
 
 /** 只算不改：列出这次会选中哪些检查、哪些记为未执行，不执行也不写证据。 */
 function cmdVerifyPlan({ cwd, branch, base, json }) {
-  const project = loadTrustedProject(cwd);
+  const project = loadGateProject(cwd, { branch });
   const root = project.root;
   const mainRef = base ?? mainBranch(project);
   const head = resolveCommit(root, branch);
@@ -165,6 +167,9 @@ async function cmdMerge(argv) {
   try {
     const result = await mergeTask({ cwd: process.cwd(), branch: values.branch, dryRun: values["dry-run"] });
     print(JSON.stringify(result, null, 2));
+    if (result.followUps?.length > 0) {
+      process.stderr.write(`\n合并完成，还需要在客户端做:\n${result.followUps.map((note) => `  - ${note}`).join("\n")}\n`);
+    }
     return 0;
   } catch (error) {
     if (error instanceof MergeError) {
@@ -287,6 +292,8 @@ function cmdCheck(argv) {
       path: { type: "string" },
       content: { type: "string" },
       glob: { type: "string" },
+      "on-main": { type: "boolean", default: false },
+      "linked-worktree": { type: "boolean", default: false },
     },
   });
   const project = loadTrustedProject(process.cwd());
@@ -295,7 +302,8 @@ function cmdCheck(argv) {
     values.kind === "shell"
       ? { kind: "shell", command: values.command ?? "" }
       : { kind: values.kind, path: values.path, content: values.content, glob: values.glob };
-  const result = evaluateCall({ policy: resolved, root: project.root, call, context: {} });
+  const context = { onMainBranch: values["on-main"], linkedWorktree: values["linked-worktree"] };
+  const result = evaluateCall({ policy: resolved, root: project.root, call, context });
   if (result.decision === "deny") {
     process.stderr.write(`${formatDenialText(result)}\n`);
     return 1;
@@ -409,6 +417,67 @@ function cmdKey(argv) {
   return 2;
 }
 
+function cmdInit(argv) {
+  const { values } = parseArgs({
+    args: argv,
+    options: {
+      force: { type: "boolean", default: false },
+      "dry-run": { type: "boolean", default: false },
+      "take-over": { type: "boolean", default: false },
+    },
+  });
+  const cwd = process.cwd();
+  const takeOver = values["take-over"];
+  const result = initProject({ cwd, force: values.force, dryRun: values["dry-run"], takeOver });
+  const report = result.report;
+  print(formatSurvey(report, { takeOver, planned: result.planned, stack: result.stack }));
+  if (result.dryRun) {
+    print("");
+    print("以上为预览，没有写入任何文件。确认后去掉 --dry-run 执行。");
+    return 0;
+  }
+
+  print("");
+  print(`已写入（版本 ${result.version}，代码在 ${versionDir(result.version)}）`);
+  if (result.install.gitignore.shimIgnored) {
+    process.stderr.write("[harness] 入口仍被 .gitignore 忽略，请手工放行 .harness/bin/harness，否则 Linked Worktree 里没有入口\n");
+    return 1;
+  }
+
+  const branch = report.branch;
+  const onMain = report.onMain || !report.mainRef;
+  print("");
+  print("下一步");
+  if (report.harnessOnMain) {
+    print(`  1. 提交改动后按日常任务流程合入：harness verify / review / merge --branch ${branch}`);
+    print("     入口或钩子有变化时，合并前需要人确认一次（harness confirm）。");
+  } else if (onMain) {
+    print("  当前在主分支上。首次接入建议在任务分支里做：git switch -c chore/harness-onboard 后提交，");
+    print("  再走 harness verify / review / confirm / merge，合并时会把这份配置变成主分支的信任根。");
+    print("  没有其他门禁、也不需要评审时，也可以直接在主分支提交，提交后即生效。");
+  } else {
+    print(`  1. 检查并提交：git add -A && git commit（除 .harness/dsh-plugin/ 外全部入库，包括 .harness/bin/harness）`);
+    print(`  2. harness verify --branch ${branch}`);
+    print(`  3. harness review --branch ${branch}`);
+    print(`  4. 由人确认：harness confirm --branch ${branch}，无误后加 --yes`);
+    print(`  5. harness merge --branch ${branch}`);
+  }
+  if (report.conflicts.length > 0 && !takeOver) {
+    print("  原有的主分支保护或 Agent 钩子被保留；如果合并时被它们拒绝，加 --take-over 重新运行 init。");
+  }
+  if (report.legacyDirs.length > 0) {
+    print(`  合入后可以另开任务退役原有工具: ${report.legacyDirs.join(", ")}`);
+  }
+  // Codex 按路径记录信任，提示里给主 Worktree 的路径：合入后各个钩子都调用那里的入口。
+  const notes = followUps({ mainRoot: mainWorktreeRoot(result.root), changed: [".claude/settings.json"], bootstrap: true });
+  if (notes.length > 0) {
+    print("");
+    print("客户端（合入主分支后）");
+    for (const note of notes) print(`  - ${note}`);
+  }
+  return 0;
+}
+
 function currentBranchForStatus() {
   const result = git(repoRoot(process.cwd()), ["symbolic-ref", "--quiet", "--short", "HEAD"]);
   return result.status === 0 ? result.stdout.trim() : "";
@@ -427,25 +496,32 @@ export async function main(argv) {
         return 0;
       case "publish": {
         const { values } = parseArgs({ args: rest, options: { version: { type: "string" } } });
-        const result = publishVersion({ version: values.version ?? packageVersion() });
+        if (values.version && values.version !== packageVersion()) {
+          // 版本目录按版本号不可变，把当前代码装成别的版本号会让锁定该版本的项目跑错代码。
+          process.stderr.write(
+            `当前代码是 ${packageVersion()}，不能装成 ${values.version}。在项目目录运行 node <harness 仓库>/bin/harness.mjs install --local，会按标签 v${values.version} 安装\n`,
+          );
+          return 2;
+        }
+        const result = publishVersion({ version: packageVersion() });
         print(JSON.stringify(result, null, 2));
         return 0;
       }
-      case "init": {
-        const { values } = parseArgs({ args: rest, options: { force: { type: "boolean", default: false } } });
-        const result = initProject({ force: values.force });
-        print(`已初始化 ${result.root}`);
-        for (const item of result.written) print(`  新建 ${item}`);
-        print(`  版本 ${result.version} 已安装到 ${versionDir(result.version)}`);
-        print("下一步: 检查 .harness/policy.json 与 .harness/verify.json，连同 .harness/bin/harness 一起提交，然后运行 harness doctor");
-        if (result.install.gitignore.shimIgnored) {
-          process.stderr.write("[harness] 入口仍被 .gitignore 忽略，请手工放行 .harness/bin/harness，否则 Linked Worktree 里没有入口\n");
-          return 1;
-        }
-        return 0;
-      }
+      case "init":
+        return cmdInit(rest);
       case "install": {
-        const result = installAll({ cwd: process.cwd() });
+        const { values } = parseArgs({
+          args: rest,
+          options: { "take-over": { type: "boolean", default: false }, local: { type: "boolean", default: false } },
+        });
+        if (values.local) {
+          const local = installLocal({ cwd: process.cwd() });
+          if (local.fromTag) print(`项目锁定版本 ${local.published.version}，已从 harness 仓库的标签 v${local.published.version} 安装`);
+          if (local.output) process.stdout.write(local.output);
+          else print(`已刷新本机: 版本 ${local.published.version}${local.hooksTracked ? "；钩子目录随分支入库，无需刷新" : `；git 钩子 ${local.hooks.dir}`}`);
+          return 0;
+        }
+        const result = installAll({ cwd: process.cwd(), takeOver: values["take-over"] });
         print(`已安装版本 ${result.published.version}，入口 ${result.shim}`);
         for (const hook of result.hooks.hooks) print(`  git 钩子 ${hook.file}${hook.updated ? "(已接入)" : "(已存在)"}`);
         print(`  Claude PreToolUse: ${result.claude}`);

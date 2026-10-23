@@ -1,4 +1,4 @@
-import { loadProject, loadTrustedProject } from "../lib/config.mjs";
+import { loadCurrentProject, loadProject } from "../lib/config.mjs";
 import { isLinkedWorktree, repoRoot } from "../lib/git.mjs";
 import { appendLedger } from "../lib/store.mjs";
 import { evaluateCall } from "../policy/engine.mjs";
@@ -64,7 +64,7 @@ function checkVerifyPlan(task, project, root) {
  * source=worktree 时按工作区里的配置重放，供验证检查在任务分支的检出里确认改过的规则没有退化。
  */
 export function runGolden({ cwd, source = "main" }) {
-  const project = source === "worktree" ? loadProject(repoRoot(cwd)) : loadTrustedProject(cwd);
+  const project = source === "worktree" ? loadProject(repoRoot(cwd)) : loadCurrentProject(cwd);
   const root = project.root;
   const resolved = resolvePolicy(project.policy);
   const linkedWorktree = isLinkedWorktree(root);

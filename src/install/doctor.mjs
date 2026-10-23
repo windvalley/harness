@@ -1,17 +1,17 @@
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { loadTrustedProject, mainBranch } from "../lib/config.mjs";
-import { commonDir, git, repoRoot } from "../lib/git.mjs";
+import { loadCurrentProject, mainBranch } from "../lib/config.mjs";
+import { git, repoRoot } from "../lib/git.mjs";
 import { keyStatus } from "../lib/store.mjs";
 import { commandExists, resolveBackend } from "../review/review.mjs";
 import { resolvePolicy } from "../policy/resolve.mjs";
 import { packageVersion, MARK_START } from "./managed.mjs";
-import { isHarnessClientHook, shimPath, verifyVersion, versionDir } from "./install.mjs";
+import { gitHooksDir, isHarnessClientHook, shimPath, verifyVersion, versionDir } from "./install.mjs";
 
 // 读取 Codex 用户配置里是否已有本项目钩子的 trusted_hash 记录。
 // 路径要按真实路径比较：git 常返回 /private/var/...，用户配置里可能写成 /var/...，两者是同一目录。
-function codexTrustState(root) {
+export function codexTrustState(root) {
   const file = join(process.env.CODEX_HOME || join(homedir(), ".codex"), "config.toml");
   if (!existsSync(file)) return false;
   const text = readFileSync(file, "utf8");
@@ -32,11 +32,6 @@ function codexTrustState(root) {
     if (/trusted_hash\s*=\s*"sha256:/.test(section)) return true;
   }
   return false;
-}
-
-function gitHooksDir(root) {
-  const hooksPath = git(root, ["config", "--get", "core.hooksPath"]).stdout.trim();
-  return hooksPath ? join(root, hooksPath) : join(commonDir(root), "hooks");
 }
 
 function hookInstalled(file) {
@@ -145,7 +140,7 @@ export function doctor({ cwd = process.cwd() } = {}) {
   checks.push({ id: "project:managed-block", ok: agentsOk, detail: agentsOk ? "AGENTS.md 托管块存在" : "AGENTS.md 缺少托管块" });
 
   try {
-    const project = loadTrustedProject(root);
+    const project = loadCurrentProject(root);
     const resolved = resolvePolicy(project.policy);
     const stats = { rules: resolved.rules.length, checks: project.verify.checks.length };
     const unknown = resolved.unknownDisabled;
@@ -154,7 +149,13 @@ export function doctor({ cwd = process.cwd() } = {}) {
       ok: unknown.length === 0,
       detail: `${stats.rules} 条拦截规则，${stats.checks} 项验证检查` + (unknown.length ? `；disabled 里有未知规则 ${unknown.join(", ")}` : ""),
     });
-    checks.push({ id: "project:main", ok: true, detail: `主分支配置来源: ${mainBranch(project)}` });
+    checks.push({
+      id: "project:main",
+      ok: true,
+      detail: project.bootstrap
+        ? `首次接入阶段：${mainBranch(project)} 上还没有配置，按当前工作区的配置自检；合入后以主分支为准`
+        : `配置取自主分支 ${mainBranch(project)}`,
+    });
     if (project.config.merge?.requireReview !== false) {
       try {
         const reviewConfig = project.config.review ?? {};

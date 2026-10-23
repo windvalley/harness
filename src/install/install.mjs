@@ -1,9 +1,9 @@
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 import { PACKAGE_ROOT } from "../policy/resolve.mjs";
-import { commonDir, git, repoRoot } from "../lib/git.mjs";
+import { git, hooksPlacement, repoRoot, run } from "../lib/git.mjs";
 import { loadKey } from "../lib/store.mjs";
 import { packageVersion, writeGolden, writeRules } from "./managed.mjs";
 
@@ -164,7 +164,7 @@ HARNESS_STORE="\${HARNESS_STORE:-$HOME/.local/share/harness/versions}"
 entry="$HARNESS_STORE/$HARNESS_VERSION/bin/harness.mjs"
 if [ ! -f "$entry" ]; then
   printf '[harness] 本机没有安装入口锁定的版本 %s\\n' "$HARNESS_VERSION" >&2
-  printf '在 harness 仓库运行 node bin/harness.mjs publish --version %s，或在项目里运行 harness install。\\n' "$HARNESS_VERSION" >&2
+  printf '在项目目录运行 node <harness 仓库>/bin/harness.mjs install --local，按标签 v%s 安装锁定的版本。\\n' "$HARNESS_VERSION" >&2
   exit ${SHIM_MISSING_VERSION}
 fi
 exec node "$entry" "$@"
@@ -177,10 +177,8 @@ exec node "$entry" "$@"
 const HOOK_MARK = "# harness:hook";
 const HOOK_END = "# harness:hook-end";
 
-function gitHooksDir(root) {
-  const hooksPath = git(root, ["config", "--get", "core.hooksPath"]).stdout.trim();
-  if (hooksPath) return join(root, hooksPath);
-  return join(commonDir(root), "hooks");
+export function gitHooksDir(root) {
+  return hooksPlacement(root).dir;
 }
 
 /**
@@ -205,10 +203,12 @@ export function stripHookBlock(text) {
  * 追加在末尾会失效：已有的 pre-commit 常见写法是“没有相关改动就 exit 0”，
  * reference-transaction 则会先把标准输入读完，追加的块既拿不到输入也可能永远不执行。
  */
-export function insertHookBlock({ file, block }) {
+export function insertHookBlock({ file, block, dropForeign = false }) {
   mkdirSync(join(file, ".."), { recursive: true });
   const existing = existsSync(file) ? readFileSync(file, "utf8") : "";
-  const body = stripHookBlock(existing).replace(/\n+$/, "");
+  // 接管时只留 shebang，其他工具写进来的内容整段移除。
+  const kept = dropForeign ? (existing.startsWith("#!") ? existing.split("\n")[0] : "") : stripHookBlock(existing);
+  const body = kept.replace(/\n+$/, "");
   const lines = body ? body.split("\n") : [];
   const hasShebang = lines.length > 0 && lines[0].startsWith("#!");
   const head = hasShebang ? [lines[0]] : ["#!/bin/sh"];
@@ -232,8 +232,12 @@ harness_enabled() {
     git cat-file -e refs/heads/master:.harness/config.json 2>/dev/null
 }`;
 
-/** 把 harness 接进 git 钩子：pre-commit、commit-msg、reference-transaction。 */
-export function writeGitHooks({ root }) {
+/**
+ * 把 harness 接进 git 钩子：pre-commit、commit-msg、reference-transaction。
+ * takeOver 只作用于 reference-transaction：原有的主分支保护会拒绝 harness 的合并，接管时移除；
+ * pre-commit 与 commit-msg 里的原有脚本（lint、提交信息校验等）一律保留。
+ */
+export function writeGitHooks({ root, takeOver = false }) {
   const dir = gitHooksDir(root);
   const results = [];
 
@@ -267,6 +271,7 @@ ${HOOK_END}`,
   results.push(
     insertHookBlock({
       file: join(dir, "reference-transaction"),
+      dropForeign: takeOver,
       block: `${HOOK_MARK} reference-transaction
 ${HOOK_FUNCTIONS}
 harness_input="$(cat)"
@@ -292,39 +297,51 @@ ${HOOK_END}`,
   return { dir, hooks: results };
 }
 
-/** 判断一条客户端钩子命令是不是 harness 的；也认旧版生成的入口脚本，升级时一并替换。 */
+/**
+ * 判断一条客户端钩子命令是不是 harness 的；也认 0.2 及以前生成在 .harness/bin/ 下的入口脚本。
+ * 只认这两种写法，其他工具的同名脚本不算，是否移除由接管决定。
+ */
 export function isHarnessClientHook(command) {
   const text = String(command ?? "");
-  return /\.harness\/bin\/harness"?\s+hook\s+--client\b/.test(text) || /(claude|codex)-hook\.mjs/.test(text);
+  return /\.harness\/bin\/harness"?\s+hook\s+--client\b/.test(text) || /\.harness\/bin\/(claude|codex)-hook\.mjs/.test(text);
+}
+
+function keepEntries(entries, takeOver) {
+  return (entries ?? []).filter((entry) => {
+    const commands = (entry.hooks ?? []).map((item) => item.command);
+    if (commands.some(isHarnessClientHook)) return false;
+    return !takeOver;
+  });
 }
 
 const CLAUDE_HOOK_COMMAND = '"$CLAUDE_PROJECT_DIR/.harness/bin/harness" hook --client claude';
 const CODEX_HOOK_COMMAND = '"$(git rev-parse --show-toplevel)/.harness/bin/harness" hook --client codex';
 
-/** Claude Code 的 PreToolUse 钩子配置；保留文件里其他设置。 */
-export function writeClaudeSettings({ root }) {
+/**
+ * Claude Code 的 PreToolUse 钩子配置；保留文件里其他设置。
+ * 其他工具的 PreToolUse 钩子默认保留，takeOver 时移除。
+ */
+export function writeClaudeSettings({ root, takeOver = false }) {
   const file = join(root, ".claude", "settings.json");
   mkdirSync(join(file, ".."), { recursive: true });
   const current = existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : {};
   const hook = { type: "command", command: CLAUDE_HOOK_COMMAND };
   const matcher = "Bash|Write|Edit|MultiEdit|NotebookEdit|Read|Grep";
-  const pre = current.hooks?.PreToolUse ?? [];
-  const kept = pre.filter((entry) => !(entry.hooks ?? []).some((item) => isHarnessClientHook(item.command)));
+  const kept = keepEntries(current.hooks?.PreToolUse, takeOver);
   current.hooks = { ...(current.hooks ?? {}), PreToolUse: [...kept, { matcher, hooks: [hook] }] };
   writeFileSync(file, `${JSON.stringify(current, null, 2)}\n`);
   return file;
 }
 
-/** Codex 的项目级钩子文件；与 Claude 同构但用 permissionDecision 表达拒绝。 */
-export function writeCodexHooks({ root }) {
+/** Codex 的项目级钩子文件；与 Claude 同构但用 permissionDecision 表达拒绝。规则同上：其他工具的钩子默认保留。 */
+export function writeCodexHooks({ root, takeOver = false }) {
   const file = join(root, ".codex", "hooks.json");
   mkdirSync(join(file, ".."), { recursive: true });
-  const config = {
-    hooks: {
-      PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command: CODEX_HOOK_COMMAND }] }],
-    },
-  };
-  writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`);
+  const current = existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : {};
+  const kept = keepEntries(current.hooks?.PreToolUse, takeOver);
+  const ours = { matcher: "*", hooks: [{ type: "command", command: CODEX_HOOK_COMMAND }] };
+  current.hooks = { ...(current.hooks ?? {}), PreToolUse: [...kept, ours] };
+  writeFileSync(file, `${JSON.stringify(current, null, 2)}\n`);
   return file;
 }
 
@@ -390,7 +407,7 @@ export function writeDshPlugin({ root }) {
   return dir;
 }
 
-export function installAll({ cwd }) {
+export function installAll({ cwd, takeOver = false }) {
   const root = repoRoot(cwd);
   loadKey();
   const published = publishVersion();
@@ -399,11 +416,82 @@ export function installAll({ cwd }) {
   // 旧版生成过带本机绝对路径的入口脚本，入口改为 shim 后不再需要。
   for (const name of ["claude-hook.mjs", "codex-hook.mjs"]) rmSync(join(root, ".harness", "bin", name), { force: true });
   const shim = writeShim({ root });
-  const hooks = writeGitHooks({ root });
-  const claude = writeClaudeSettings({ root });
-  const codex = writeCodexHooks({ root });
+  const hooks = writeGitHooks({ root, takeOver });
+  const claude = writeClaudeSettings({ root, takeOver });
+  const codex = writeCodexHooks({ root, takeOver });
   const dsh = writeDshPlugin({ root });
   const gitignore = ensureGitignore({ root });
   const shimTracked = git(root, ["ls-files", "--error-unmatch", SHIM_REL]).status === 0;
   return { root, published, shim, hooks, claude, codex, dsh, gitignore, shimTracked };
+}
+
+/**
+ * 只刷新本机这一份：安装版本、所有 Worktree 共用的钩子目录、DSH 插件目录，不碰任何入库文件。
+ * 合并工具在入口或钩子改动合入后，用新入口在主 Worktree 调用它，保证共用钩子与新版本一致。
+ */
+export function installLocal({ cwd }) {
+  const root = repoRoot(cwd);
+  const pinned = pinnedVersion(root);
+  if (pinned && pinned !== packageVersion()) return installPinned({ root, version: pinned });
+  loadKey();
+  const published = publishVersion();
+  const { tracked } = hooksPlacement(root);
+  // 入库的钩子随分支分发，合入时已经是新内容；只刷新共用目录，避免把主 Worktree 改脏。
+  const hooks = tracked ? null : writeGitHooks({ root });
+  const dsh = writeDshPlugin({ root });
+  return { root, published, hooks, hooksTracked: tracked, dsh };
+}
+
+/** 项目入口锁定的版本：优先读 .harness/VERSION，没有时从入口 shim 里解析。 */
+export function pinnedVersion(root) {
+  const file = join(root, ".harness", "VERSION");
+  if (existsSync(file)) return readFileSync(file, "utf8").trim() || null;
+  const shim = shimPath(root);
+  if (!existsSync(shim)) return null;
+  return readFileSync(shim, "utf8").match(/:-([0-9][^}"]*)\}/)?.[1] ?? null;
+}
+
+/**
+ * 在新机器上使用一个已接入的项目：项目锁定的版本不一定是本地 harness 仓库当前的版本。
+ * 从 harness 仓库的标签导出那个版本的代码装进版本目录，再由那个版本自己完成本机刷新，
+ * 这样本机装的门禁与项目锁定的版本一致，也不改动任何入库文件。
+ */
+function installPinned({ root, version }) {
+  let fromTag = false;
+  if (!verifyVersion({ version }).ok) {
+    publishFromTag(version);
+    fromTag = true;
+  }
+  const cli = join(versionDir(version), "src", "cli.mjs");
+  // 0.3 及以前没有 --local，它的 install 会重写入库文件；这时只装版本，共用钩子由当前代码补上。
+  if (existsSync(cli) && readFileSync(cli, "utf8").includes("installLocal")) {
+    const delegated = run(process.execPath, [storeEntry(version), "install", "--local"], { cwd: root });
+    if (delegated.status !== 0) throw new Error(`版本 ${version} 刷新本机失败: ${delegated.stderr.trim()}`);
+    return { root, published: { version }, fromTag, output: delegated.stdout };
+  }
+  const { tracked } = hooksPlacement(root);
+  const hooks = tracked ? null : writeGitHooks({ root });
+  return { root, published: { version }, fromTag, hooks, hooksTracked: tracked };
+}
+
+function publishFromTag(version) {
+  const tag = `v${version}`;
+  if (git(PACKAGE_ROOT, ["rev-parse", "--verify", "--quiet", `refs/tags/${tag}`]).status !== 0) {
+    throw new Error(
+      `项目锁定的版本是 ${version}，但 ${PACKAGE_ROOT} 里没有标签 ${tag}。` +
+        `先在 harness 仓库 git fetch --tags；或者把项目升级到当前版本 ${packageVersion()}（在任务分支运行 harness upgrade）`,
+    );
+  }
+  const tmp = mkdtempSync(join(tmpdir(), "harness-tag-"));
+  try {
+    const tar = join(tmp, "code.tar");
+    const archived = git(PACKAGE_ROOT, ["archive", "--format=tar", `--output=${tar}`, tag, "src", "assets", "bin", "package.json"]);
+    if (archived.status !== 0) throw new Error(`导出标签 ${tag} 失败: ${archived.stderr.trim()}`);
+    const extracted = run("tar", ["-xf", tar, "-C", tmp]);
+    if (extracted.status !== 0) throw new Error(`解开标签 ${tag} 失败: ${extracted.stderr.trim()}`);
+    const published = run(process.execPath, [join(tmp, "bin", "harness.mjs"), "publish"], { cwd: tmp });
+    if (published.status !== 0) throw new Error(`安装版本 ${version} 失败: ${published.stderr.trim()}`);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
 }

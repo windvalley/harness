@@ -1,5 +1,5 @@
 import { userInfo } from "node:os";
-import { gatePaths, loadTrustedProject, mainBranch } from "../lib/config.mjs";
+import { gatePaths, loadGateProject, mainBranch } from "../lib/config.mjs";
 import { matchAny } from "../lib/glob.mjs";
 import { changedPaths, gitOk } from "../lib/git.mjs";
 import { appendLedger, writeRecord } from "../lib/store.mjs";
@@ -13,7 +13,7 @@ export const CONFIRM_KIND = "confirm";
  * 用户在合并前看这一段，就知道这次会改掉哪些门禁文件、规则条数和检查项如何变化。
  */
 export function confirmSummary({ cwd, branch }) {
-  const project = loadTrustedProject(cwd);
+  const project = loadGateProject(cwd, { branch });
   const root = project.root;
   const mainRef = mainBranch(project);
   const planned = planMergeResult({ project, root, branch });
@@ -28,6 +28,8 @@ export function confirmSummary({ cwd, branch }) {
   return {
     branch,
     mainRef,
+    bootstrap: Boolean(project.bootstrap),
+    proposal: project.bootstrap ? describeProposal(project) : null,
     resultTree: planned.resultTree,
     resultCommit: planned.resultCommit,
     fastForward: planned.fastForward,
@@ -63,6 +65,24 @@ function describeRuleDiff({ root, mainCommit, resultCommit }) {
     overlays: overlaidRules(beforeRules.rules, afterRules.rules),
     presetsBefore: before.presets ?? [],
     presetsAfter: after.presets ?? [],
+  };
+}
+
+/** 首次接入时把提议的配置摘要给人看：确认的对象就是它。 */
+function describeProposal(project) {
+  const resolved = safeResolve(project.policy);
+  const merge = project.config.merge ?? {};
+  return {
+    rules: resolved?.rules.length ?? 0,
+    presets: project.policy.presets ?? [],
+    ownRules: (project.policy.rules ?? []).length,
+    disabled: project.policy.disabled ?? [],
+    checks: (project.verify.checks ?? []).length,
+    checkIds: (project.verify.checks ?? []).map((check) => check.id),
+    requireEvidence: merge.requireEvidence !== false,
+    requireReview: merge.requireReview !== false,
+    confirmOnGateChange: project.config.governance?.confirmOnGateChange !== false,
+    postMergeCommand: Array.isArray(merge.postMergeCommand) ? merge.postMergeCommand.join(" ") : null,
   };
 }
 
@@ -114,7 +134,7 @@ function safeJson(root, commit, rel) {
 
 /** 记录一次人工确认。记录绑定合并结果的 tree，内容一变确认即失效。 */
 export function approveConfirm({ cwd, branch, note = "" }) {
-  const project = loadTrustedProject(cwd);
+  const project = loadGateProject(cwd, { branch });
   const root = project.root;
   const summary = confirmSummary({ cwd, branch });
   const { resultTree, ...rest } = summary;
@@ -136,6 +156,14 @@ export function formatSummary(summary) {
     `门禁文件: ${summary.gateTouched.length} 个`,
     ...summary.gateTouched.slice(0, 20).map((path) => `  ${path}`),
   ];
+  if (summary.bootstrap && summary.proposal) {
+    const p = summary.proposal;
+    lines.push("首次接入：确认后这份配置成为主分支的门禁信任根");
+    lines.push(`  拦截规则 ${p.rules} 条（预设 ${p.presets.join(",") || "无"}，项目自有 ${p.ownRules} 条${p.disabled.length ? `，关闭 ${p.disabled.join(",")}` : ""}）`);
+    lines.push(`  验证检查 ${p.checks} 项：${p.checkIds.join(", ")}`);
+    lines.push(`  合并要求：证据 ${p.requireEvidence ? "必需" : "不要求"}，评审 ${p.requireReview ? "必需" : "不要求"}，门禁改动确认 ${p.confirmOnGateChange ? "必需" : "不要求"}`);
+    if (p.postMergeCommand) lines.push(`  合并后命令：${p.postMergeCommand}`);
+  }
   if (summary.ruleDiff) {
     const { before, after, added, removed, overlays = [], presetsBefore, presetsAfter } = summary.ruleDiff;
     lines.push(`拦截规则: ${before ?? "?"} -> ${after ?? "?"}`);

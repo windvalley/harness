@@ -4,7 +4,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { spawn } from "node:child_process";
-import { loadTrustedProject, mainBranch } from "../lib/config.mjs";
+import { loadGateProject, mainBranch } from "../lib/config.mjs";
 import { matchAny, matches } from "../lib/glob.mjs";
 import {
   changedPaths,
@@ -281,9 +281,11 @@ export async function verify({
   recordKey,
   reuse = true,
   keepCheckout = false,
+  gateBranch,
   log = console.error,
 }) {
-  const project = loadTrustedProject(cwd);
+  // 首次接入时主分支还没有配置，按接入分支（gateBranch）提议的配置验证。
+  const project = loadGateProject(cwd, { branch: gateBranch });
   const root = project.root;
   const headCommit = resolveCommit(root, head);
   const baseRef = base ?? mainBranch(project);

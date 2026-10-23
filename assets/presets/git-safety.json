@@ -57,7 +57,7 @@
       "id": "main-write-on-branch",
       "kind": "shell-forbid",
       "when": "on-main",
-      "patterns": ["\\bgit\\s+(merge|rebase|cherry-pick|pull|revert)\\b", "\\bgit\\s+reset\\b"],
+      "patterns": ["\\bgit\\s+(merge|rebase|cherry-pick|pull|revert)(?![\\w-])", "\\bgit\\s+reset(?![\\w-])"],
       "reason": "在主分支上直接合并、变基或重置会绕过证据与评审门禁",
       "fix": "切到任务分支工作，完成后运行 harness merge --branch <任务分支>；任务分支可以 git merge main 吸收最新主分支"
     },

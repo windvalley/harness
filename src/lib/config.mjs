@@ -85,14 +85,56 @@ export function loadGuardProject(cwd) {
 export function loadTrustedProject(cwd) {
   const root = repoRoot(cwd);
   const project = loadProject(root, { fromRef: trustedMainRef(root), root });
-  // 配置里的主分支名写错（典型情况：git init 用了 main，配置写了 master）时直接说清楚，
-  // 否则后续每一步都会报 rev-parse 失败，看不出是配置问题。
+  checkMainBranchName(root, project);
+  return project;
+}
+
+// 配置里的主分支名写错（典型情况：git init 用了 main，配置写了 master）时直接说清楚，
+// 否则后续每一步都会报 rev-parse 失败，看不出是配置问题。
+function checkMainBranchName(root, project) {
   const configured = project.config.mainBranch;
   if (configured && !refExists(root, `refs/heads/${configured}`)) {
     const actual = trustedMainRef(root);
     throw new Error(`配置里的 mainBranch 是 ${configured}，但仓库里只有 ${actual}。把 .harness/config.json 的 mainBranch 改成 ${actual} 并提交`);
   }
-  return project;
+}
+
+export function harnessOnMain(root) {
+  return showBlob(root, trustedMainRef(root), `${PROJECT_DIR}/config.json`) !== null;
+}
+
+/**
+ * 门禁流程（verify、review、confirm、merge）使用的配置。
+ * 主分支已接入时一律取主分支，这是信任根；
+ * 主分支还没有配置时处于首次接入阶段，没有信任根可用，只能按接入分支提议的配置执行，
+ * 由合并前的人工确认来认可这份配置，因此返回结果带 bootstrap 标记，合并时强制要求确认。
+ */
+export function loadGateProject(cwd, { branch } = {}) {
+  const root = repoRoot(cwd);
+  if (harnessOnMain(root)) return loadTrustedProject(root);
+  const mainRef = trustedMainRef(root);
+  if (!branch) {
+    throw new Error(`${mainRef} 上还没有 .harness/config.json：首次接入阶段请用 --branch <接入分支> 指定配置来源`);
+  }
+  const project = loadProject(root, { fromRef: branch, root });
+  checkMainBranchName(root, project);
+  return { ...project, bootstrap: true, bootstrapRef: branch };
+}
+
+/**
+ * 只读命令（doctor、rules、golden、check）使用的配置。
+ * 主分支已接入时取主分支；首次接入阶段主分支还没有配置，退回当前工作区，并带 bootstrap 标记。
+ */
+export function loadCurrentProject(cwd) {
+  const root = repoRoot(cwd);
+  let onMain = false;
+  try {
+    onMain = harnessOnMain(root);
+  } catch {
+    onMain = false;
+  }
+  if (onMain) return loadTrustedProject(root);
+  return { ...loadProject(root, { root }), bootstrap: true };
 }
 
 export function mainBranch(project) {
@@ -118,6 +160,9 @@ export function gatePaths(project) {
   const extra = project.config.governance?.gatePaths ?? [];
   return [...GATE_FILES, ...extra];
 }
+
+// 执行器入口：入口版本、客户端钩子配置与钩子目录。改动合入后需要在主 Worktree 刷新本机钩子并提示客户端重新加载。
+export const ENTRY_FILES = [".harness/bin/**", ".claude/settings.json", ".codex/hooks.json", ".githooks/**", ".husky/**", "**/.husky/**"];
 
 export function acceptanceDir(project) {
   return `${PROJECT_DIR}/${project.config.intent?.dir ?? "acceptance"}`;

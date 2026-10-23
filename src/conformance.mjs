@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { acceptanceDir, loadTrustedProject } from "./lib/config.mjs";
+import { acceptanceDir, loadCurrentProject } from "./lib/config.mjs";
 import { isLinkedWorktree, repoRoot } from "./lib/git.mjs";
 import { readLedger } from "./lib/store.mjs";
 import { evaluateCall } from "./policy/engine.mjs";
@@ -109,7 +109,7 @@ function checkStability(root) {
 }
 
 export function conformance({ cwd = process.cwd() } = {}) {
-  const project = loadTrustedProject(cwd);
+  const project = loadCurrentProject(cwd);
   const root = repoRoot(cwd);
   const resolved = resolvePolicy(project.policy);
   const checks = [

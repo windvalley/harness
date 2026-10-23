@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { isAbsolute, join, relative, sep } from "node:path";
 
 export const ZERO_OID = "0000000000000000000000000000000000000000";
 
@@ -83,8 +84,16 @@ export function changedPaths(cwd, base, head) {
   return result.stdout.split("\0").filter(Boolean);
 }
 
-export function isClean(cwd) {
-  return gitOk(cwd, ["status", "--porcelain", "--untracked-files=normal"]) === "";
+// harness 在本机生成、不入库的目录。首次接入时主分支还没有忽略它们，不能因此把主 Worktree 判成不洁净。
+export const LOCAL_ONLY_PATHS = [".harness/dsh-plugin"];
+
+export function statusShort(cwd, { exclude = LOCAL_ONLY_PATHS } = {}) {
+  const spec = exclude.length > 0 ? ["--", ".", ...exclude.map((path) => `:(exclude)${path}`)] : [];
+  return gitOk(cwd, ["status", "--porcelain", "--untracked-files=normal", ...spec]);
+}
+
+export function isClean(cwd, options) {
+  return statusShort(cwd, options) === "";
 }
 
 export function currentBranch(cwd) {
@@ -95,6 +104,20 @@ export function currentBranch(cwd) {
 export function showBlob(cwd, ref, path) {
   const result = git(cwd, ["cat-file", "blob", `${ref}:${path}`]);
   return result.status === 0 ? result.stdout : null;
+}
+
+/**
+ * git 钩子目录在哪、是否随分支入库。
+ * 入库的钩子目录（husky、.githooks 等）随分支分发，改动要等合入主分支才生效；
+ * 不入库的目录（默认的 .git/hooks）所有 Worktree 共用，写入立即对全部 Worktree 生效。
+ */
+export function hooksPlacement(root) {
+  const configured = git(root, ["config", "--get", "core.hooksPath"]).stdout.trim();
+  const dir = configured ? (isAbsolute(configured) ? configured : join(root, configured)) : join(commonDir(root), "hooks");
+  const rel = relative(root, dir).split(sep).join("/");
+  const inside = Boolean(configured) && rel !== "" && !rel.startsWith("..") && !isAbsolute(rel) && rel !== ".git" && !rel.startsWith(".git/");
+  const tracked = inside && git(root, ["ls-files", "--", rel]).stdout.trim() !== "";
+  return { dir, rel: inside ? rel : null, tracked };
 }
 
 export function blobOids(cwd, ref, paths) {

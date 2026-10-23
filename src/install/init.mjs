@@ -1,9 +1,10 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { git, gitOk, refExists, repoRoot } from "../lib/git.mjs";
+import { git, gitOk, hooksPlacement, refExists, repoRoot } from "../lib/git.mjs";
 import { PACKAGE_ROOT } from "../policy/resolve.mjs";
 import { installAll, publishVersion, storeEntry, versionDir } from "./install.mjs";
 import { assetPath, managedBlockBody, packageVersion, writeManagedBlock, writeRules } from "./managed.mjs";
+import { survey } from "./survey.mjs";
 
 function defaultConfig({ mainBranch }) {
   return {
@@ -134,8 +135,38 @@ export function detectMainBranch(root) {
   return "main";
 }
 
-export function initProject({ cwd = process.cwd(), force = false } = {}) {
+/** 计算 init 会写哪些文件，用于预览；与真正执行共用同一份判断。 */
+function plannedWrites(root, { force }) {
+  const items = [];
+  const consider = (rel) => items.push({ rel, action: existsSync(join(root, rel)) ? "modify" : "create" });
+  for (const name of ["config.json", "policy.json", "verify.json", "golden/tasks.json"]) {
+    const rel = `.harness/${name}`;
+    if (force || !existsSync(join(root, rel))) consider(rel);
+  }
+  for (const rel of [".harness/bin/harness", ".harness/rules/", ".harness/templates/", ".claude/settings.json", ".codex/hooks.json", ".gitignore", "AGENTS.md"]) {
+    consider(rel);
+  }
+  const { rel: hooksRel, tracked } = hooksPlacement(root);
+  if (tracked) for (const name of ["pre-commit", "commit-msg", "reference-transaction"]) consider(`${hooksRel}/${name}`);
+  return items;
+}
+
+function stackOf(verify) {
+  const generic = new Set(["lint", "harness-golden", "manual-check", "visual-hint"]);
+  return verify.checks.map((check) => check.id).filter((id) => !generic.has(id));
+}
+
+/**
+ * 接入或升级一个项目。
+ * dryRun 只调查与预览，不写任何文件；takeOver 时由 harness 接管其他工具的主分支保护与 Agent 拦截钩子。
+ */
+export function initProject({ cwd = process.cwd(), force = false, dryRun = false, takeOver = false } = {}) {
   const root = repoRoot(cwd);
+  const report = survey({ root });
+  const stack = stackOf(starterVerify({ cwd: root }));
+  const planned = plannedWrites(root, { force });
+  if (dryRun) return { root, dryRun: true, report, stack, planned };
+
   const mainBranch = detectMainBranch(root);
   const dir = join(root, ".harness");
   mkdirSync(dir, { recursive: true });
@@ -166,8 +197,8 @@ export function initProject({ cwd = process.cwd(), force = false } = {}) {
 
   writeRules({ root, version });
   writeManagedBlock({ root, body: managedBlockBody() });
-  const install = installAll({ cwd: root });
-  return { root, version, written, install };
+  const install = installAll({ cwd: root, takeOver });
+  return { root, version, written, install, report, stack, planned, takeOver };
 }
 
 export function upgradeProject({ cwd = process.cwd() } = {}) {

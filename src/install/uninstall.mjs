@@ -1,17 +1,12 @@
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import { commonDir, git, repoRoot } from "../lib/git.mjs";
-import { isHarnessClientHook, stripHookBlock } from "./install.mjs";
+import { repoRoot } from "../lib/git.mjs";
+import { gitHooksDir, isHarnessClientHook, stripHookBlock } from "./install.mjs";
 import { removeManagedBlock } from "./managed.mjs";
 
 const HOOK_MARK = "# harness:hook";
 const CLIENT_FILES = [".claude/settings.json", ".codex/hooks.json"];
-
-function gitHooksDir(root) {
-  const hooksPath = git(root, ["config", "--get", "core.hooksPath"]).stdout.trim();
-  return hooksPath ? join(root, hooksPath) : join(commonDir(root), "hooks");
-}
 
 /** 纯函数式地算出要删的内容，dry-run 与真实执行共用同一份判断。 */
 function plan({ root }) {
