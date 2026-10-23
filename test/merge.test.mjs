@@ -125,7 +125,8 @@ describe("验证与证据", () => {
     repo.branch("task/plan", { "src/a.js": "x\n", "docs/x.md": "d\n" });
     const result = repo.cli("verify", "--plan", "--branch", "task/plan");
     assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stdout, /RUN {2}lint/);
+    assert.match(result.stdout, /RUN {2}unit/);
+    assert.match(result.stdout, /TODO lint/);
     assert.match(result.stdout, /TODO manual-check/);
     assert.match(result.stdout, /HINT visual-hint/);
     const key = git(repo.root, "rev-parse", "task/plan");

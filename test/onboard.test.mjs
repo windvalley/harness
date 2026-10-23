@@ -233,6 +233,24 @@ describe("另一台机器使用已接入的项目", () => {
     assert.equal(version.status, 0, version.stderr);
   });
 
+  test("锁定的版本不是当前版本时，从 harness 仓库的标签安装那一版", (t) => {
+    const harnessRoot = join(repoCliPath(), "..", "..");
+    if (sh(harnessRoot, "git", ["rev-parse", "--verify", "--quiet", "refs/tags/v0.3.0"]).status !== 0) {
+      t.skip("harness 仓库里没有标签 v0.3.0");
+      return;
+    }
+    const repo = makeRepo();
+    repos.push(repo);
+    write(repo.root, ".harness/VERSION", "0.3.0\n");
+    const store = join(repo.root, "..", "store-pinned");
+    const env = { ...repo.env, HARNESS_STORE: store };
+    const local = sh(repo.root, process.execPath, [repoCliPath(), "install", "--local"], env);
+    assert.equal(local.status, 0, local.stderr);
+    assert.match(local.stdout, /已从 harness 仓库的标签 v0\.3\.0 安装/);
+    const manifest = JSON.parse(readFileSync(join(store, "0.3.0", "MANIFEST.json"), "utf8"));
+    assert.equal(manifest.version, "0.3.0", "装进版本目录的是标签里的代码，不是当前代码");
+  });
+
   test("锁定的版本在本机没有标签时说明怎么办", () => {
     const repo = makeRepo();
     repos.push(repo);

@@ -102,10 +102,17 @@ const VERIFY = {
   // 与 init 生成的起始检查保持一致，这样起始黄金任务在夹具里同样适用。
   checks: [
     {
-      id: "lint",
+      id: "unit",
       tier: "gate",
       when: ["**/*.js", "**/*.ts", "**/*.tsx", "**/*.go", "**/*.py", "**/*.rs", "**/*.java", "src/**", "lib/**", "app/**"],
       cmd: ["node", "-e", "process.exit(0)"],
+    },
+    {
+      id: "lint",
+      tier: "extended",
+      when: ["**/*.js", "**/*.ts", "**/*.tsx", "**/*.go", "**/*.py", "**/*.rs", "**/*.java", "src/**", "lib/**", "app/**"],
+      reason: "起始占位，尚未配置项目的 lint 命令",
+      howToVerify: "在 .harness/verify.json 把 lint 的 cmd 改成项目实际的 lint 命令，tier 改为 gate",
     },
     { id: "manual-check", tier: "extended", when: ["src/**"], reason: "需要人工确认的检查，示例项", howToVerify: "按项目实际情况填写补验命令" },
     { id: "visual-hint", tier: "advisory", when: ["src/**"], hint: "界面类改动建议人工过一眼，示例项" },

@@ -2,6 +2,36 @@
 
 按 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 组织，版本号遵循语义化版本。
 
+## [0.4.0] - 2026-10-23
+
+接入已有项目不再需要人工清单：一条命令调查现状，首次接入走和日常任务相同的流程，人只在合并前确认一次。
+
+### 新增
+
+- `init --dry-run` 只调查不写入：列出钩子目录与原有脚本、原有的主分支保护与 Agent 拦截、`AGENTS.md` 里其他工具的托管块、会被忽略的入口、被占用的数据目录、可退役的目录，以及将写入的文件和转换建议。
+- `init --take-over` 接管原有的主分支保护与 Agent 拦截；`pre-commit`、`commit-msg` 里原有的脚本始终保留。只做通用处理，不识别、不转换原有工具的配置格式。
+- 首次接入走 `verify`、`review`、`confirm`、`merge`：主分支还没有门禁配置时，按接入分支提议的配置执行，强制人工确认，确认后快进合入成为主分支的信任根。被原有主分支保护拒绝时，主 Worktree 恢复原样并提示加 `--take-over`。
+- 合并改动了入口或钩子时，用新入口在主 Worktree 刷新本机钩子，并列出客户端那一侧需要人做的事（重启 Claude Code 会话、在 Codex 里信任钩子、注册 DSH 插件）。
+- `install --local` 只刷新本机：按项目锁定的版本安装代码（不是当前版本时从 harness 仓库的对应标签导出），刷新共用钩子与插件目录，不改动入库文件。用于新成员或新机器。
+- `gate-self` 新增 `confirm-human-only`：带 `--yes` 的确认只能由人执行。
+- `check` 支持 `--on-main`、`--linked-worktree`。
+
+### 变更
+
+- 入口找不到锁定的版本时，Claude Code 与 Codex 的实时拦截一律拒绝，并提示安装命令。原先退出码 3 被 Claude Code 当成非阻塞错误，等于放行。git 提交检查仍是提示后放行，主分支保护仍拒绝。
+- 起始检查里的通用 `lint` 改为 `extended` 占位，配置真实命令前记入未执行项，不再以 `true` 冒充通过。
+- `.git/harness` 已被其他工具占用时，数据改放 `.git/harness.d`；目录里写归属标记，0.3 及以前留下、能被本机密钥校验的数据继续沿用。
+- 规则文档只描述实际启用的规则；入口与钩子由 `harness install`、`init`、`upgrade` 生成，Agent 可以在任务分支运行它们，合并前由人确认。
+- `publish` 不再接受与当前代码不同的版本号。
+- `doctor`、`golden`、`conformance` 在首次接入阶段按工作区配置运行。
+
+### 修复
+
+- `git-safety` 把主分支上的 `git merge-base`、`git merge-tree` 误判成合并。
+- `core.hooksPath` 为绝对路径时钩子目录拼接错误。
+- `.codex/hooks.json` 里其他工具的钩子在重装时被整份覆盖。
+- 本机生成的 `.harness/dsh-plugin/` 在首次接入时让主 Worktree 被判成不洁净。
+
 ## [0.3.0] - 2026-10-23
 
 在多 Worktree 项目（opsagent）上演练迁移时发现的问题，涉及钩子接入方式，已接入的项目需要重新运行 `harness install` 并提交入口。

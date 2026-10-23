@@ -19,19 +19,20 @@
 
 ## 被拦截时
 
-拦截信息里带 `正确做法`，按它改道，不要尝试绕过。常见项：
+拦截信息里带 `正确做法`，按它改道，不要尝试绕过。
+实际生效的规则以 `.harness/policy.json` 为准，`harness rules` 可以列出全部规则。预设规则的常见项：
 
-- 生成文件：改真实源文件后运行生成器。
-- 基线、归档与迁移账本：新增迁移，不改历史。
 - 密钥文件：只读同名 `.example`。
 - 不可逆命令：列出具体对象请用户确认。
+- 主分支：只通过 `harness merge` 更新。
+
+项目自己加的规则（例如生成文件、迁移基线）同样按拦截信息里的正确做法处理。
 
 ## 门禁改动
 
 `.harness/config.json`、`policy.json`、`verify.json`、`rules/**` 允许直接修改，改动会被记录并在合并前要求人工确认（`harness confirm --branch <分支>`）。
-`.harness/bin/**` 是执行器入口，只由 `harness install` 生成；它决定跑哪一份门禁代码，因此改动同样在合并前要求确认，不要手改。
-
-`.husky/**`、`.githooks/**`、`.claude/settings.json`、`.codex/hooks.json` 是客户端与 git 钩子的入口，Agent 不能改写；需要重装时由用户运行 `harness install`。
+`.harness/bin/**` 是执行器入口，`.husky/**`、`.githooks/**`、`.claude/settings.json`、`.codex/hooks.json` 是客户端与 git 钩子的入口。
+它们只由 `harness install`（或 `init`、`upgrade`）生成，Agent 不能手改，但可以在任务分支运行这些命令重新生成；改动同样在合并前要求人工确认。
 
 ## 多个 Worktree
 

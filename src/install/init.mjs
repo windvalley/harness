@@ -92,9 +92,11 @@ export function starterVerify({ cwd = process.cwd() } = {}) {
   // 通用起始检查：只匹配常见源码扩展名，避免文档改动也触发，从而保留仅文档的轻量路径。
   checks.push({
     id: "lint",
-    tier: "gate",
+    // 起始占位：没有配置真实命令前记入未执行项，不能让证据显示“lint 通过”。
+    tier: "extended",
+    reason: "起始占位，尚未配置项目的 lint 命令",
+    howToVerify: "在 .harness/verify.json 把 lint 的 cmd 改成项目实际的 lint 命令，tier 改为 gate",
     when: ["**/*.js", "**/*.ts", "**/*.tsx", "**/*.go", "**/*.py", "**/*.rs", "**/*.java", "src/**", "lib/**", "app/**"],
-    cmd: ["true"],
   });
   // 改了规则或用例的分支，在它自己的检出里按它自己的配置重放黄金任务，退化当场暴露。
   checks.push({ id: "harness-golden", tier: "gate", when: [".harness/**"], cmd: [".harness/bin/harness", "golden", "--worktree"] });

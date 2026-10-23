@@ -6,44 +6,115 @@
 
 仓库托管在 <https://github.com/windvalley/harness>。
 
+## 安装
+
+需要 Node.js 20 及以上和 git，没有其他依赖。
+
+```bash
+git clone https://github.com/windvalley/harness.git ~/github/harness
+```
+
+harness 不需要全局安装。下面的命令都用 `node ~/github/harness/bin/harness.mjs` 执行；项目接入后，日常命令改用项目里的入口 `.harness/bin/harness`。
+克隆到别的目录也可以，把命令里的路径换掉即可。
+
 ## 接入一个项目
 
-**空项目或新项目：**
+接入在任务分支里完成，走一次和日常任务相同的流程，合并前由人确认一次。
 
 ```bash
-node ~/github/harness/bin/harness.mjs init
-```
+cd <项目>
+git switch -c chore/harness-onboard
 
-**已有其他门禁的项目，希望换成 harness：**
-
-```bash
-# 先预览，了解现状与将写入的文件
+# 1. 预览：调查现状，列出会写入的文件、会冲突的原有工具和处理建议，不写任何文件
 node ~/github/harness/bin/harness.mjs init --dry-run
 
-# 确认后接管：移除原有主分支保护与 Agent 拦截，换成 harness 的
-node ~/github/harness/bin/harness.mjs init --take-over
+# 2. 写入。项目里已有其他门禁时加 --take-over，由 harness 接管主分支保护与 Agent 拦截
+node ~/github/harness/bin/harness.mjs init
+
+# 3. 除 .harness/dsh-plugin/ 外全部提交，包括入口 .harness/bin/harness
+git add -A && git commit
+
+# 4. 验证、独立评审、人工确认、合并
+.harness/bin/harness verify  --branch chore/harness-onboard
+.harness/bin/harness review  --branch chore/harness-onboard
+.harness/bin/harness confirm --branch chore/harness-onboard          # 看摘要
+.harness/bin/harness confirm --branch chore/harness-onboard --yes    # 由人执行
+.harness/bin/harness merge   --branch chore/harness-onboard
 ```
 
-接管之后原有工具的配置文件保持原样，可以在接入提交合入之后另开任务删除，也可以与接入一起删。原有工具里的项目规则需要人工判断是否还要：仍需要的改写进 `.harness/policy.json`、`.harness/verify.json`、`.harness/golden/tasks.json`；这些文件 Agent 可以直接改，与接入放在同一个分支里一起过目。
+第 1 到第 4 步都可以交给 Agent 做，只有带 `--yes` 的确认必须由人执行，Agent 运行它会被拦截。
+在 Claude Code 里，可以在输入框用 `!` 前缀直接执行这一条。
 
-`init` 做以下几件事：
+合并时，主分支上还没有门禁配置，harness 按接入分支提议的配置完成验证，确认后以快进方式合入，这份配置从此成为主分支的信任根。
+合并结束会列出客户端那一侧需要人做的事，例如重启正在运行的 Claude Code 会话、在 Codex 里信任钩子。
 
-1. 在项目里写出 `.harness/`：`config.json`、`policy.json`、`verify.json`、`golden/tasks.json`、`rules/`、`templates/`、`acceptance/`。
-2. 把当前版本代码装进 `~/.local/share/harness/versions/<版本>/`，并写入内容哈希清单。
-3. 写出入口 `.harness/bin/harness`，接入 `pre-commit`、`commit-msg`、`reference-transaction` 三个 git 钩子。harness 的块插在钩子最前面，原有脚本（例如 husky 的 lint-staged）原样保留在后面。
-4. 写出 `.claude/settings.json` 与 `.codex/hooks.json` 的拦截配置，生成 DSH 插件目录 `.harness/dsh-plugin/`，在 `AGENTS.md` 写入托管块，并把 `.harness/dsh-plugin/` 加进 `.gitignore`。
+没有其他门禁、也不需要评审的小项目，可以直接在主分支上运行 `init` 并提交，提交后即生效。
 
-除 `.harness/dsh-plugin/` 外全部提交，包括入口 `.harness/bin/harness`。入口只依赖 `$HOME` 与版本号，入库后每个 Linked Worktree 检出即可用，不必逐个安装。提交后运行 `.harness/bin/harness doctor` 自检。
+### 已有其他门禁的项目
 
-git 钩子一律调用主 Worktree 的入口，并且只在主分支上已有 `.harness/config.json` 时生效：接入前的自举提交不受影响，没有接入 harness 的仓库共用同一份钩子也不受影响。
+`init --dry-run` 会列出原有工具留下的东西，并按下面的方式处理：
 
-从 0.2 及以前升级的项目：重新运行 `harness install`，它会去掉 `.gitignore` 里的 `.harness/bin/`、删除旧的入口脚本、把钩子块移到最前面，然后提交 `.harness/bin/harness`。
+| 发现 | 默认 | 加 `--take-over` |
+| --- | --- | --- |
+| git 钩子里原有的脚本（lint、提交信息校验等） | 保留，harness 的检查插在最前面 | 同左 |
+| `reference-transaction` 里原有的主分支保护 | 保留；合并时若被它拒绝，提示加 `--take-over` 重来 | 移除，由 harness 接管 |
+| `.claude/settings.json`、`.codex/hooks.json` 里原有的 Agent 拦截 | 保留，两套拦截同时生效 | 移除，由 harness 接管 |
+| `.gitignore` 会连带忽略入口（例如全局的 `bin/`） | 自动放行入口 | 同左 |
+| `.git/harness` 已被其他工具占用 | harness 的数据改放 `.git/harness.d`，原有数据不动 | 同左 |
+| 被钩子或 `AGENTS.md` 托管块引用的目录 | 列为可退役，不自动删除 | 同左 |
+
+harness 不认识原有工具的配置格式，也不自动转换。
+原有工具里仍需要的规则，改写进 `.harness/policy.json`（禁令）、`.harness/verify.json`（检查映射）和 `.harness/golden/tasks.json`（回归用例）。
+这些文件 Agent 可以直接改，建议与接入放在同一个分支，人工确认时一起过目；否则接管之后、补上规则之前，那些规则不再生效。
+原有工具的代码与配置在接入合入后另开任务删除。
+
+钩子目录入库的项目（例如 husky），钩子改动随分支走，合入主分支后才生效；用默认 `.git/hooks` 的项目，钩子写入后立即对所有 Worktree 生效，只是在主分支有门禁配置之前不做任何检查。
+
+### init 写了什么
+
+1. `.harness/`：`config.json`、`policy.json`、`verify.json`、`golden/tasks.json`、`rules/`、`templates/`、`acceptance/`。起始检查按技术栈生成（`go.mod`、`frontend/package.json`、`Cargo.toml`、pytest 配置），通用的 `lint` 是占位，在配置真实命令前记入未执行项，不会冒充通过。
+2. 当前版本的代码装进 `~/.local/share/harness/versions/<版本>/`，并写入内容哈希清单。
+3. 入口 `.harness/bin/harness`，锁定版本号。入口入库，每个 Linked Worktree 检出即可用。
+4. `pre-commit`、`commit-msg`、`reference-transaction` 三个 git 钩子。harness 的块插在最前面，调用主 Worktree 的入口，只在主分支上已有 `.harness/config.json` 时生效。
+5. `.claude/settings.json` 与 `.codex/hooks.json` 的拦截配置，其他设置原样保留。
+6. `AGENTS.md` 里的托管块，`.gitignore` 里的 `.harness/dsh-plugin/`，以及本机的 DSH 插件目录。
 
 DeepSeek Harness 需要在你自己的终端注册一次插件：
 
 ```bash
 dsh plugin --profile <名称> add <项目路径>/.harness/dsh-plugin
 ```
+
+## 新成员或新机器
+
+项目接入后，入口和钩子随仓库分发，但门禁代码装在各自的用户目录里。克隆项目后运行一次：
+
+```bash
+cd <项目>
+node ~/github/harness/bin/harness.mjs install --local
+```
+
+它读取项目锁定的版本，从 harness 仓库对应的标签（例如 `v0.4.0`）安装这一版代码，刷新本机共用的钩子与插件目录，不改动任何入库文件。
+找不到标签时先在 harness 仓库运行 `git fetch --tags`。
+
+装好之前：
+
+- Claude Code 与 Codex 的实时拦截拒绝一切操作，并提示上面这条命令。没有门禁的 Agent 不应该能动这个项目，因此这里不放行。
+- git 提交照常进行，只打印提示；主分支保护照常拒绝。
+
+## 升级
+
+```bash
+git -C ~/github/harness pull --tags
+cd <项目> && git switch -c chore/harness-upgrade
+node ~/github/harness/bin/harness.mjs upgrade
+git add -A && git commit
+```
+
+然后按日常任务流程 verify、review、confirm、merge。
+`upgrade` 安装新版本、改写入口锁定的版本、重写 `rules/` 与 `templates/`，保留 `config.json`、`policy.json`、`verify.json`。
+入口版本属于门禁改动，合并前需要人确认；合并后 harness 用新入口自动刷新主 Worktree 的本机钩子，并列出客户端需要做的事。
+其他成员拉到新的主分支后，各自运行一次 `install --local`。
 
 ## 客户端支持
 
@@ -127,15 +198,6 @@ git 层（`pre-commit`、`commit-msg`、`reference-transaction`）对所有客�
 - 签名密钥在你的用户目录里，能防误操作和提示注入，防不了拥有本机权限的人。
 - 每条记录带密钥指纹。记录失效时会区分“密钥已轮换”“密钥丢失”“内容被改动”，并给出该重跑的命令。
 - 密钥损坏或怀疑泄露时，由人在自己的终端运行 `harness key rotate --yes`：旧密钥移入 `retired/`，已有记录全部作废，进行中的分支重新 verify 与 review 即可。Agent 只能运行不带 `--yes` 的预览。
-
-## 升级
-
-```bash
-cd ~/github/harness && git pull     # 或修改后提交
-cd <项目> && node ~/github/harness/bin/harness.mjs upgrade
-```
-
-`upgrade` 安装新版本、重写 `rules/` 与 `templates/`，保留 `config.json`、`policy.json`、`verify.json`。
 
 ## 命令
 

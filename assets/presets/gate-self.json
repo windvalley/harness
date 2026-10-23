@@ -17,7 +17,7 @@
       ],
       "allow": [],
       "reason": "门禁的执行器入口不由 Agent 修改，否则可以关掉拦截而不留下改动记录",
-      "fix": "需要调整入口时由用户执行 harness install 重新生成；规则与配置可以直接改，合并前会由用户确认",
+      "fix": "入口只由 harness install、init 或 upgrade 生成，可以在任务分支运行它们；规则与配置可以直接改；这些改动合并前都由用户确认",
       "layer": "agent"
     },
     {
@@ -30,7 +30,7 @@
         "\\b(node|python3?|ruby|bash|sh)\\b\\s+(-e|-c|-p)\\b[^|;&]*(\\.harness/(bin|hooks)/|\\.claude/settings|\\.codex/hooks\\.json|\\.githooks/|\\.husky/)"
       ],
       "reason": "不能用命令行改写门禁的执行器入口",
-      "fix": "需要重装入口时由用户执行 harness install"
+      "fix": "在任务分支运行 harness install 重新生成入口，合并前由用户确认"
     },
     {
       "id": "harness-bypass-switches",

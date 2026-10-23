@@ -88,6 +88,7 @@
         { "kind": "shell", "command": "HARNESS_MERGE_TOKEN=1 git commit -m x", "expect": "deny", "rule": "harness-bypass-switches" },
         { "kind": "shell", "command": "HARNESS_MAIN_BYPASS=1 git commit -m x", "expect": "deny", "rule": "harness-bypass-switches" },
         { "kind": "shell", "command": "HARNESS_STORE=/tmp/x .harness/bin/harness merge --branch a", "expect": "deny", "rule": "harness-bypass-switches" },
+        { "kind": "shell", "command": "HARNESS_VERSION=0.3.0 .harness/bin/harness merge --branch a", "expect": "deny", "rule": "harness-bypass-switches" },
         { "kind": "shell", "command": "git config core.hooksPath /dev/null", "expect": "deny", "rule": "harness-bypass-switches" },
         { "kind": "write", "path": ".harness/bin/harness", "content": "x", "expect": "deny", "rule": "protect-executor-entry" },
         { "kind": "write", "path": "frontend/.husky/pre-commit", "content": "x", "expect": "deny", "rule": "protect-executor-entry" },
@@ -118,10 +119,10 @@
     },
     {
       "id": "g11-source-change-uses-gate",
-      "title": "改源码选中必过检查",
+      "title": "改源码时未配置的 lint 记入未执行项，不冒充通过",
       "kind": "verify-plan",
       "changed": ["src/app.js"],
-      "expectChecks": ["lint"],
+      "expectNotExecuted": ["lint", "manual-check"],
       "expectDocOnly": false
     },
     {
@@ -138,7 +139,7 @@
       "kind": "verify-plan",
       "changed": ["src/removed.js"],
       "deleted": true,
-      "expectChecks": ["lint"],
+      "expectNotExecuted": ["lint"],
       "expectDocOnly": false
     },
     {
@@ -148,7 +149,7 @@
       "changed": ["src/removed.js", "docs/x.md"],
       "deletedPaths": ["src/removed.js"],
       "expectDocOnly": false,
-      "expectChecks": ["lint"]
+      "expectNotExecuted": ["lint"]
     },
     {
       "id": "g15-human-confirm-and-readonly-git",

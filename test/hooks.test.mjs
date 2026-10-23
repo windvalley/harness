@@ -122,6 +122,27 @@ describe("安装与自检", () => {
     assert.match(readFileSync(join(repo.root, ".gitignore"), "utf8"), /\.harness\/dsh-plugin\//);
   });
 
+  test("重装 Codex 钩子保留其他工具的条目，--take-over 才移除", () => {
+    const repo = setup();
+    const file = join(repo.root, ".codex/hooks.json");
+    const config = JSON.parse(readFileSync(file, "utf8"));
+    config.hooks.PreToolUse.unshift({ matcher: "Bash", hooks: [{ type: "command", command: "other-guard" }] });
+    config.hooks.PostToolUse = [{ matcher: "*", hooks: [{ type: "command", command: "other-log" }] }];
+    writeFileSync(file, JSON.stringify(config));
+
+    assert.equal(repo.cli("install").status, 0);
+    const kept = JSON.parse(readFileSync(file, "utf8")).hooks;
+    const commands = (entries) => entries.flatMap((entry) => entry.hooks.map((hook) => hook.command));
+    assert.ok(commands(kept.PreToolUse).includes("other-guard"));
+    assert.equal(commands(kept.PreToolUse).filter((command) => /hook --client codex/.test(command)).length, 1, "harness 条目只有一份");
+    assert.deepEqual(commands(kept.PostToolUse), ["other-log"]);
+
+    assert.equal(repo.cli("install", "--take-over").status, 0);
+    const taken = JSON.parse(readFileSync(file, "utf8")).hooks;
+    assert.ok(!commands(taken.PreToolUse).includes("other-guard"));
+    assert.deepEqual(commands(taken.PostToolUse), ["other-log"], "接管只动拦截，不动其他事件");
+  });
+
   test("DSH 插件被复制到项目后仍能加载", () => {
     const repo = setup();
     const entry = join(repo.root, ".harness/dsh-plugin/index.mjs");
@@ -556,7 +577,26 @@ describe("多 Worktree 与已有钩子", () => {
     git(repo.root, "checkout", "-q", "main", env);
     const refused = sh(repo.root, "git", ["update-ref", "refs/heads/main", target], env);
     assert.notEqual(refused.status, 0, "主分支保护不能因为没装版本而放开");
-    assert.match(refused.stderr, /本机没有安装入口锁定的版本/);
+    assert.match(refused.stderr, /本机没有安装门禁锁定的版本/);
+  });
+
+  test("本机没装入口锁定的版本时，实时拦截一律拒绝，不能静默放行", () => {
+    const repo = setup();
+    const env = { ...repo.env, HARNESS_STORE: join(repo.root, "..", "empty-store") };
+    const shim = join(repo.root, ".harness/bin/harness");
+    const payload = JSON.stringify({ tool_name: "Bash", tool_input: { command: "cat .env" }, cwd: repo.root });
+
+    // Claude Code 只有退出码 2 才拦截，其他非零退出码按非阻塞错误继续执行。
+    const claude = sh(repo.root, shim, ["hook", "--client", "claude"], env, payload);
+    assert.equal(claude.status, 2, claude.stderr);
+    assert.match(claude.stderr, /本机没有安装门禁锁定的版本/);
+
+    // Codex 读标准输出里的 permissionDecision。
+    const codex = sh(repo.root, shim, ["hook", "--client", "codex"], env, payload);
+    assert.equal(codex.status, 0, codex.stderr);
+    const decision = JSON.parse(codex.stdout).hookSpecificOutput;
+    assert.equal(decision.permissionDecision, "deny");
+    assert.match(decision.permissionDecisionReason, /本机没有安装门禁锁定的版本/);
   });
 
   test("没有接入 harness 的仓库共用这些钩子时不受影响", () => {
