@@ -64,11 +64,38 @@ export function checkStaged({ root, resolved }) {
   return { decision: "allow" };
 }
 
+/**
+ * 用编辑器写提交信息时，git 交给 commit-msg 的文件还带着注释行，--verbose 时还有剪刀线和 diff，
+ * 写入提交前才清理。这里按 git 默认的 strip 规则先清理再判定：去掉剪刀线及以下、注释行、行尾空白，
+ * 合并连续空行，去掉首尾空行。
+ * 用 -m 提交时 git 只清理空白、保留以注释符开头的行，这种少见写法交给合并时按真实提交信息再判一次。
+ */
+export function cleanCommitMessage(raw, commentChar = "#") {
+  const lines = raw.replace(/\r\n/g, "\n").split("\n");
+  const scissors = lines.findIndex((line) => line.startsWith(commentChar) && / -+ >8 -+$/.test(line));
+  const kept = (scissors >= 0 ? lines.slice(0, scissors) : lines)
+    .filter((line) => !line.startsWith(commentChar))
+    .map((line) => line.replace(/\s+$/, ""));
+  const out = [];
+  for (const line of kept) {
+    if (line === "" && (out.length === 0 || out.at(-1) === "")) continue;
+    out.push(line);
+  }
+  while (out.length > 0 && out.at(-1) === "") out.pop();
+  return out.join("\n");
+}
+
+// core.commentChar 为 auto 时 git 会临时挑一个未被占用的字符，这里无法得知，按默认的 # 处理。
+function commentCharOf(root) {
+  const value = git(root, ["config", "--get", "core.commentChar"]).stdout.replace(/\n$/, "");
+  return value && value !== "auto" ? value : "#";
+}
+
 export function checkCommitMessage({ root, resolved, messageFile }) {
   const rule = resolved.rules.find((item) => item.kind === "commit-message");
   if (!rule) return { decision: "allow" };
   const raw = readFileSync(resolve(root, messageFile), "utf8");
-  const message = raw.replace(/\r\n/g, "\n").replace(/\n+$/, "");
+  const message = cleanCommitMessage(raw, commentCharOf(root));
 
   // 合并提交由 harness merge 生成，标题固定为 Merge 主题，不套用普通提交格式。
   const isMerge = /^Merge[: ]/.test(message) || git(root, ["rev-parse", "--verify", "--quiet", "MERGE_HEAD"]).status === 0;
