@@ -2,6 +2,12 @@
 
 按 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 组织，版本号遵循语义化版本。
 
+## [未发布]
+
+### 修复
+
+- DSH 守卫插件补齐 `workingDirectory` 服务依赖，避免桌面版在 profile 目录加载门禁时把所有工具误拒为“不是 Git 仓库”。
+
 ## [0.6.0] - 2026-10-26
 
 钩子目录可以由 harness 接管，不再挂在某个子项目的工具上；所有 Worktree，包括停在旧分支的，都执行主分支上确认过的同一份钩子。

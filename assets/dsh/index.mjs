@@ -5,7 +5,7 @@ import { guard } from "../../src/adapters/index.mjs";
 import { dsh } from "../../src/adapters/dsh.mjs";
 
 export const name = "harness-guard";
-export const inject = ["tools"];
+export const inject = ["tools", "workingDirectory"];
 
 function workingDirectory(ctx, agent, signal) {
   try {
