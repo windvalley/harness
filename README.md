@@ -204,6 +204,7 @@ git 层（`pre-commit`、`commit-msg`、`reference-transaction`）对所有客�
 合入后 `harness merge` 在主 Worktree 运行 `install --local` 完成切换，并提醒其他机器拉到新的主分支后各自运行一次 `install --local`：`core.hooksPath` 在各自的 `.git/config` 里，不随仓库分发。
 `harness doctor` 检查 `core.hooksPath` 是否指向主 Worktree 的钩子目录，以及项目钩子是否可执行。主 Worktree 换了位置时重新运行 `install --local` 即可。
 原来的钩子目录与安装它的工具配置（例如 husky 的 `prepare` 脚本）在同一个分支里删掉，否则下次安装依赖又会改回 `core.hooksPath`。
+还没合入这次改动的旧分支里仍有那些配置，在它们的 Worktree 里安装依赖同样会改走 `core.hooksPath`；`harness merge` 在更新主分支前会改回来，平时用 `harness doctor` 检查。
 
 检查的三个档位：
 

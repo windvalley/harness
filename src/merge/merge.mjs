@@ -18,6 +18,7 @@ import {
 import { appendLedger, dataDir, readRecord, writeRecord } from "../lib/store.mjs";
 import { EVIDENCE_KIND, reusableChecks, verify } from "../verify/verify.mjs";
 import { entryTouched, followUps } from "../install/followups.mjs";
+import { ensureHooksPath } from "../install/install.mjs";
 import { REVIEW_KIND } from "../review/review.mjs";
 import { MERGE_TOKEN_ENV, mainUpdateToken } from "../githook.mjs";
 
@@ -171,6 +172,14 @@ export async function mergeTask({ cwd, branch, dryRun = false, log = console.err
   const release = acquireLock(root);
   try {
     ensureMainReady(project, mainRoot);
+
+    // 项目接管了钩子目录时，core.hooksPath 可能被旧分支里的工具改走（例如 husky 的 prepare 在依赖安装时改回自己的目录），
+    // 指向不存在的目录时 git 静默跳过钩子。更新主分支前改回来，主分支保护按主 Worktree 里确认过的钩子执行。
+    const hooks = gitHooksConfig(project.config);
+    if (hooks) {
+      const healed = ensureHooksPath({ root: mainRoot, hooks });
+      if (healed.state === "switched") log(`[merge] core.hooksPath 被改成了 ${healed.previous ?? "(未设置)"}，已改回 ${healed.target}`);
+    }
 
     const mainCommit = resolveCommit(root, mainRef);
     const branchCommit = resolveCommit(root, branch);

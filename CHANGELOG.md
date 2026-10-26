@@ -13,6 +13,7 @@
 - `install`、`install --local`、`upgrade` 让 `core.hooksPath` 指向主 Worktree 里的钩子目录；主 Worktree 里还没有生成的钩子时不切换，合入后由 `harness merge` 完成切换。
 - `doctor` 检查 `core.hooksPath` 是否指向主 Worktree 的钩子目录，以及项目钩子是否可执行。
 - 合并改变了钩子目录时，提醒其他机器各自运行一次 `install --local`。
+- `harness merge` 在更新主分支前检查 `core.hooksPath`，被旧分支里的工具（例如 husky 的 `prepare`）改走时改回来。
 - `uninstall` 在接管模式下删除生成的钩子并撤销 `core.hooksPath`。
 
 ### 修复

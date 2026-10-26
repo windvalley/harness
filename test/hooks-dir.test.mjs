@@ -160,6 +160,22 @@ describe("项目接管 git 钩子目录", () => {
     assert.match(repo.cli("doctor").stdout, /\[ok\] git:hooksPath/);
   });
 
+  test("core.hooksPath 被旧分支里的工具改走时，harness merge 在更新主分支前改回来", () => {
+    const repo = setup({ project: { ".harness/config.json": MANAGED_CONFIG } });
+    const wt = linked(repo, "wt-heal", "task/heal");
+    assert.equal(stageAndCommit(repo, wt, "a.txt").status, 0);
+    // 模拟旧分支里 husky 的 prepare：依赖安装时把公共配置改回自己的相对目录。
+    git(repo.root, "config", "core.hooksPath", "frontend/.husky");
+
+    fakeReviewer(repo, APPROVE);
+    assert.equal(repo.rawCli("verify", "--branch", "task/heal").status, 0);
+    assert.equal(repo.rawCli("review", "--branch", "task/heal").status, 0);
+    const merged = repo.rawCli("merge", "--branch", "task/heal");
+    assert.equal(merged.status, 0, merged.stderr);
+    assert.match(merged.stderr, /core\.hooksPath 被改成了 frontend\/\.husky，已改回/);
+    assert.ok(samePath(hooksPath(repo), join(repo.root, ".githooks")));
+  });
+
   test("core.hooksPath 是指向主 Worktree 的绝对路径时，在 Linked Worktree 里定位到自己的检出", () => {
     const repo = setup({ project: { ".harness/config.json": MANAGED_CONFIG } });
     const wt = linked(repo, "wt-place", "task/place");
