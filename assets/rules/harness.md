@@ -37,6 +37,8 @@
 ## 多个 Worktree
 
 入口 `.harness/bin/harness` 随仓库提交，Linked Worktree 检出后即可用。git 钩子调用主 Worktree 的入口，任务分支改不了门禁代码自己的行为。
+`.harness/config.json` 配置了 `git.hooksDir` 时，钩子整份生成在那个目录，`core.hooksPath` 指向主 Worktree 里的这一份，所有 Worktree 执行同一份钩子。
+项目自己的检查写在 `git.projectHooks` 目录下的同名可执行脚本里，harness 检查通过后调用，Agent 可以直接维护；生成的钩子不手改，改配置后运行 `harness install` 重新生成。
 `harness merge` 在主 Worktree 里更新主分支，要求它停在主分支、洁净、没有进行中的 git 操作；`harness status` 与 `harness doctor` 会提前列出不满足的项。
 `.harness/policy.json` 的 `presets` 里有 `main-worktree` 时，主 Worktree 只用来合并：
 

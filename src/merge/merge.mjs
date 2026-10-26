@@ -1,6 +1,6 @@
 import { closeSync, existsSync, openSync, readFileSync, rmSync, writeSync } from "node:fs";
 import { join } from "node:path";
-import { acceptancePath, gatePaths, loadGateProject, mainBranch } from "../lib/config.mjs";
+import { acceptancePath, gatePaths, gitHooksConfig, loadGateProject, mainBranch } from "../lib/config.mjs";
 import { matchAny } from "../lib/glob.mjs";
 import {
   changedPaths,
@@ -342,17 +342,20 @@ export async function mergeTask({ cwd, branch, dryRun = false, log = console.err
     log(`[merge] ${mainRef} 已更新到 ${newHead.slice(0, 12)}`);
 
     // 入口或钩子变了：用合入后的新入口在主 Worktree 刷新本机这一份（共用钩子目录、DSH 插件目录），不碰入库文件。
+    // 项目接管了钩子目录时，这里会让 core.hooksPath 指向主 Worktree 里合入后的那一份。
     let refresh = null;
-    if (bootstrap || entryTouched(resultPaths)) {
+    if (bootstrap || entryTouched(resultPaths, project)) {
       const shim = join(mainRoot, ".harness", "bin", "harness");
       if (existsSync(shim)) {
         const result = run(shim, ["install", "--local"], { cwd: mainRoot });
         refresh = { exit: result.status };
+        const hooksPathLine = result.stdout.split("\n").find((line) => line.includes("core.hooksPath"));
+        if (hooksPathLine) log(`[merge] ${hooksPathLine.trim()}`);
         if (result.status !== 0) log(`[merge] 注意: 刷新本机钩子失败(exit ${result.status})，在主 Worktree 运行 harness install --local: ${result.stderr.trim().slice(-300)}`);
         if (!isClean(mainRoot)) log(`[merge] 注意: 刷新后主 Worktree 出现改动，说明分支里的入口不是用当前版本生成的:\n${statusShort(mainRoot)}`);
       }
     }
-    const notes = followUps({ mainRoot, changed: resultPaths, bootstrap });
+    const notes = followUps({ mainRoot, changed: resultPaths, bootstrap, hooksDirBefore: gitHooksConfig(project.config)?.hooksDir ?? null });
 
     let postMerge = null;
     if (Array.isArray(policy.postMergeCommand) && policy.postMergeCommand.length > 0) {

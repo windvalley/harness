@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { loadCurrentProject, mainBranch } from "../lib/config.mjs";
@@ -8,7 +8,16 @@ import { mainWorktreeProblems } from "../merge/merge.mjs";
 import { commandExists, resolveBackend } from "../review/review.mjs";
 import { resolvePolicy } from "../policy/resolve.mjs";
 import { packageVersion, MARK_START } from "./managed.mjs";
-import { gitHooksDir, isHarnessClientHook, shimPath, verifyVersion, versionDir } from "./install.mjs";
+import {
+  currentHooksConfig,
+  gitHooksDir,
+  HOOK_NAMES,
+  hooksPathState,
+  isHarnessClientHook,
+  shimPath,
+  verifyVersion,
+  versionDir,
+} from "./install.mjs";
 
 // 读取 Codex 用户配置里是否已有本项目钩子的 trusted_hash 记录。
 // 路径要按真实路径比较：git 常返回 /private/var/...，用户配置里可能写成 /var/...，两者是同一目录。
@@ -37,6 +46,54 @@ export function codexTrustState(root) {
 
 function hookInstalled(file) {
   return existsSync(file) && readFileSync(file, "utf8").includes("# harness:hook");
+}
+
+/**
+ * git 钩子是否就位。项目接管了钩子目录时，检查的是 git 实际执行的那一份：
+ * core.hooksPath 必须指向主 Worktree 里的钩子目录，否则停在旧分支的 Worktree 会跳过钩子。
+ */
+function gitHookChecks(root) {
+  const hooks = currentHooksConfig(root);
+  if (!hooks) {
+    const hooksDir = gitHooksDir(root);
+    return HOOK_NAMES.map((name) => {
+      const file = join(hooksDir, name);
+      return { id: `git:${name}`, ok: hookInstalled(file), detail: hookInstalled(file) ? file : `${file} 未接入或未生效` };
+    });
+  }
+  const state = hooksPathState({ root, hooks });
+  const current = state.current ?? "(未设置)";
+  const checks = [
+    {
+      id: "git:hooksPath",
+      ok: state.state === "ok",
+      detail:
+        state.state === "ok"
+          ? `core.hooksPath 指向主 Worktree 的 ${state.target}，所有 Worktree 执行这一份钩子`
+          : state.state === "pending"
+            ? `主 Worktree 里还没有生成的 ${hooks.hooksDir}，core.hooksPath 仍是 ${current}；接入分支合入主分支后由 harness merge 自动切换`
+            : `core.hooksPath 是 ${current}，应为 ${state.target}；运行 harness install --local 修正，否则停在旧分支的 Worktree 不经过门禁`,
+    },
+  ];
+  for (const name of HOOK_NAMES) {
+    const file = join(state.target, name);
+    checks.push({ id: `git:${name}`, ok: hookInstalled(file), detail: hookInstalled(file) ? file : `${file} 未生成，在主 Worktree 运行 harness install --local` });
+  }
+  if (hooks.projectHooks) {
+    const present = HOOK_NAMES.filter((name) => existsSync(join(root, hooks.projectHooks, name)));
+    const notExecutable = present.filter((name) => (statSync(join(root, hooks.projectHooks, name)).mode & 0o111) === 0);
+    checks.push({
+      id: "git:project-hooks",
+      ok: notExecutable.length === 0,
+      detail:
+        notExecutable.length > 0
+          ? `${hooks.projectHooks}/ 下 ${notExecutable.join("、")} 没有可执行权限，提交时会被拒绝；chmod +x 后提交`
+          : present.length > 0
+            ? `${hooks.projectHooks}/ 下的 ${present.join("、")} 在 harness 检查通过后执行，跟着当前 Worktree 的检出走`
+            : `${hooks.projectHooks}/ 下没有项目钩子`,
+    });
+  }
+  return checks;
 }
 
 function clientHookInstalled(file) {
@@ -93,11 +150,7 @@ export function doctor({ cwd = process.cwd() } = {}) {
         : `${shim} 未入库：Linked Worktree 里没有入口，钩子和实时拦截都会失效，提交它`,
   });
 
-  const hooksDir = gitHooksDir(root);
-  for (const name of ["pre-commit", "commit-msg", "reference-transaction"]) {
-    const file = join(hooksDir, name);
-    checks.push({ id: `git:${name}`, ok: hookInstalled(file), detail: hookInstalled(file) ? file : `${file} 未接入或未生效` });
-  }
+  checks.push(...gitHookChecks(root));
 
   const claudeOk = clientHookInstalled(join(root, ".claude", "settings.json"));
   checks.push({

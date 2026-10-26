@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { git, gitOk, hooksPlacement, refExists, repoRoot } from "../lib/git.mjs";
 import { PACKAGE_ROOT } from "../policy/resolve.mjs";
-import { installAll, publishVersion, storeEntry, versionDir } from "./install.mjs";
+import { HOOK_NAMES, installAll, publishVersion, storeEntry, versionDir, worktreeHooksConfig } from "./install.mjs";
 import { assetPath, managedBlockBody, packageVersion, writeManagedBlock, writeRules } from "./managed.mjs";
 import { survey } from "./survey.mjs";
 
@@ -148,8 +148,8 @@ function plannedWrites(root, { force }) {
   for (const rel of [".harness/bin/harness", ".harness/rules/", ".harness/templates/", ".claude/settings.json", ".codex/hooks.json", ".gitignore", "AGENTS.md"]) {
     consider(rel);
   }
-  const { rel: hooksRel, tracked } = hooksPlacement(root);
-  if (tracked) for (const name of ["pre-commit", "commit-msg", "reference-transaction"]) consider(`${hooksRel}/${name}`);
+  const { rel: hooksRel, tracked } = hooksPlacement(root, { hooksDir: worktreeHooksConfig(root)?.hooksDir });
+  if (tracked) for (const name of HOOK_NAMES) consider(`${hooksRel}/${name}`);
   return items;
 }
 

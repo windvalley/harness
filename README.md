@@ -75,7 +75,7 @@ harness 不认识原有工具的配置格式，也不自动转换。
 1. `.harness/`：`config.json`、`policy.json`、`verify.json`、`golden/tasks.json`、`rules/`、`templates/`、`acceptance/`。起始检查按技术栈生成（`go.mod`、`frontend/package.json`、`Cargo.toml`、pytest 配置），通用的 `lint` 是占位，在配置真实命令前记入未执行项，不会冒充通过。
 2. 当前版本的代码装进 `~/.local/share/harness/versions/<版本>/`，并写入内容哈希清单。
 3. 入口 `.harness/bin/harness`，锁定版本号。入口入库，每个 Linked Worktree 检出即可用。
-4. `pre-commit`、`commit-msg`、`reference-transaction` 三个 git 钩子。harness 的块插在最前面，调用主 Worktree 的入口，只在主分支上已有 `.harness/config.json` 时生效。
+4. `pre-commit`、`commit-msg`、`reference-transaction` 三个 git 钩子。harness 的块插在最前面，调用主 Worktree 的入口，只在主分支上已有 `.harness/config.json` 时生效。配置了 `git.hooksDir` 时改为整份生成在那个目录，见“由 harness 接管 git 钩子目录”。
 5. `.claude/settings.json` 与 `.codex/hooks.json` 的拦截配置，其他设置原样保留。
 6. `AGENTS.md` 里的托管块，`.gitignore` 里的 `.harness/dsh-plugin/`，以及本机的 DSH 插件目录。
 
@@ -180,6 +180,30 @@ git 层（`pre-commit`、`commit-msg`、`reference-transaction`）对所有客�
 需要由人在主 Worktree 手工提交的项目，在 `disabled` 里关掉 `main-worktree-commit`，其余两条照常。
 用命令写文件（例如 `echo > 文件`、构建产物）不在拦截范围内，靠 `harness status` 与 `harness doctor` 提前提示主 Worktree 不洁净来兜底。
 起始黄金任务里的 `g16-main-worktree-merge-only` 只在启用这个预设时重放，未启用时记为跳过。
+
+### 由 harness 接管 git 钩子目录：git.hooksDir
+
+默认情况下 harness 把检查块插进现有钩子的最前面：`core.hooksPath` 指向哪里就写哪里，没设置时写 `.git/hooks`。
+钩子目录是某个子项目的工具装上的（例如 `frontend/package.json` 里的 husky）时，整个仓库的门禁就挂在那个子项目上：没装它的依赖就没有钩子，重装依赖又会把 `core.hooksPath` 改回去。
+入库的相对路径还有一个问题：每个 Worktree 执行的是自己分支上的那份钩子，停在旧分支的 Worktree 不经过新门禁。
+
+在 `.harness/config.json` 里加上 `git` 段，由 harness 接管钩子目录：
+
+```json
+{ "git": { "hooksDir": ".githooks", "projectHooks": "scripts/git-hooks" } }
+```
+
+- `hooksDir`：harness 生成的钩子目录，入库，整份由 `harness install`、`init`、`upgrade` 生成，不手改。目录里已有其他工具的钩子时拒绝覆盖，提示把它们移到 `projectHooks`。
+- `core.hooksPath` 指向主 Worktree 里这个目录的绝对路径，写在公共配置里。所有 Worktree，包括停在旧分支、检出里还没有这个目录的，都执行主分支上确认过的同一份钩子。
+- `projectHooks`：项目自己的检查（lint、格式化等），与钩子同名的可执行脚本。harness 检查通过后调用，在当前 Worktree 的检出里执行，跟着分支走，Agent 可以维护。
+  项目钩子改了暂存区或提交信息时，按最终内容再做一次 harness 检查。脚本存在但没有执行权限时拒绝提交，不会像 git 那样静默跳过。
+- 推荐用 `.githooks`：它在 `gate-self` 的执行器入口保护范围内，Agent 不能直接改写。换成其他目录时，改动仍算门禁文件、合并前需要人确认，但没有实时写保护。
+
+切换在任务分支里完成：改配置后运行 `harness install`（或 `upgrade`）生成钩子并提交。
+主 Worktree 里还没有生成的钩子时不切换 `core.hooksPath`，否则指向不存在的目录，git 会静默跳过钩子，主分支保护也随之失效。
+合入后 `harness merge` 在主 Worktree 运行 `install --local` 完成切换，并提醒其他机器拉到新的主分支后各自运行一次 `install --local`：`core.hooksPath` 在各自的 `.git/config` 里，不随仓库分发。
+`harness doctor` 检查 `core.hooksPath` 是否指向主 Worktree 的钩子目录，以及项目钩子是否可执行。主 Worktree 换了位置时重新运行 `install --local` 即可。
+原来的钩子目录与安装它的工具配置（例如 husky 的 `prepare` 脚本）在同一个分支里删掉，否则下次安装依赖又会改回 `core.hooksPath`。
 
 检查的三个档位：
 

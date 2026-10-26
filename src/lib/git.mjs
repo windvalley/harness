@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, realpathSync, statSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 export const ZERO_OID = "0000000000000000000000000000000000000000";
 
@@ -141,14 +141,42 @@ export function showBlob(cwd, ref, path) {
  * git 钩子目录在哪、是否随分支入库。
  * 入库的钩子目录（husky、.githooks 等）随分支分发，改动要等合入主分支才生效；
  * 不入库的目录（默认的 .git/hooks）所有 Worktree 共用，写入立即对全部 Worktree 生效。
+ * hooksDir 给定时由项目配置接管钩子目录，写入当前 Worktree 里的这个目录，与 core.hooksPath 的现值无关。
  */
-export function hooksPlacement(root) {
+export function hooksPlacement(root, { hooksDir } = {}) {
+  if (hooksDir) return { dir: join(root, hooksDir), rel: hooksDir, tracked: true, managed: true };
   const configured = git(root, ["config", "--get", "core.hooksPath"]).stdout.trim();
+  if (configured && isAbsolute(configured)) {
+    // 绝对路径可能指向某个 Worktree 里的入库目录（例如主 Worktree 的 .githooks）。
+    // 按那个 Worktree 算出相对路径，写当前 Worktree 里对应的目录，不能去改别的 Worktree 的入库文件。
+    const place = locatePath(root, configured);
+    if (!place.outsideRepo) {
+      const rel = relative(place.root, place.path).split(sep).join("/");
+      if (rel && rel !== ".git" && !rel.startsWith(".git/")) {
+        const tracked = git(root, ["ls-files", "--", rel]).stdout.trim() !== "";
+        return { dir: join(root, rel), rel, tracked };
+      }
+    }
+  }
   const dir = configured ? (isAbsolute(configured) ? configured : join(root, configured)) : join(commonDir(root), "hooks");
   const rel = relative(root, dir).split(sep).join("/");
   const inside = Boolean(configured) && rel !== "" && !rel.startsWith("..") && !isAbsolute(rel) && rel !== ".git" && !rel.startsWith(".git/");
   const tracked = inside && git(root, ["ls-files", "--", rel]).stdout.trim() !== "";
   return { dir, rel: inside ? rel : null, tracked };
+}
+
+/** 两个路径是否指向同一个位置；存在的部分按真实路径比较（macOS 上 /var 与 /private/var 是同一目录）。 */
+export function samePath(a, b) {
+  const real = (path) => {
+    let dir = resolve(path);
+    const rest = [];
+    while (!existsSync(dir) && dirname(dir) !== dir) {
+      rest.unshift(basename(dir));
+      dir = dirname(dir);
+    }
+    return join(realpathSync(dir), ...rest);
+  };
+  return real(a) === real(b);
 }
 
 export function blobOids(cwd, ref, paths) {

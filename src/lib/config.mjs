@@ -156,13 +156,43 @@ export const GATE_FILES = [
   "**/.husky/**",
 ];
 
+/**
+ * 项目自己管理 git 钩子目录时的设置（config.git）。没有配置 hooksDir 时返回 null，沿用 core.hooksPath 或 .git/hooks。
+ * hooksDir：harness 整个接管的入库目录，core.hooksPath 指向主 Worktree 里的这个目录，所有 Worktree 执行同一份钩子。
+ * projectHooks：项目自己的钩子脚本目录，harness 检查通过后按同名脚本调用，在当前 Worktree 的检出里执行。
+ */
+export function gitHooksConfig(config) {
+  const settings = config?.git ?? {};
+  if (!settings.hooksDir) return null;
+  return {
+    hooksDir: repoRelativeDir(settings.hooksDir, "git.hooksDir"),
+    projectHooks: settings.projectHooks ? repoRelativeDir(settings.projectHooks, "git.projectHooks") : null,
+  };
+}
+
+function repoRelativeDir(value, label) {
+  const text = String(value).trim().replace(/\/+$/, "");
+  const parts = text.split("/").filter((part) => part !== ".");
+  if (!text || text.startsWith("/") || parts.length === 0 || parts.some((part) => part === ".." || part === "") || parts[0] === ".git") {
+    throw new Error(`.harness/config.json 的 ${label} 必须是仓库内的相对目录，例如 .githooks，不能是绝对路径、.. 或 .git 下的目录: ${value}`);
+  }
+  return parts.join("/");
+}
+
 export function gatePaths(project) {
   const extra = project.config.governance?.gatePaths ?? [];
-  return [...GATE_FILES, ...extra];
+  const hooks = gitHooksConfig(project.config);
+  return [...GATE_FILES, ...(hooks ? [`${hooks.hooksDir}/**`] : []), ...extra];
 }
 
 // 执行器入口：入口版本、客户端钩子配置与钩子目录。改动合入后需要在主 Worktree 刷新本机钩子并提示客户端重新加载。
 export const ENTRY_FILES = [".harness/bin/**", ".claude/settings.json", ".codex/hooks.json", ".githooks/**", ".husky/**", "**/.husky/**"];
+
+/** 合入后要在主 Worktree 刷新本机钩子的文件：执行器入口、项目配置的钩子目录，以及决定钩子目录的配置本身。 */
+export function entryPaths(project) {
+  const hooks = project ? gitHooksConfig(project.config) : null;
+  return [...ENTRY_FILES, ".harness/config.json", ...(hooks ? [`${hooks.hooksDir}/**`] : [])];
+}
 
 export function acceptanceDir(project) {
   return `${PROJECT_DIR}/${project.config.intent?.dir ?? "acceptance"}`;

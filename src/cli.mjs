@@ -249,6 +249,20 @@ function cmdGithook(argv) {
   return 2;
 }
 
+/** 接管钩子目录时 core.hooksPath 的处理结果，state 取值见 ensureHooksPath。 */
+function formatHooksPath({ state, target, current, previous }) {
+  switch (state) {
+    case "ok":
+      return `core.hooksPath 已指向 ${target}`;
+    case "switched":
+      return `core.hooksPath 已从 ${previous ?? "(未设置)"} 改为 ${target}，所有 Worktree 执行这一份钩子`;
+    case "pending":
+      return `主 Worktree 里还没有生成的钩子，core.hooksPath 保持 ${current ?? "(未设置)"}；合入主分支后 harness merge 自动切换到 ${target}`;
+    default:
+      return `已写入公共配置，但 core.hooksPath 仍是 ${current}，可能被 Worktree 级配置覆盖，检查 config.worktree 后运行 harness install --local`;
+  }
+}
+
 function formatDenialText(result) {
   return [`[harness] 已拦截: ${result.reason}`, result.detail ? `对象: ${result.detail}` : "", result.fix ? `正确做法: ${result.fix}` : "", `规则: ${result.rule}`]
     .filter(Boolean)
@@ -520,11 +534,13 @@ export async function main(argv) {
           if (local.fromTag) print(`项目锁定版本 ${local.published.version}，已从 harness 仓库的标签 v${local.published.version} 安装`);
           if (local.output) process.stdout.write(local.output);
           else print(`已刷新本机: 版本 ${local.published.version}${local.hooksTracked ? "；钩子目录随分支入库，无需刷新" : `；git 钩子 ${local.hooks.dir}`}`);
-          return 0;
+          if (local.hooksPath) print(`  ${formatHooksPath(local.hooksPath)}`);
+          return local.hooksPath?.state === "overridden" ? 1 : 0;
         }
         const result = installAll({ cwd: process.cwd(), takeOver: values["take-over"] });
         print(`已安装版本 ${result.published.version}，入口 ${result.shim}`);
         for (const hook of result.hooks.hooks) print(`  git 钩子 ${hook.file}${hook.updated ? "(已接入)" : "(已存在)"}`);
+        if (result.hooksPath) print(`  ${formatHooksPath(result.hooksPath)}`);
         print(`  Claude PreToolUse: ${result.claude}`);
         print(`  Codex hooks: ${result.codex}`);
         if (result.gitignore.shimIgnored) {
@@ -577,6 +593,7 @@ export async function main(argv) {
       case "upgrade": {
         const result = upgradeProject({});
         print(`已升级到 ${result.version}，入口 ${result.shim.shim}`);
+        if (result.shim.hooksPath) print(`  ${formatHooksPath(result.shim.hooksPath)}`);
         return 0;
       }
       case "doctor": {

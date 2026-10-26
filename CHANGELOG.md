@@ -2,6 +2,25 @@
 
 按 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 组织，版本号遵循语义化版本。
 
+## [0.6.0] - 2026-10-26
+
+钩子目录可以由 harness 接管，不再挂在某个子项目的工具上；所有 Worktree，包括停在旧分支的，都执行主分支上确认过的同一份钩子。
+
+### 新增
+
+- `.harness/config.json` 新增 `git.hooksDir` 与 `git.projectHooks`。`hooksDir` 里的钩子整份由 harness 生成，目录里已有其他工具的钩子时拒绝覆盖；`projectHooks` 放项目自己的检查，harness 检查通过后调用，在当前 Worktree 的检出里执行。
+- 项目钩子改了暂存区或提交信息时，按最终内容再做一次 harness 检查；项目钩子存在但不可执行时拒绝提交。
+- `install`、`install --local`、`upgrade` 让 `core.hooksPath` 指向主 Worktree 里的钩子目录；主 Worktree 里还没有生成的钩子时不切换，合入后由 `harness merge` 完成切换。
+- `doctor` 检查 `core.hooksPath` 是否指向主 Worktree 的钩子目录，以及项目钩子是否可执行。
+- 合并改变了钩子目录时，提醒其他机器各自运行一次 `install --local`。
+- `uninstall` 在接管模式下删除生成的钩子并撤销 `core.hooksPath`。
+
+### 修复
+
+- `commit-msg` 按 git 的清理规则判定提交信息：用编辑器写提交信息时，钩子拿到的文件还带着注释行与剪刀线以下的 diff，原先会被带 `$` 的规则误拒。
+- `core.hooksPath` 是指向主 Worktree 的绝对路径时，在 Linked Worktree 里运行 `install` 会改写主 Worktree 的入库文件；现在定位到当前 Worktree 自己的检出。
+- 合并改动了 `.harness/config.json` 时同样在主 Worktree 刷新本机钩子。
+
 ## [0.5.0] - 2026-10-23
 
 多个会话并行时，主 Worktree 一旦切走分支或留下改动，所有任务的合并都会被挡住，而且要到合并时才发现。

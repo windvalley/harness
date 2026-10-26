@@ -1,8 +1,8 @@
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import { repoRoot } from "../lib/git.mjs";
-import { gitHooksDir, isHarnessClientHook, stripHookBlock } from "./install.mjs";
+import { commonDir, git, repoRoot } from "../lib/git.mjs";
+import { gitHooksDir, HOOK_NAMES, hooksPathState, isHarnessClientHook, stripHookBlock, worktreeHooksConfig } from "./install.mjs";
 import { removeManagedBlock } from "./managed.mjs";
 
 const HOOK_MARK = "# harness:hook";
@@ -16,11 +16,18 @@ function plan({ root }) {
     if (existsSync(join(root, rel))) targets.push({ kind: "path", rel });
   }
 
-  const hooksDir = gitHooksDir(root);
-  for (const name of ["pre-commit", "commit-msg", "reference-transaction"]) {
+  const hooksConfig = worktreeHooksConfig(root);
+  const hooksDir = gitHooksDir(root, hooksConfig);
+  // 接管模式下 core.hooksPath 指向主 Worktree 的钩子目录，钩子删掉后要一并撤销，否则 git 指向一个空目录。
+  if (hooksConfig && hooksPathState({ root, hooks: hooksConfig }).state === "ok") {
+    targets.push({ kind: "hooks-path", rel: `core.hooksPath（指向 ${hooksConfig.hooksDir}）` });
+  }
+  for (const name of HOOK_NAMES) {
     const file = join(hooksDir, name);
     if (existsSync(file) && readFileSync(file, "utf8").includes(HOOK_MARK)) {
-      targets.push({ kind: "hook", rel: `git 钩子 ${name}`, file, isEmpty: stripHookBlock(readFileSync(file, "utf8")).trim() === "" });
+      // 接管模式的钩子整份由 harness 生成（写入时拒绝覆盖其他内容），直接删除。
+      const isEmpty = Boolean(hooksConfig) || stripHookBlock(readFileSync(file, "utf8")).trim() === "";
+      targets.push({ kind: "hook", rel: `git 钩子 ${name}`, file, isEmpty });
     }
   }
 
@@ -89,6 +96,9 @@ function applyOne(target, root) {
     }
     case "agents":
       removeManagedBlock({ root });
+      return;
+    case "hooks-path":
+      git(root, ["config", "--file", join(commonDir(root), "config"), "--unset", "core.hooksPath"]);
       return;
     default:
       return;

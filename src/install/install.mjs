@@ -1,9 +1,10 @@
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { isAbsolute, join, relative } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 import { PACKAGE_ROOT } from "../policy/resolve.mjs";
-import { git, hooksPlacement, repoRoot, run } from "../lib/git.mjs";
+import { commonDir, git, hooksPlacement, mainWorktreeRoot, repoRoot, run, samePath } from "../lib/git.mjs";
+import { gitHooksConfig, loadCurrentProject } from "../lib/config.mjs";
 import { loadKey } from "../lib/store.mjs";
 import { packageVersion, writeGolden, writeRules } from "./managed.mjs";
 
@@ -185,9 +186,29 @@ exec node "$entry" "$@"
 
 const HOOK_MARK = "# harness:hook";
 const HOOK_END = "# harness:hook-end";
+export const HOOK_NAMES = ["pre-commit", "commit-msg", "reference-transaction"];
 
-export function gitHooksDir(root) {
-  return hooksPlacement(root).dir;
+/** hooks 是 gitHooksConfig 的结果；为 null 时按 core.hooksPath 或 .git/hooks 定位。 */
+export function gitHooksDir(root, hooks = null) {
+  return hooksPlacement(root, { hooksDir: hooks?.hooksDir }).dir;
+}
+
+/** 生效配置（主分支已接入时取主分支）所声明的钩子目录；项目还没有配置时返回 null。 */
+export function currentHooksConfig(root) {
+  let project;
+  try {
+    project = loadCurrentProject(root);
+  } catch {
+    return null;
+  }
+  return gitHooksConfig(project.config);
+}
+
+/** 当前 Worktree 里的项目配置所声明的钩子目录；install 写的是这个 Worktree，按它自己的配置。 */
+export function worktreeHooksConfig(root) {
+  const file = join(root, ".harness", "config.json");
+  if (!existsSync(file)) return null;
+  return gitHooksConfig(JSON.parse(readFileSync(file, "utf8")));
 }
 
 /**
@@ -246,7 +267,8 @@ harness_enabled() {
  * takeOver 只作用于 reference-transaction：原有的主分支保护会拒绝 harness 的合并，接管时移除；
  * pre-commit 与 commit-msg 里的原有脚本（lint、提交信息校验等）一律保留。
  */
-export function writeGitHooks({ root, takeOver = false }) {
+export function writeGitHooks({ root, takeOver = false, hooks = null }) {
+  if (hooks) return writeManagedHooks({ root, hooks });
   const dir = gitHooksDir(root);
   const results = [];
 
@@ -304,6 +326,162 @@ ${HOOK_END}`,
   );
 
   return { dir, hooks: results };
+}
+
+/**
+ * 接管模式下 harness 检查的写法：pre-commit 与 commit-msg 入口缺失或本机没装锁定的版本时提示后放行，
+ * 真正的约束在合并与引用保护；reference-transaction 与插入模式相同。
+ */
+function managedCheck(name) {
+  return `harness_check() {
+  harness_enabled || return 0
+  harness_bin="$(harness_entry)"
+  if [ ! -x "$harness_bin" ]; then
+    printf '[harness] 主 Worktree 缺少 %s，跳过 ${name} 检查；在主 Worktree 运行 harness install 补齐\\n' "$harness_bin" >&2
+    return 0
+  fi
+  "$harness_bin" githook ${name} "$@"
+  harness_status=$?
+  if [ "$harness_status" -eq ${SHIM_MISSING_VERSION} ]; then
+    printf '[harness] 本机没有安装门禁锁定的版本，跳过 ${name} 检查\\n' >&2
+    return 0
+  fi
+  return "$harness_status"
+}`;
+}
+
+/** 项目钩子存在但不可执行时拒绝，而不是像 git 那样静默跳过，免得项目检查悄悄失效。 */
+function projectHookLookup(projectHooks, name) {
+  return `project_hook="$(git rev-parse --show-toplevel 2>/dev/null)/${projectHooks}/${name}"
+if [ -e "$project_hook" ] && [ ! -x "$project_hook" ]; then
+  printf '[harness] 项目钩子 %s 没有可执行权限，chmod +x 后重试\\n' "$project_hook" >&2
+  exit 1
+fi`;
+}
+
+/**
+ * 接管模式的钩子文件，整份都在 harness 块里，由 harness 生成。
+ * core.hooksPath 指向主 Worktree 里的这个目录，所有 Worktree 执行主分支上确认过的同一份；
+ * 项目钩子在当前 Worktree 的检出里执行，跟着分支走。
+ * 项目钩子改了暂存区或提交信息时（例如格式化后重新暂存），按最终内容再判一次，检查之后加进来的内容同样要过门禁。
+ */
+export function managedHookBody(name, projectHooks) {
+  const head = `#!/bin/sh
+${HOOK_MARK} ${name}
+# 由 harness install 生成，请勿手工修改。core.hooksPath 指向主 Worktree 里的这个目录，所有 Worktree 执行同一份。
+${projectHooks ? `# 项目自己的检查放在 ${projectHooks}/${name}，harness 检查通过后调用。\n` : ""}${HOOK_FUNCTIONS}`;
+  if (name === "reference-transaction") {
+    const delegate = projectHooks
+      ? `${projectHookLookup(projectHooks, name)}
+if [ -x "$project_hook" ]; then
+  if [ -n "$harness_input" ]; then printf '%s\\n' "$harness_input"; fi | "$project_hook" "$@"
+  exit $?
+fi
+`
+      : "";
+    return `${head}
+harness_input="$(cat)"
+if [ "$1" = "prepared" ] && [ "\${HARNESS_MAIN_BYPASS:-}" != "1" ] && harness_enabled; then
+  case "$harness_input" in
+    *" refs/heads/main"* | *" refs/heads/master"*)
+      harness_bin="$(harness_entry)"
+      if [ ! -x "$harness_bin" ]; then
+        printf '[harness] 拒绝更新主分支: 主 Worktree 缺少 %s，在主 Worktree 运行 harness install 后重试\\n' "$harness_bin" >&2
+        exit 1
+      fi
+      printf '%s\\n' "$harness_input" | "$harness_bin" githook reference-transaction "$1" || exit $?
+      ;;
+  esac
+fi
+${delegate}exit 0
+${HOOK_END}
+`;
+  }
+  // pre-commit 比较暂存区的 tree，commit-msg 比较提交信息文件的校验和。
+  const snapshot = name === "pre-commit" ? 'git write-tree 2>/dev/null' : 'cksum < "$1" 2>/dev/null';
+  const delegate = projectHooks
+    ? `${projectHookLookup(projectHooks, name)}
+if [ -x "$project_hook" ]; then
+  harness_before="$(${snapshot})"
+  "$project_hook" "$@" || exit $?
+  if [ "$(${snapshot})" != "$harness_before" ]; then
+    harness_check "$@" || exit $?
+  fi
+fi
+`
+    : "";
+  return `${head}
+${managedCheck(name)}
+harness_check "$@" || exit $?
+${delegate}exit 0
+${HOOK_END}
+`;
+}
+
+/** 文件是不是 harness 接管模式生成的：去掉 harness 块后只剩 shebang。 */
+function managedHookReady(file) {
+  if (!existsSync(file)) return false;
+  const text = readFileSync(file, "utf8");
+  return text.includes(HOOK_MARK) && stripHookBlock(text).split("\n").every((line) => !line.trim() || line.startsWith("#!"));
+}
+
+/**
+ * 接管模式：钩子目录整个由 harness 生成。目录里已有其他工具写的内容时拒绝覆盖，
+ * 提示把它们移到项目钩子目录，否则会被静默冲掉。
+ */
+export function writeManagedHooks({ root, hooks }) {
+  const dir = join(root, hooks.hooksDir);
+  mkdirSync(dir, { recursive: true });
+  const foreign = HOOK_NAMES.filter((name) => existsSync(join(dir, name)) && !managedHookReady(join(dir, name)));
+  if (foreign.length > 0) {
+    const target = hooks.projectHooks ?? "git.projectHooks 指定的目录";
+    throw new Error(
+      `${hooks.hooksDir} 由 harness 接管，但其中 ${foreign.join("、")} 含有其他内容。把这些脚本移到 ${target}，harness 检查通过后会调用它们，然后重新运行`,
+    );
+  }
+  const results = HOOK_NAMES.map((name) => {
+    const file = join(dir, name);
+    const before = existsSync(file) ? readFileSync(file, "utf8") : "";
+    const body = managedHookBody(name, hooks.projectHooks);
+    writeFileSync(file, body);
+    chmodSync(file, 0o755);
+    return { file, updated: before !== body };
+  });
+  return { dir, hooks: results, managed: true };
+}
+
+/** core.hooksPath 解析成绝对路径：相对路径按当前 Worktree 解析，与 git 的行为一致。 */
+function resolvedHooksPath(root) {
+  const current = git(root, ["config", "--get", "core.hooksPath"]).stdout.trim();
+  if (!current) return { current: null, resolved: null };
+  return { current, resolved: isAbsolute(current) ? current : join(root, current) };
+}
+
+/**
+ * 接管模式下 core.hooksPath 的现状，只读：
+ * ok 已指向主 Worktree 里的钩子目录；pending 主 Worktree 里还没有生成的钩子（任务分支尚未合入）；mismatch 指向别处。
+ */
+export function hooksPathState({ root, hooks }) {
+  const target = join(mainWorktreeRoot(root), hooks.hooksDir);
+  const { current, resolved } = resolvedHooksPath(root);
+  if (resolved && samePath(resolved, target)) return { state: "ok", target, current };
+  const ready = HOOK_NAMES.every((name) => managedHookReady(join(target, name)));
+  return { state: ready ? "mismatch" : "pending", target, current };
+}
+
+/**
+ * 让 core.hooksPath 指向主 Worktree 里的钩子目录。写在公共配置里，所有 Worktree 共用，
+ * 停在旧分支、检出里还没有这个目录的 Worktree 也执行同一份钩子。
+ * 主 Worktree 里还没有生成的钩子时不切换：指向不存在的目录，git 会静默跳过钩子，主分支保护也随之失效。
+ */
+export function ensureHooksPath({ root, hooks }) {
+  const before = hooksPathState({ root, hooks });
+  if (before.state !== "mismatch") return { ...before, previous: before.current };
+  const set = git(root, ["config", "--file", join(commonDir(root), "config"), "core.hooksPath", before.target]);
+  if (set.status !== 0) throw new Error(`设置 core.hooksPath 失败: ${set.stderr.trim()}`);
+  const after = hooksPathState({ root, hooks });
+  // 仍不一致说明有更高优先级的设置（例如 Worktree 级配置）盖住了公共配置，交给 doctor 报出来。
+  return { ...after, state: after.state === "ok" ? "switched" : "overridden", previous: before.current };
 }
 
 /**
@@ -425,18 +603,22 @@ export function installAll({ cwd, takeOver = false }) {
   // 旧版生成过带本机绝对路径的入口脚本，入口改为 shim 后不再需要。
   for (const name of ["claude-hook.mjs", "codex-hook.mjs"]) rmSync(join(root, ".harness", "bin", name), { force: true });
   const shim = writeShim({ root });
-  const hooks = writeGitHooks({ root, takeOver });
+  // 按当前 Worktree 的配置写：任务分支加上或改了钩子目录配置时，生成的钩子随分支提交，合入前由人确认。
+  const hooksConfig = worktreeHooksConfig(root);
+  const hooks = writeGitHooks({ root, takeOver, hooks: hooksConfig });
+  const hooksPath = hooksConfig ? ensureHooksPath({ root, hooks: hooksConfig }) : null;
   const claude = writeClaudeSettings({ root, takeOver });
   const codex = writeCodexHooks({ root, takeOver });
   const dsh = writeDshPlugin({ root });
   const gitignore = ensureGitignore({ root });
   const shimTracked = git(root, ["ls-files", "--error-unmatch", SHIM_REL]).status === 0;
-  return { root, published, shim, hooks, claude, codex, dsh, gitignore, shimTracked };
+  return { root, published, shim, hooks, hooksPath, claude, codex, dsh, gitignore, shimTracked };
 }
 
 /**
  * 只刷新本机这一份：安装版本、所有 Worktree 共用的钩子目录、DSH 插件目录，不碰任何入库文件。
  * 合并工具在入口或钩子改动合入后，用新入口在主 Worktree 调用它，保证共用钩子与新版本一致。
+ * 项目接管了钩子目录时，钩子文件随分支入库，这里只让 core.hooksPath 指向主 Worktree 里的那份。
  */
 export function installLocal({ cwd }) {
   const root = repoRoot(cwd);
@@ -444,11 +626,13 @@ export function installLocal({ cwd }) {
   if (pinned && pinned !== packageVersion()) return installPinned({ root, version: pinned });
   loadKey();
   const published = publishVersion();
-  const { tracked } = hooksPlacement(root);
+  const hooksConfig = currentHooksConfig(root);
+  const { tracked } = hooksPlacement(root, { hooksDir: hooksConfig?.hooksDir });
   // 入库的钩子随分支分发，合入时已经是新内容；只刷新共用目录，避免把主 Worktree 改脏。
   const hooks = tracked ? null : writeGitHooks({ root });
+  const hooksPath = hooksConfig ? ensureHooksPath({ root, hooks: hooksConfig }) : null;
   const dsh = writeDshPlugin({ root });
-  return { root, published, hooks, hooksTracked: tracked, dsh };
+  return { root, published, hooks, hooksTracked: tracked, hooksPath, dsh };
 }
 
 /** 项目入口锁定的版本：优先读 .harness/VERSION，没有时从入口 shim 里解析。 */
