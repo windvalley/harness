@@ -20,6 +20,7 @@
 - `commit-msg` 按 git 的清理规则判定提交信息：用编辑器写提交信息时，钩子拿到的文件还带着注释行与剪刀线以下的 diff，原先会被带 `$` 的规则误拒。
 - `core.hooksPath` 是指向主 Worktree 的绝对路径时，在 Linked Worktree 里运行 `install` 会改写主 Worktree 的入库文件；现在定位到当前 Worktree 自己的检出。
 - 合并改动了 `.harness/config.json` 时同样在主 Worktree 刷新本机钩子。
+- `gate-self` 的命令行入口保护只认带斜杠的路径，对整个目录的 `git rm -r`、`mv`、`cp -r` 拦不住；现在目录本身同样受保护，同名前缀的其他目录（例如 `.githooks-backup`）不受影响。
 
 ## [0.5.0] - 2026-10-23
 

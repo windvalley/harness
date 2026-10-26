@@ -25,9 +25,9 @@
       "kind": "shell-forbid",
       "scope": "whole",
       "patterns": [
-        "\\b(sed|perl|awk|tee|cp|mv|rm|truncate|install|ln|chmod|dd)\\b[^|;&]*(\\.harness/(bin|hooks)/|\\.claude/settings|\\.codex/hooks\\.json|\\.githooks/|\\.husky/)",
+        "\\b(sed|perl|awk|tee|cp|mv|rm|truncate|install|ln|chmod|dd)\\b[^|;&]*(\\.harness/(bin|hooks)(?=[/\\s\"']|$)|\\.claude/settings|\\.codex/hooks\\.json|\\.githooks(?=[/\\s\"']|$)|\\.husky(?=[/\\s\"']|$))",
         ">>?\\s*\\S*(\\.harness/(bin|hooks)/|\\.claude/settings|\\.codex/hooks\\.json|\\.githooks/|\\.husky/)",
-        "\\b(node|python3?|ruby|bash|sh)\\b\\s+(-e|-c|-p)\\b[^|;&]*(\\.harness/(bin|hooks)/|\\.claude/settings|\\.codex/hooks\\.json|\\.githooks/|\\.husky/)"
+        "\\b(node|python3?|ruby|bash|sh)\\b\\s+(-e|-c|-p)\\b[^|;&]*(\\.harness/(bin|hooks)(?=[/\\s\"']|$)|\\.claude/settings|\\.codex/hooks\\.json|\\.githooks(?=[/\\s\"']|$)|\\.husky(?=[/\\s\"']|$))"
       ],
       "reason": "不能用命令行改写门禁的执行器入口",
       "fix": "在任务分支运行 harness install 重新生成入口，合并前由用户确认"

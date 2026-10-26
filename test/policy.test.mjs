@@ -165,6 +165,16 @@ describe("命令判定", () => {
     assert.ok(denies({ kind: "search", path: ".env" }));
     assert.equal(denies({ kind: "search", path: "src" }), false);
   });
+
+  test("执行器入口的命令行保护覆盖整个目录，同名前缀的其他目录不受影响", () => {
+    const husky = `.hu${"sky"}`;
+    for (const command of [`git rm -r -q frontend/${husky}`, "mv .githooks hooks.bak", `git mv ${husky} tools/x`, "cp -r x .githooks", "git mv .harness/bin tmp-bin"]) {
+      assert.equal(decide({ kind: "shell", command }).rule, "protect-executor-via-shell", command);
+    }
+    for (const command of ["git add .githooks", "cat .githooks/pre-commit", `ls frontend/${husky}`, "cp lint.js .githooks-backup/x"]) {
+      assert.equal(denies({ kind: "shell", command }), false, command);
+    }
+  });
 });
 
 describe("主 Worktree 只用来合并（main-worktree 预设）", () => {

@@ -106,6 +106,9 @@
         { "kind": "shell", "command": "sed -i 's/a/b/' .claude/settings.json", "expect": "deny", "rule": "protect-executor-via-shell" },
         { "kind": "shell", "command": "echo {} > .codex/hooks.json", "expect": "deny", "rule": "protect-executor-via-shell" },
         { "kind": "shell", "command": "rm .husky/pre-commit", "expect": "deny", "rule": "protect-executor-via-shell" },
+        { "kind": "shell", "command": "git rm -r -q frontend/.husky", "expect": "deny", "rule": "protect-executor-via-shell" },
+        { "kind": "shell", "command": "mv .githooks hooks.bak", "expect": "deny", "rule": "protect-executor-via-shell" },
+        { "kind": "shell", "command": "cp lint.js .githooks-backup/x", "expect": "allow" },
         { "kind": "shell", "command": "cat .harness/bin/harness", "expect": "allow" }
       ]
     },
