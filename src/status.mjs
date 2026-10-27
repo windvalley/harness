@@ -94,13 +94,13 @@ export function branchStatus({ cwd, branch }) {
     const base = gitOk(root, ["merge-base", mainCommit, branchCommit]);
     const need = planRequirement({ root, project, base, head: branchCommit });
     if (need.reasons.length === 0) {
-      add("plan", "ok", `属于直接实施的范围（代码改动 ${need.lines} 行），不需要批准方案`);
+      add("plan", "ok", `属于直接实施的范围（代码改动 ${need.lines} 行），不需要实施授权`);
     } else {
       const state = approvalState({ root, branch, acceptanceText: showBlob(root, branchCommit, acceptancePath(project, branch)) });
-      if (state.approved) add("plan", "ok", `方案已批准（${need.reasons.join("；")}）`);
+      if (state.approved) add("plan", "ok", `已有实施授权（${need.reasons.join("；")}；依据：${state.record.note}）`);
       else {
-        add("plan", "fail", `${need.reasons.join("；")}，${state.reason}：由人运行 harness approve --branch ${branch}`);
-        result.blockers.push("方案待批准");
+        add("plan", "fail", `${need.reasons.join("；")}，${state.reason}：用户同意实施后运行 harness approve --branch ${branch} --yes --note "<用户原话>"`);
+        result.blockers.push("待实施授权");
       }
     }
   }

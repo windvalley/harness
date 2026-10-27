@@ -14,6 +14,7 @@ const POLICY = { version: 1, presets: ["secrets", "git-safety", "gate-self", "pl
 const BRANCH = "feat/login";
 const ACCEPTANCE = ".harness/acceptance/feat-login.md";
 const PLAN = "docs/changes/login/plan.md";
+const QUOTE = "可以，开始实施";
 const code = (lines) => `${Array.from({ length: lines }, (_, i) => `export const v${i} = ${i};`).join("\n")}\n`;
 
 function setup() {
@@ -30,10 +31,11 @@ function linkedTask(repo) {
   return linked;
 }
 
-function writeHook(repo, cwd, file) {
-  const payload = { tool_name: "Write", tool_input: { file_path: join(cwd, file), content: "x\n" }, cwd };
+function claudeHook(repo, payload) {
   return sh(repo.root, join(repo.root, ".harness/bin/harness"), ["hook", "--client", "claude"], repo.env, JSON.stringify(payload));
 }
+const writeHook = (repo, cwd, file) => claudeHook(repo, { tool_name: "Write", tool_input: { file_path: join(cwd, file), content: "x\n" }, cwd });
+const bashHook = (repo, cwd, command) => claudeHook(repo, { tool_name: "Bash", tool_input: { command }, cwd });
 
 function landed(repo, branch) {
   fakeReviewer(repo, APPROVE);
@@ -45,7 +47,7 @@ function landed(repo, branch) {
 }
 
 describe("先方案后实施", () => {
-  test("写了实施方案后，批准前只能写方案文件；批准后放行，清单再改又要重新批准", () => {
+  test("写了实施方案后，记录授权前只能写方案文件；记录后放行，清单再改又要重新记录", () => {
     const repo = setup();
     const linked = linkedTask(repo);
     assert.equal(writeHook(repo, linked, "src/app.js").status, 0, "还没写方案时按直接实施处理");
@@ -55,13 +57,14 @@ describe("先方案后实施", () => {
     const denied = writeHook(repo, linked, "src/app.js");
     assert.equal(denied.status, 2);
     assert.match(denied.stderr, /plan-before-code/);
-    assert.match(denied.stderr, /harness approve --branch/);
-    assert.equal(writeHook(repo, linked, "src/app.test.js").status, 2, "测试同样要等批准");
+    assert.match(denied.stderr, /用户还没有同意实施时.*停下等待/);
+    assert.match(denied.stderr, /harness approve --branch <任务分支> --yes --note/);
+    assert.equal(writeHook(repo, linked, "src/app.test.js").status, 2, "测试同样要等授权");
     assert.equal(writeHook(repo, linked, "docs/changes/login/spec.md").status, 0);
     assert.equal(writeHook(repo, linked, ACCEPTANCE).status, 0);
 
-    const early = repo.cli("approve", "--branch", BRANCH, "--yes");
-    assert.notEqual(early.status, 0, "方案没提交到分支时不能批准");
+    const early = repo.cli("approve", "--branch", BRANCH, "--yes", "--note", QUOTE);
+    assert.notEqual(early.status, 0, "方案没提交到分支时不能记录授权");
     assert.match(early.stderr, /先把方案提交到任务分支/);
 
     commit(linked, "docs(login): 方案\n\n- 验收清单与实施方案", {});
@@ -69,22 +72,32 @@ describe("先方案后实施", () => {
     assert.equal(summary.status, 0, summary.stderr);
     assert.match(summary.stdout, /docs\/changes\/login\/plan\.md/);
     assert.match(summary.stdout, /登录成功后进入首页/);
-    assert.equal(repo.cli("approve", "--branch", BRANCH, "--yes").status, 0);
-    assert.equal(writeHook(repo, linked, "src/app.js").status, 0, "批准后可以写测试与实现");
+    assert.match(summary.stdout, /还没有记录用户的实施授权/);
+    const approved = repo.cli("approve", "--branch", BRANCH, "--yes", "--note", QUOTE);
+    assert.equal(approved.status, 0, approved.stderr);
+    assert.match(repo.cli("approve", "--branch", BRANCH).stdout, new RegExp(`已记录实施授权（依据：${QUOTE}`));
+    assert.equal(writeHook(repo, linked, "src/app.js").status, 0, "记录授权后可以写测试与实现");
 
     write(linked, ACCEPTANCE, "- 登录成功后进入首页\n- 新加一条\n");
-    assert.equal(writeHook(repo, linked, "src/app.js").status, 2, "批准后清单又改了");
+    assert.equal(writeHook(repo, linked, "src/app.js").status, 2, "授权后清单又改了");
   });
 
-  test("Agent 不能代为批准", () => {
+  test("用户同意后由 Agent 记录授权，不需要用户执行命令，但必须照录原话", () => {
     const repo = setup();
-    const payload = { tool_name: "Bash", tool_input: { command: `.harness/bin/harness approve --branch ${BRANCH} --yes` }, cwd: repo.root };
-    const result = sh(repo.root, join(repo.root, ".harness/bin/harness"), ["hook", "--client", "claude"], repo.env, JSON.stringify(payload));
-    assert.equal(result.status, 2);
-    assert.match(result.stderr, /approve-human-only/);
+    const linked = linkedTask(repo);
+    commit(linked, "docs(login): 方案\n\n- 验收清单与实施方案", { [PLAN]: "# 实施方案\n", [ACCEPTANCE]: "- 登录成功后进入首页\n" });
+    const agent = bashHook(repo, linked, `.harness/bin/harness approve --branch ${BRANCH} --yes --note "${QUOTE}"`);
+    assert.equal(agent.status, 0, `Agent 可以记录授权: ${agent.stderr}`);
+
+    for (const args of [["--yes"], ["--yes", "--note", "  "]]) {
+      const refused = repo.cli("approve", "--branch", BRANCH, ...args);
+      assert.notEqual(refused.status, 0, "没写依据时不记录");
+      assert.match(refused.stderr, /--note/);
+    }
+    assert.match(repo.cli("status", "--branch", BRANCH).stdout, /待实施授权/);
   });
 
-  test("小改动直接合并，不需要方案", () => {
+  test("小改动直接合并，不需要授权记录", () => {
     const repo = setup();
     repo.branch("fix/small", { "src/a.js": code(3) });
     const status = repo.cli("status", "--branch", "fix/small");
@@ -93,19 +106,21 @@ describe("先方案后实施", () => {
     assert.equal(merged.status, 0, merged.stderr);
   });
 
-  test("超过阈值或改了库表、没有批准方案时拒绝合并，批准后放行", () => {
+  test("超过阈值或改了库表、没有授权记录时拒绝合并，记录后放行并显示依据", () => {
     const repo = setup();
     repo.branch(BRANCH, { "src/big.js": code(10), "src/big.test.js": code(50), [ACCEPTANCE]: "- 大改动\n" });
     const refused = landed(repo, BRANCH);
     assert.notEqual(refused.status, 0);
     assert.match(refused.stderr, /plan_unapproved/);
     assert.match(refused.stderr, /代码改动 10 行，超过 5 行/, "测试文件不计入行数");
-    assert.match(repo.cli("status", "--branch", BRANCH).stdout, /方案待批准/);
+    assert.match(refused.stderr, /先向用户说明/);
+    assert.match(repo.cli("status", "--branch", BRANCH).stdout, /待实施授权/);
 
-    assert.equal(repo.cli("approve", "--branch", BRANCH, "--yes").status, 0);
+    assert.equal(repo.cli("approve", "--branch", BRANCH, "--yes", "--note", QUOTE).status, 0);
+    assert.match(repo.cli("status", "--branch", BRANCH).stdout, new RegExp(`已有实施授权.*依据：${QUOTE}`));
     const merged = repo.cli("merge", "--branch", BRANCH);
     assert.equal(merged.status, 0, merged.stderr);
-    assert.match(merged.stderr, /方案已批准/);
+    assert.match(merged.stderr, new RegExp(`已有实施授权\\(依据: ${QUOTE}\\)`));
 
     repo.branch("feat/schema", { "db/migrations/0002_add_user.sql": "alter table t add c int;\n" });
     const schema = landed(repo, "feat/schema");
@@ -129,6 +144,7 @@ describe("先方案后实施", () => {
     assert.match(text, /自己的规则/);
     assert.doesNotMatch(text, /旧内容/);
     assert.match(text, /先判断任务分级/);
+    assert.match(text, /用户表达开始实施的意思后，连续实施到完成/);
     assert.match(text, /先红后绿/);
   });
 });

@@ -1,6 +1,6 @@
 {
   "id": "plan-first",
-  "description": "先方案后实施：任务分支写了实施方案而方案还没经人批准时，Agent 只能写方案与验收清单；写了方案、改了库表或代码改动超过阈值的分支，合并前必须有人批准过的方案",
+  "description": "先方案后实施：方案交出后等用户表达开始实施的意思，由 Agent 照录用户原话记录授权；记录之前只能写方案与验收清单。写了方案、改了库表或代码改动超过阈值的分支，合并前必须有授权记录",
   "rules": [
     {
       "id": "plan-before-code",
@@ -10,16 +10,8 @@
       "paths": ["**"],
       "allow": ["docs/changes/**", ".harness/acceptance/**"],
       "allowIgnored": true,
-      "reason": "实施方案还没有经人批准：批准之前只能写方案与验收清单，不能写测试和代码",
-      "fix": "把方案提交到任务分支，请用户查看后在自己的终端运行 harness approve --branch <任务分支> --yes 批准（Claude Code 里可以在输入框用 ! 前缀）；批准后再写测试与实现"
-    },
-    {
-      "id": "approve-human-only",
-      "kind": "shell-forbid",
-      "scope": "whole",
-      "patterns": ["\\bharness(\\.mjs)?\\s+approve\\b[^|;&]*--yes\\b"],
-      "reason": "方案批准必须由人做出，Agent 代为批准等于没有批准",
-      "fix": "运行不带 --yes 的 harness approve 把摘要交给用户，由用户在自己的终端执行带 --yes 的命令"
+      "reason": "这个任务的方案还没有实施授权记录：记录之前只能写方案与验收清单，不能写测试和代码",
+      "fix": "用户还没有同意实施时，交出方案后停下等待；用户已经表达开始实施的意思时，把方案提交到任务分支，运行 harness approve --branch <任务分支> --yes --note \"<用户原话>\" 记录授权，然后连续实施到完成"
     }
   ]
 }

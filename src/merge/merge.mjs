@@ -230,7 +230,7 @@ export async function mergeTask({ cwd, branch, dryRun = false, log = console.err
       log(`[merge] 门禁改动已确认(确认人: ${confirm.record.by ?? "user"})`);
     }
 
-    // 方案：写了实施方案、改了库表或改动超过阈值的任务，必须有人批准过方案，且批准后验收清单没有再改。
+    // 方案：写了实施方案、改了库表或改动超过阈值的任务，必须有用户的实施授权记录，且授权后验收清单没有再改。
     // 实时拦截只能约束走了方案流程的任务，这里兜住没写方案就直接做了大改动的情况。
     if (planEnforced(project.policy)) {
       const need = planRequirement({ root, project, base: baseCommit, head: branchCommit });
@@ -240,15 +240,15 @@ export async function mergeTask({ cwd, branch, dryRun = false, log = console.err
         if (!state.approved) {
           throw new MergeError(
             [
-              `这次改动需要先由人批准方案（${need.reasons.join("；")}）: ${state.reason}`,
-              `方案包括验收清单 ${acceptancePath(project, branch)}，以及行为说明与实施方案。`,
-              `由人查看并批准: harness approve --branch ${branch}，确认无误后加 --yes；Agent 不能代为批准。`,
-              "批准后重新运行 harness merge。",
+              `这次改动属于先方案后实施的任务（${need.reasons.join("；")}），没有有效的实施授权: ${state.reason}`,
+              `先向用户说明方案（验收清单 ${acceptancePath(project, branch)}、行为说明与实施方案）；用户表达开始实施的意思后，`,
+              `运行 harness approve --branch ${branch} --yes --note "<用户原话>" 记录授权，再重新运行 harness merge。`,
+              "用户没有同意时不要记录授权。",
             ].join("\n"),
             "plan_unapproved",
           );
         }
-        log(`[merge] 方案已批准(批准人: ${state.record.by ?? "user"})`);
+        log(`[merge] 已有实施授权(依据: ${state.record.note})`);
       }
     }
 

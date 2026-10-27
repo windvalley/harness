@@ -187,7 +187,7 @@
     },
     {
       "id": "g17-plan-first",
-      "title": "启用 plan-first 后，方案待批准时只能写方案与验收清单；批准只能由人执行",
+      "title": "启用 plan-first 后，没有实施授权记录时只能写方案与验收清单；用户同意后由 Agent 记录授权",
       "kind": "policy",
       "presets": ["plan-first"],
       "steps": [
@@ -196,8 +196,7 @@
         { "kind": "write", "path": "docs/changes/login/plan.md", "content": "x", "expect": "allow", "planPending": true },
         { "kind": "write", "path": ".harness/acceptance/feat-login.md", "content": "x", "expect": "allow", "planPending": true },
         { "kind": "write", "path": "src/app.js", "content": "x", "expect": "allow", "planPending": false },
-        { "kind": "shell", "command": ".harness/bin/harness approve --branch feat/login --yes", "expect": "deny", "rule": "approve-human-only" },
-        { "kind": "shell", "command": ".harness/bin/harness approve --branch feat/login", "expect": "allow" }
+        { "kind": "shell", "command": ".harness/bin/harness approve --branch feat/login --yes --note \"可以，开始实施\"", "expect": "allow" }
       ]
     }
   ]

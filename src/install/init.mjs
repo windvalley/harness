@@ -22,7 +22,7 @@ function defaultConfig({ mainBranch }) {
     },
     // backend 取 auto 时按 claude、codex 顺序用本机第一个可用的；其他工具用 command 接入。
     review: { backend: "auto", model: "sonnet", maxBudgetUsd: 2, codexModel: null, command: null, blockSeverities: ["high", "critical"] },
-    // plan：任务分级的机械判定，plan-first 预设据此要求先批准方案；exclude 里的文件不计入代码改动行数。
+    // plan：任务分级的机械判定，plan-first 预设据此要求先有实施授权；exclude 里的文件不计入代码改动行数。
     intent: { mode: "checklist", dir: "acceptance", plan: planSettings({}) },
     governance: { confirmOnGateChange: true, gatePaths: [] },
     escalate: {

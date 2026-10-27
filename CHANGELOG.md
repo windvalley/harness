@@ -11,10 +11,10 @@
 
 - 任务分级：小优化、小迭代，不改库表与接口契约，代码改动少于 500 行的直接实施；其余先探索、逐个澄清、写方案，交出方案后停下等授权。
   阈值与判定范围在 `.harness/config.json` 的 `intent.plan` 里配置。
-- 预设 `plan-first`，`init` 默认启用：任务分支写了实施方案、方案还没批准时，Agent 只能写方案与验收清单；写了方案、改了库表相关文件或代码改动超过阈值的分支，合并前必须有批准过的方案。
-- `harness approve --branch <分支>` 查看方案摘要，`--yes` 由人批准，Agent 执行会被拦截；批准绑定验收清单的内容，清单再改要重新批准。
-  `status` 显示这一步。
-- 独立评审把批准过的验收清单标注为人已确认的需求。
+- 预设 `plan-first`，`init` 默认启用：任务分支写了实施方案、还没有实施授权记录时，Agent 只能写方案与验收清单；写了方案、改了库表相关文件或代码改动超过阈值的分支，合并前必须有授权记录。
+- 用户在对话里表达开始实施的意思就是授权，Agent 运行 `harness approve --branch <分支> --yes --note "<用户原话>"` 记录后连续实施到完成，用户不需要执行命令。
+  `--note` 必填并照录原话，合并输出、`status` 与摘要都会显示；授权绑定验收清单的内容，清单再改要重新取得同意。
+- 独立评审把有授权记录的验收清单标注为用户同意过的需求。
 - 验收清单模板 `templates/acceptance.md`；行为说明与实施方案模板按“问题、验收、失败时、这次不做、待确认”与“验收到测试的对应、实现顺序、环境、复用”重写。
 - 起始黄金任务 `g17-plan-first`，只在启用这个预设时重放。
 
@@ -31,7 +31,7 @@
 
 ### 升级说明
 
-- `upgrade` 不改 `config.json` 与 `policy.json`：要启用方案批准，在 `policy.json` 的 `presets` 里加 `plan-first`，需要时在 `config.json` 的 `intent` 里加 `plan`（不加按默认值）；起始黄金任务 `g17-plan-first` 从 `assets/golden/starter.json` 复制。
+- `upgrade` 不改 `config.json` 与 `policy.json`：要启用实施授权，在 `policy.json` 的 `presets` 里加 `plan-first`，需要时在 `config.json` 的 `intent` 里加 `plan`（不加按默认值）；起始黄金任务 `g17-plan-first` 从 `assets/golden/starter.json` 复制。
 - 本机 `~/.local/share/harness/versions/0.6.0` 若装过 0.6.0 发布后的代码，内容会与标签 `v0.6.0` 不一致；升级到 0.7.0 后可以用 `harness prune` 清理。
 
 ## [0.6.0] - 2026-10-26

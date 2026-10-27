@@ -38,7 +38,7 @@ Agent 调用工具 ----> [1] 实时拦截：读写文件、执行命令之前按
 2. `review`：启动一个不了解实现过程的评审进程，只给它验收清单、diff 和证据摘要，从需求符合度与工程质量两个维度给出结论。
 3. `confirm`：改动涉及门禁本身（配置、规则、入口、钩子）时，由人看过摘要后确认一次。
    Agent 执行带 `--yes` 的确认会被拦截。
-   启用 `plan-first` 时，大改动还要有人批准过的方案，见“任务分级与方案批准”。
+   启用 `plan-first` 时，大改动还要有你同意实施的记录，见“任务分级与实施授权”。
 4. `merge`：核对上面的记录仍然有效，再更新主分支。
    `reference-transaction` 钩子只放行带合并令牌的写入，令牌由证据密钥对“旧提交、新提交”签名得到，只有 `harness merge` 能生成。
 
@@ -69,7 +69,7 @@ Agent 调用工具 ----> [1] 实时拦截：读写文件、执行命令之前按
 | `AGENTS.md` 里的托管块 | Agent 每次都会加载的硬性要求：先读规范、任务分级、先红后绿、按门禁流程合并 | 是 |
 | `.harness/dsh-plugin/` | DeepSeek Harness 插件，含本机绝对路径 | 否 |
 | `.git/hooks/` 或 `core.hooksPath` 指向的目录 | `pre-commit`、`commit-msg`、`reference-transaction` 三个钩子 | 默认不入库 |
-| `.git/harness/` | 证据、评审、确认、方案批准、上报记录与账本 `ledger.jsonl`，所有 Worktree 共用；被其他工具占用时改用 `.git/harness.d/` | 否 |
+| `.git/harness/` | 证据、评审、确认、实施授权、上报记录与账本 `ledger.jsonl`，所有 Worktree 共用；被其他工具占用时改用 `.git/harness.d/` | 否 |
 | `~/.local/share/harness/versions/<版本>/` | 按版本安装的门禁代码，本机所有项目共用 | 否 |
 | `~/.local/share/harness/evidence.key` | 签名密钥，权限 600 | 否 |
 | `~/.cache/harness/checkouts/<哈希>/work` | verify 的固定检出，以分离头指针的 Linked Worktree 出现在 `git worktree list` 里 | 否 |
@@ -212,7 +212,7 @@ git 层对所有客户端生效，实时拦截没接上时，提交检查与主�
 
 ## 日常使用
 
-### 任务分级与方案批准
+### 任务分级与实施授权
 
 Agent 开始任务前先判断分级，规则写在 `.harness/rules/core.md`，要点同时写进了 `AGENTS.md` 的托管块：
 
@@ -224,20 +224,21 @@ Agent 开始任务前先判断分级，规则写在 `.harness/rules/core.md`，�
 1. 探索：Agent 先读仓库，说明需求涉及的能力现在做到哪一步、相关定义在哪、有没有半成品，每条结论附 `文件:行号`。
 2. 澄清：一次问一个问题，每个问题给出推荐答案；你说“待定”的问题会原样列进方案，不会被替你填上。
 3. 方案：验收清单 `.harness/acceptance/<分支名>.md`、行为说明 `docs/changes/<change-id>/spec.md` 与实施方案 `docs/changes/<change-id>/plan.md`，提交到任务分支后停下。
-4. 批准：你看过方案后在自己的终端运行 `harness approve --branch <分支> --yes`（Claude Code 里可以用 `!` 前缀）。
-5. 实施：Agent 先把每条验收写成测试并确认全部失败，再实现到全部通过，最后按验收清单逐条给出结果与证据；中途只在缺权限、需要业务拍板、范围明显超出方案或同一个问题连续三轮没解决时停下。
+4. 授权：你在对话里说“开始实施”“按方案做”之类的话就够了，不需要执行任何命令。
+5. 实施：Agent 连续做到完成，先把每条验收写成测试并确认全部失败，再实现到全部通过，最后按验收清单逐条给出结果与证据；中途只在缺权限、需要业务拍板、范围明显超出方案或同一个问题连续三轮没解决时停下。
 
 改变行为的实施默认先红后绿，直接实施的任务同样如此。
 你在对话里给出不同的节奏时，Agent 按你说的做。
 
-`plan-first` 预设让其中两步由门禁执行，不再只靠 Agent 自觉：
+`plan-first` 预设给“停下等授权”加了兜底，不再只靠 Agent 自觉：
 
-- 任务分支写了实施方案（默认 `docs/changes/*/plan.md`，包括还没提交的）、方案还没批准时，Agent 只能写 `docs/changes/` 与 `.harness/acceptance/` 下的文件，写测试和代码会被拦截。
-- 合并时，写了实施方案、改了库表相关文件或代码改动超过阈值的分支，必须有批准过的方案，否则报 `plan_unapproved`。
-- `harness approve --branch <分支>` 不带 `--yes` 时只输出摘要：触发原因、方案文件、批准前分支上已有的其他改动，以及验收清单全文。
-  带 `--yes` 的批准只能由人执行，Agent 执行会被拦截。
-- 批准绑定验收清单的内容：之后清单再改，要重新批准；实施方案里的进度记录可以随时更新。
-- 批准之后，独立评审把这份清单当作人已确认的需求来核对。
+- 任务分支写了实施方案（默认 `docs/changes/*/plan.md`，包括还没提交的）、还没有授权记录时，Agent 只能写 `docs/changes/` 与 `.harness/acceptance/` 下的文件，写测试和代码会被拦截。
+- 你表达开始实施的意思后，Agent 运行 `harness approve --branch <分支> --yes --note "<你的原话>"` 记下授权，再开始写测试和代码。
+  `--note` 必须照录你的原话，不写不予记录。
+- 合并时，写了实施方案、改了库表相关文件或代码改动超过阈值的分支，必须有授权记录，否则报 `plan_unapproved`；没写方案就直接做了大改动的分支在这里被拦下。
+- 合并输出、`harness status` 与 `harness approve --branch <分支>` 的摘要都会显示记录下来的原话，你可以随时核对 Agent 是否真的得到了你的同意。
+- 授权绑定验收清单的内容：之后要改清单，Agent 要先向你说明并重新取得同意；实施方案里的进度记录可以随时更新。
+- 有授权记录后，独立评审把这份清单当作你同意过的需求来核对。
 
 ### 配合使用的提示词
 
@@ -245,16 +246,18 @@ Agent 开始任务前先判断分级，规则写在 `.harness/rules/core.md`，�
 
 ```text
 需求：<描述>
-按 harness 规则先判断任务分级并说明依据。属于先方案后实施的，先探索仓库再逐个问我，方案提交后停下等我批准。
+按 harness 规则先判断任务分级并说明依据。属于先方案后实施的，先探索仓库再逐个问我，方案提交后停下等我说开始。
 ```
 
 ```text
-问题问完了，写验收清单、spec 和 plan，提交到任务分支，运行不带 --yes 的 harness approve 把摘要给我。
+问题问完了，写验收清单、spec 和 plan，提交到任务分支后给我看。
 ```
 
 ```text
-方案已批准（或：这是小改动，直接做）。按 plan 连续执行：先把验收写成测试并确认全部失败，再实现到全部通过，最后按验收清单逐条给出结果和证据。
+可以，开始实施。
 ```
+
+最后一句就是授权，Agent 会记下原话，然后按 plan 先红后绿连续做到完成。
 
 ### 一次任务
 
@@ -466,7 +469,7 @@ node ~/github/harness/bin/harness.mjs install --local   # 按新锁定的版本�
 | `intent.dir` | `acceptance` | 清单目录，位于 `.harness/` 下 |
 | `intent.plan.maxLines` | `500` | 直接实施的代码改动上限，按新增加删除的行数算 |
 | `intent.plan.markers` | `docs/changes/*/plan.md` | 实施方案文件；分支里出现它就按先方案后实施处理 |
-| `intent.plan.triggers` | `**/migrations/**`、`**/*.sql` | 库表相关文件，改了就需要批准方案 |
+| `intent.plan.triggers` | `**/migrations/**`、`**/*.sql` | 库表相关文件，改了就需要实施授权 |
 | `intent.plan.exclude` | 测试、文档、锁文件与 `.harness/` | 不计入代码改动行数的文件；写了这一项会整个替换默认列表 |
 | `governance.confirmOnGateChange` | `true` | 门禁改动是否要人工确认；首次接入不受这个开关影响 |
 | `governance.gatePaths` | `[]` | 追加的门禁文件 glob |
@@ -603,7 +606,7 @@ node ~/github/harness/bin/harness.mjs install --local   # 按新锁定的版本�
 | `secrets` | 禁止读取、写入或用命令外发 `.env`、私钥、凭据文件与证据密钥，同名 `.example` 文件放行 |
 | `git-safety` | 拦截递归删除、丢弃改动、删除分支、强推、`stash`、`--no-verify`，以及在主分支上合并、变基、重置和绕过合并工具写主分支 |
 | `gate-self` | 保护执行器入口与绕过开关，轮换密钥与人工确认只能由人执行；规则与配置本身允许修改，合并前由人确认 |
-| `plan-first` | 先方案后实施：方案待批准时 Agent 只能写方案文件，大改动合并前必须有批准过的方案，批准只能由人执行 |
+| `plan-first` | 先方案后实施：没有实施授权记录时 Agent 只能写方案文件，大改动合并前必须有授权记录；你在对话里同意后由 Agent 照录原话记录 |
 | `main-worktree` | 可选，`init` 不启用：主 Worktree 只用来合并，改动、切分支与提交都放在 Linked Worktree |
 
 `secrets`、`git-safety`、`gate-self`、`plan-first` 由 `init` 写进 `presets`。
@@ -702,7 +705,7 @@ node ~/github/harness/bin/harness.mjs install --local   # 按新锁定的版本�
 | `review --branch <分支>` | 独立评审 |
 | `status [--branch <分支>]` | 只读汇总还差哪几步才能合并，默认看当前分支 |
 | `confirm --branch <分支> [--yes] [--note <说明>]` | 查看门禁改动摘要；带 `--yes` 由人记录确认 |
-| `approve --branch <分支> [--yes] [--note <说明>]` | 查看任务方案摘要；带 `--yes` 由人批准方案 |
+| `approve --branch <分支> [--yes --note <原话>]` | 查看任务方案与授权状态；用户同意实施后由 Agent 带 `--yes` 照录原话记录授权 |
 | `merge --branch <分支> [--dry-run]` | 受控合并到主分支 |
 | `doctor` | 安装与接入自检 |
 | `rules` | 列出解析后的生效规则 |
@@ -735,7 +738,8 @@ harness 防的是 Agent 的误操作，以及被提示注入后常见的绕过�
 - 路径规则只约束写文件、读文件类的工具调用，用 shell 命令读写同一个文件要靠 `shell-forbid` 一类的命令规则覆盖。
 - Codex 没有信任钩子时没有实时拦截；DeepSeek Harness 插件尚未完成端到端实测；Claude 桌面版只做了静态确认。
 - 任务分级与先红后绿的判断仍由 Agent 做出，门禁只兜底可以机械判定的部分：
-  写了方案的任务在批准前改不了代码，超过阈值或改了库表的分支没有批准过的方案合不进去。
+  写了方案的任务在记录授权前改不了代码，超过阈值或改了库表的分支没有授权记录合不进去。
+  授权记录由 Agent 写入，门禁能保证它存在、照录了原话并且清单没有再改，但无法核实你是否真的说过这句话，要靠你在合并输出或 `harness status` 里核对。
   Agent 把大任务误判成直接实施时，要到合并才会被拦下；测试是否先于实现失败过，门禁无法证明，靠评审与你抽查。
 
 ## 常见问题
@@ -746,8 +750,8 @@ harness 防的是 Agent 的误操作，以及被提示注入后常见的绕过�
 | `主 Worktree 当前不在 main 分支` 或 `存在未提交或未跟踪文件` | 把主 Worktree 切回主分支并处理掉改动；`harness status` 与 `harness doctor` 会提前报出 |
 | `本机没有安装门禁锁定的版本` | 在项目目录运行 `node ~/github/harness/bin/harness.mjs install --local` |
 | `gate_change_unconfirmed` | 由人运行 `harness confirm --branch <分支>` 看过摘要，再加 `--yes` |
-| `plan_unapproved` | 大改动没有批准过的方案，或批准后验收清单又改了；补齐方案并提交，由人运行 `harness approve --branch <分支>` 看过后加 `--yes` |
-| 写代码时被 `plan-before-code` 拦截 | 任务分支里有实施方案但还没批准，按上一条批准；只是借用了 `docs/changes/` 下的旧方案时，把它移出这次改动 |
+| `plan_unapproved` | 大改动没有实施授权记录，或授权后验收清单又改了；补齐方案并提交，向用户说明，用户同意后照录原话运行 `harness approve --branch <分支> --yes --note "<原话>"` |
+| 写代码时被 `plan-before-code` 拦截 | 任务分支里有实施方案但还没有授权记录；用户还没同意就停下等，已经同意就按上一条记录；只是借用了 `docs/changes/` 下的旧方案时，把它移出这次改动 |
 | `review_missing` 或 `review_blocked` | 运行 `harness review`；被拒时按发现修复，提交后重新 verify、review |
 | 验证结果是 `incomplete` | `requires` 里的依赖目录在主 Worktree 里不存在，安装依赖后重跑 |
 | 验证提示“未找到命令” | 本机没装检查用到的工具，装好后重跑 |

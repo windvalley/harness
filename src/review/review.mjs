@@ -295,7 +295,7 @@ export function readAcceptance({ project, root, branch, mainRef }) {
   const rel = acceptancePath(project, branch);
   const fromBranch = showBlob(root, branch, rel);
   if (fromBranch !== null) {
-    // 人批准方案时绑定了清单内容，内容没变就是人确认过的清单。
+    // 记录实施授权时绑定了清单内容，内容没变就是用户同意过的清单。
     const approved = approvalState({ root, branch, acceptanceText: fromBranch }).approved;
     return { path: rel, text: fromBranch, source: approved ? "approved" : "branch" };
   }
@@ -306,7 +306,7 @@ export function readAcceptance({ project, root, branch, mainRef }) {
 
 const ACCEPTANCE_SOURCES = {
   main: "主分支已确认的清单",
-  approved: "任务分支的清单，人已在批准方案时确认",
+  approved: "任务分支的清单，用户已同意按它实施",
   branch: "任务分支自带的清单，尚未经人工确认",
 };
 
@@ -393,7 +393,7 @@ export async function reviewBranch({ cwd, branch, log = console.error, reviewer 
   log(
     `[review] 评审 ${branch}，diff ${diffText.length} 字符` +
       (collapsed.length ? `（${collapsed.length} 个删除的文件只列路径）` : "") +
-      `，${acceptance ? `验收清单来自${{ main: "主分支", approved: "已批准的方案", branch: "任务分支(未确认)" }[acceptance.source]}` : "无验收清单"}`,
+      `，${acceptance ? `验收清单来自${{ main: "主分支", approved: "已授权实施的方案", branch: "任务分支(未确认)" }[acceptance.source]}` : "无验收清单"}`,
   );
   const prompt = buildPrompt({ acceptance, evidence: evidenceText, diff: diffText, branch });
   const { structured, costUsd, backend } = reviewer({ cwd: root, prompt, config });

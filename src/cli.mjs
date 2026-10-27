@@ -38,7 +38,7 @@ const USAGE = `harness <命令> [参数]
   review   --branch <名称>                          独立评审
   status   --branch <名称>                           只读汇总：还差哪几步才能合并
   confirm  --branch <名称> [--yes]                   查看门禁改动；--yes 记录人工确认
-  approve  --branch <名称> [--yes]                   查看任务方案；--yes 由人批准，之后 Agent 才能写测试与实现
+  approve  --branch <名称> [--yes --note <原话>]     查看任务方案；用户同意实施后加 --yes，--note 照录用户原话
   merge    --branch <名称> [--dry-run]               受控合并到主分支
 
 体检与度量
@@ -207,16 +207,16 @@ function cmdApprove(argv) {
     options: { branch: { type: "string" }, yes: { type: "boolean", default: false }, note: { type: "string" } },
   });
   if (!values.branch) {
-    process.stderr.write("用法: harness approve --branch <名称> [--yes] [--note 说明]\n");
+    process.stderr.write("用法: harness approve --branch <名称> [--yes --note <用户同意实施的原话>]\n");
     return 2;
   }
   if (!values.yes) {
     print(formatPlanSummary(planSummary({ cwd: process.cwd(), branch: values.branch })));
-    print("\n以上为只读摘要。方案无误后加 --yes 批准；批准后 Agent 才能写测试与实现，验收清单再改需要重新批准。");
+    print("\n以上为只读摘要。用户表达开始实施的意思后，加 --yes --note \"<用户原话>\" 记录授权；验收清单之后再改，要重新取得同意。");
     return 0;
   }
   const { summary } = approvePlan({ cwd: process.cwd(), branch: values.branch, note: values.note ?? "" });
-  print(`已批准 ${values.branch} 的方案（验收清单 ${summary.acceptancePath}，方案文件 ${summary.planFiles.length} 个）。`);
+  print(`已记录 ${values.branch} 的实施授权（依据：${values.note.trim()}；验收清单 ${summary.acceptancePath}，方案文件 ${summary.planFiles.length} 个）。`);
   return 0;
 }
 
