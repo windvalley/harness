@@ -56,11 +56,17 @@ export function publishVersion({ version = packageVersion() } = {}) {
     const installedFile = join(target, "MANIFEST.json");
     if (existsSync(installedFile)) {
       const installed = JSON.parse(readFileSync(installedFile, "utf8"));
-      if (JSON.stringify(installed.files) === JSON.stringify(incoming.files)) {
-        return { version, dir: target, existed: true };
+      if (JSON.stringify(installed.files) !== JSON.stringify(incoming.files)) {
+        // 版本目录按版本号不可变：同一个版本号换了代码，锁定这个版本的项目会在不同机器上跑出不同的门禁，
+        // 而清单随之重写，doctor 也发现不了。改了门禁代码要先升版本号。
+        throw new Error(
+          `版本 ${version} 已经安装在 ${target}，内容与当前代码不同。版本目录按版本号不可变：改了门禁代码先升版本号再安装；` +
+            "确认要丢弃已安装的内容时，由人删除这个目录后重试",
+        );
       }
+      // 内容与清单一致直接复用；目录被就地改动过时按同一份代码重新安装，恢复清单记录的内容。
+      if (verifyVersion({ version }).ok) return { version, dir: target, existed: true };
     }
-    // 内容不一致：替换旧目录，避免装着过期代码。
     rmSync(target, { recursive: true, force: true });
   }
   const tmp = `${target}.tmp-${process.pid}`;

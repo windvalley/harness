@@ -261,6 +261,26 @@ describe("另一台机器使用已接入的项目", () => {
     assert.match(local.stderr, /git fetch --tags/);
   });
 
+  test("同一个版本号不能装进不同的代码，被就地改动的版本目录按原内容恢复", () => {
+    const repo = makeRepo();
+    repos.push(repo);
+    const version = JSON.parse(readFileSync(join(repoCliPath(), "..", "..", "package.json"), "utf8")).version;
+    const file = join(repo.env.HARNESS_STORE, version, "src", "policy", "engine.mjs");
+    const original = readFileSync(file, "utf8");
+    writeFileSync(file, `${original}// 被改动\n`);
+    const restored = repo.rawCli("publish");
+    assert.equal(restored.status, 0, restored.stderr);
+    assert.equal(readFileSync(file, "utf8"), original, "内容按清单恢复");
+
+    const manifestFile = join(repo.env.HARNESS_STORE, version, "MANIFEST.json");
+    const manifest = JSON.parse(readFileSync(manifestFile, "utf8"));
+    manifest.files["src/policy/engine.mjs"] = "0".repeat(64);
+    writeFileSync(manifestFile, JSON.stringify(manifest));
+    const refused = repo.rawCli("publish");
+    assert.notEqual(refused.status, 0, "已安装的同版本内容不同，视为另一份代码");
+    assert.match(refused.stderr, /按版本号不可变/);
+  });
+
   test("publish 不能把当前代码装成别的版本号", () => {
     const repo = makeRepo();
     repos.push(repo);
