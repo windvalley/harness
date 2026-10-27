@@ -5,7 +5,7 @@ import { loadCurrentProject, mainBranch } from "../lib/config.mjs";
 import { git, mainWorktreeRoot, repoRoot } from "../lib/git.mjs";
 import { keyStatus } from "../lib/store.mjs";
 import { mainWorktreeProblems } from "../merge/merge.mjs";
-import { commandExists, resolveBackend } from "../review/review.mjs";
+import { commandExists, maxDiffChars, resolveBackend } from "../review/review.mjs";
 import { resolvePolicy } from "../policy/resolve.mjs";
 import { packageVersion, MARK_START } from "./managed.mjs";
 import { leftoverWorktrees } from "../worktree/clean.mjs";
@@ -231,6 +231,7 @@ export function doctor({ cwd = process.cwd() } = {}) {
     if (project.config.merge?.requireReview !== false) {
       try {
         const reviewConfig = project.config.review ?? {};
+        maxDiffChars(reviewConfig);
         const backend = resolveBackend(reviewConfig);
         const label = backend.name === "command" ? `command(${backend.argv[0]})` : backend.name;
         const how = (reviewConfig.backend ?? "auto") === "auto" ? "，由 auto 选中" : "";

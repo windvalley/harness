@@ -3,7 +3,18 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
 import { APPROVE, commit, CONFIG, fakeCodex, fakeReviewer, git, makeRepo, sh } from "./helpers.mjs";
-import { blockingFindings, buildPrompt, extractJson, parseVerdict, resolveBackend, REVIEW_SCHEMA, strictSchema } from "../src/review/review.mjs";
+import {
+  blockingFindings,
+  buildPrompt,
+  changeStats,
+  commitNotes,
+  extractJson,
+  maxDiffChars,
+  parseVerdict,
+  resolveBackend,
+  REVIEW_SCHEMA,
+  strictSchema,
+} from "../src/review/review.mjs";
 import { validateEscalation } from "../src/escalate/escalate.mjs";
 import { computeMetrics, formatMetrics } from "../src/golden/metrics.mjs";
 
@@ -41,6 +52,14 @@ describe("评审", () => {
     assert.match(none, /未提供验收清单/);
   });
 
+  test("提示按清单、证据、提交说明、文件统计、diff 的顺序排列，提交说明标明是实现方自述", () => {
+    const prompt = buildPrompt({ acceptance: null, evidence: "证据", commits: "- abc feat: 说明", stats: "共 1 个文件", diff: "DIFF", branch: "b" });
+    const order = ["## 验收清单", "## 验证证据摘要", "## 提交说明", "## 改动文件统计", "## 变更 diff"].map((title) => prompt.indexOf(title));
+    assert.ok(order.every((at) => at >= 0), prompt);
+    assert.deepEqual([...order].sort((a, b) => a - b), order);
+    assert.match(prompt, /实现方自述，只用于理解意图，不能作为满足验收的证据/);
+  });
+
   test("有清单却评 unknown 时拒绝，没有清单时 unknown 不阻断", async () => {
     const repo = setup();
     repo.branch("task/a", { "a.txt": "a\n", ".harness/acceptance/task-a.md": "- 验收\n" });
@@ -55,14 +74,16 @@ describe("评审", () => {
     assert.equal(repo2.cli("review", "--branch", "task/b").status, 0);
   });
 
-  test("diff 过大时拒绝评审", () => {
+  test("diff 超过默认上限时拒绝评审，并提示可调的配置项", () => {
     const repo = setup();
-    repo.branch("task/big", { "big.txt": "x".repeat(200_000) });
+    repo.branch("task/big", { "big.txt": "x".repeat(320_000) });
     fakeReviewer(repo, APPROVE);
     assert.equal(repo.cli("verify", "--branch", "task/big").status, 0);
     const review = repo.cli("review", "--branch", "task/big");
     assert.equal(review.status, 1);
-    assert.match(review.stderr, /超过独立评审上限/);
+    assert.match(review.stderr, /超过独立评审上限 300000/);
+    assert.match(review.stderr, /review\.maxDiffChars/);
+    assert.match(review.stderr, /review\.maxBudgetUsd/);
   });
 
   test("没有验证证据时拒绝评审", () => {
@@ -126,6 +147,8 @@ describe("评审后端", () => {
     assert.doesNotMatch(call.cwd, /repo$/);
     assert.match(call.stdin, /# 评审对象: task\/c/);
     assert.match(call.stdin, /不能修改任何文件/);
+    assert.match(call.stdin, /提交说明由实现方撰写/);
+    assert.match(call.stdin, /## 提交说明/);
     assert.equal(call.schema.additionalProperties, false);
   });
 
@@ -276,7 +299,7 @@ describe("L3 判据", () => {
 describe("评审的拆分提示", () => {
   test("大量删除时只列删除文件的路径，不因旧内容超限", () => {
     const repo = setup({
-      files: { "legacy/a.js": "x".repeat(120_000), "legacy/b.js": "y".repeat(120_000) },
+      files: { "legacy/a.js": "x".repeat(160_000), "legacy/b.js": "y".repeat(160_000) },
     });
     git(repo.root, "checkout", "-q", "-b", "task/retire");
     git(repo.root, "rm", "-q", "-r", "legacy");
@@ -298,8 +321,8 @@ describe("评审的拆分提示", () => {
     const { splitSuggestion } = await import("../src/review/review.mjs");
     const repo = setup();
     repo.branch("task/big", {
-      "backend/a.js": "x".repeat(120_000),
-      "frontend/b.vue": "y".repeat(120_000),
+      "backend/a.js": "x".repeat(160_000),
+      "frontend/b.vue": "y".repeat(160_000),
     });
     const base = git(repo.root, "merge-base", "main", "task/big");
     const head = git(repo.root, "rev-parse", "task/big");
@@ -313,5 +336,120 @@ describe("评审的拆分提示", () => {
     const review = repo.cli("review", "--branch", "task/big");
     assert.equal(review.status, 1);
     assert.match(review.stderr, /按目录拆分建议/);
+  });
+});
+
+describe("评审的 diff 上限", () => {
+  test("上限取 review.maxDiffChars，没配置时用默认值，非法值明确报错", () => {
+    assert.equal(maxDiffChars({}), 300_000);
+    assert.equal(maxDiffChars({ maxDiffChars: null }), 300_000);
+    assert.equal(maxDiffChars({ maxDiffChars: 500_000 }), 500_000);
+    for (const bad of [0, -1, 1.5, "400000", true]) {
+      assert.throws(() => maxDiffChars({ maxDiffChars: bad }), /review\.maxDiffChars 必须是正整数/);
+    }
+  });
+
+  test("主分支调高上限后大 diff 可以评审", () => {
+    const repo = setup({
+      project: { ".harness/config.json": { ...CONFIG, review: { ...CONFIG.review, maxDiffChars: 400_000 } } },
+    });
+    repo.branch("task/big", { "big.txt": "x".repeat(320_000) });
+    fakeReviewer(repo, APPROVE);
+    assert.equal(repo.cli("verify", "--branch", "task/big").status, 0);
+    const review = repo.cli("review", "--branch", "task/big");
+    assert.equal(review.status, 0, review.stderr);
+  });
+
+  test("任务分支自己调高上限不生效，仍按主分支的配置拒绝", () => {
+    const repo = setup();
+    const loosened = { ...CONFIG, review: { ...CONFIG.review, maxDiffChars: 1_000_000 } };
+    repo.branch("task/self", {
+      ".harness/config.json": `${JSON.stringify(loosened, null, 2)}\n`,
+      "big.txt": "x".repeat(320_000),
+    });
+    fakeReviewer(repo, APPROVE);
+    assert.equal(repo.cli("verify", "--branch", "task/self").status, 0);
+    const review = repo.cli("review", "--branch", "task/self");
+    assert.equal(review.status, 1);
+    assert.match(review.stderr, /超过独立评审上限 300000/);
+  });
+
+  test("配置了非法上限时 review 与 doctor 都报出来", () => {
+    const repo = setup({
+      project: { ".harness/config.json": { ...CONFIG, review: { ...CONFIG.review, maxDiffChars: "很大" } } },
+    });
+    repo.branch("task/a", { "a.txt": "a\n" });
+    fakeReviewer(repo, APPROVE);
+    assert.equal(repo.cli("verify", "--branch", "task/a").status, 0);
+    const review = repo.cli("review", "--branch", "task/a");
+    assert.equal(review.status, 1);
+    assert.match(review.stderr, /review\.maxDiffChars 必须是正整数/);
+    const doctor = repo.cli("doctor");
+    assert.notEqual(doctor.status, 0);
+    assert.match(doctor.stdout, /review\.maxDiffChars 必须是正整数/);
+  });
+});
+
+describe("评审的提交说明与文件统计", () => {
+  test("提示里带上分支的提交说明与文件统计，不列同步主分支的合并提交", () => {
+    const repo = setup();
+    git(repo.root, "checkout", "-q", "-b", "task/notes");
+    commit(repo.root, "feat(a): 新增 a 文件\n\n- 写入 a 文件\n- 补充说明", { "a.txt": "a\n" });
+    commit(repo.root, "fix(a): a 文件改为两行\n\n- 第二行写 b", { "a.txt": "a\nb\n" });
+    git(repo.root, "checkout", "-q", "main");
+    commit(repo.root, "docs: 主分支前进\n\n- 补充主分支说明", { "main.txt": "main\n" });
+    git(repo.root, "checkout", "-q", "task/notes");
+    git(repo.root, "merge", "-q", "--no-ff", "--no-edit", "main");
+    git(repo.root, "checkout", "-q", "main");
+
+    fakeReviewer(repo, APPROVE);
+    assert.equal(repo.cli("verify", "--branch", "task/notes").status, 0);
+    const review = repo.cli("review", "--branch", "task/notes");
+    assert.equal(review.status, 0, review.stderr);
+    assert.match(review.stderr, /提交 2 个/);
+
+    const prompt = readFileSync(join(repo.root, "..", "prompt.log"), "utf8");
+    const notes = prompt.slice(prompt.indexOf("## 提交说明"), prompt.indexOf("## 改动文件统计"));
+    assert.match(notes, /共 2 个提交，不含合并提交/);
+    assert.match(notes, /- [0-9a-f]+ feat\(a\): 新增 a 文件\n {4}- 写入 a 文件\n {4}- 补充说明/);
+    assert.match(notes, /- [0-9a-f]+ fix\(a\): a 文件改为两行/);
+    assert.ok(notes.indexOf("feat(a)") < notes.indexOf("fix(a)"), "按时间先后排列");
+    assert.doesNotMatch(notes, /Merge|主分支前进/);
+
+    const stats = prompt.slice(prompt.indexOf("## 改动文件统计"), prompt.indexOf("## 变更 diff"));
+    assert.match(stats, /共 1 个文件，\+2 -0 行/);
+    assert.match(stats, /\+2 -0 {2}a\.txt/);
+    assert.doesNotMatch(stats, /main\.txt/);
+  });
+
+  test("提交说明过长时只列标题，标题也放不下时写明省略了几个", () => {
+    const repo = setup();
+    git(repo.root, "checkout", "-q", "-b", "task/long");
+    for (const n of [1, 2, 3]) {
+      commit(repo.root, `feat(a): 第 ${n} 步\n\n- ${"很长的说明".repeat(40)}`, { [`f${n}.txt`]: `${n}\n`.repeat(n * 10) });
+    }
+    git(repo.root, "checkout", "-q", "main");
+    const base = git(repo.root, "merge-base", "main", "task/long");
+    const head = git(repo.root, "rev-parse", "task/long");
+
+    const full = commitNotes(repo.root, base, head);
+    assert.equal(full.truncated, false);
+    assert.match(full.text, /很长的说明/);
+
+    const subjects = commitNotes(repo.root, base, head, 200);
+    assert.equal(subjects.truncated, true);
+    assert.equal(subjects.count, 3);
+    assert.match(subjects.text, /只列标题/);
+    assert.match(subjects.text, /第 3 步/);
+    assert.doesNotMatch(subjects.text, /很长的说明/);
+
+    const partial = commitNotes(repo.root, base, head, 90);
+    assert.match(partial.text, /其余 \d 个提交未列出/);
+
+    assert.doesNotMatch(changeStats(repo.root, base, head), /只列/);
+    const stats = changeStats(repo.root, base, head, 60);
+    assert.match(stats, /共 3 个文件，\+60 -0 行（只列改动量最大的部分）/);
+    assert.match(stats, /\+30 -0 {2}f3\.txt/);
+    assert.match(stats, /其余 \d 个文件未列出/);
   });
 });

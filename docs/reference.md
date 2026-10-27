@@ -43,7 +43,7 @@ Agent 调用工具 ----> [1] 实时拦截：读写文件、执行命令之前按
 
 1. `verify`：在固定的独立检出里，按改动路径选出要跑的检查并执行，结果写成绑定分支提交的签名证据。
    它只验证已提交的内容，工作区里未提交的改动不在其中。
-2. `review`：启动一个不了解实现过程的评审进程，只给它验收清单、diff 和证据摘要，从需求符合度与工程质量两个维度给出结论。
+2. `review`：启动一个不了解实现过程的评审进程，只给它验收清单、证据摘要、提交说明、改动文件统计和 diff，从需求符合度与工程质量两个维度给出结论。
 3. `confirm`：改动涉及门禁本身（配置、规则、入口、钩子）时，由人看过摘要后确认一次。
    Agent 执行带 `--yes` 的确认会被拦截。
    启用 `plan-first` 时，大改动还要有你同意实施的记录，见“任务分级与实施授权”。
@@ -369,7 +369,8 @@ git -C <主 Worktree> worktree unlock <Worktree 路径>
 
 - 有 `high` 或 `critical` 级别的发现时拒绝，阻断级别可以用 `review.blockSeverities` 调整；没有阻断级发现时，评审进程即使写了 reject 也按通过处理。
 - 评审前必须有通过的验证证据。
-- diff 上限是 180000 字符：超出时整文件删除改为只列路径和行数，仍然超出就拒绝评审，并按顶层目录给出拆分建议。
+- diff 上限默认 300000 字符，由 `review.maxDiffChars` 调整：超出时整文件删除改为只列路径和行数，仍然超出就拒绝评审，并按顶层目录给出拆分建议。
+- 评审还会拿到合并基线之后的提交说明（不含合并提交）和每个文件的增删行数；提交说明标明是实现方自述，只用来理解意图，说法与 diff 不符时评审会报出来。
 
 ### 提交信息
 
@@ -479,7 +480,7 @@ node ~/github/harness/bin/harness.mjs install --local
 harness doctor
 ```
 
-`install --local` 读取项目锁定的版本：harness 仓库当前就是这个版本时直接安装，否则从对应的标签（例如 `v0.7.1`）导出那一版安装。
+`install --local` 读取项目锁定的版本：harness 仓库当前就是这个版本时直接安装，否则从对应的标签（例如 `v0.7.2`）导出那一版安装。
 然后写入本机的 git 钩子和 DSH 插件目录，不改动任何入库文件。
 找不到标签时先运行 `git -C ~/github/harness fetch --tags`。
 
@@ -740,7 +741,8 @@ node ~/github/harness/bin/harness.mjs install --local   # 按新锁定的版本�
 
 ## 独立评审的后端
 
-评审进程不了解实现过程，只读验收清单、变更 diff 与验证证据摘要。
+评审进程不了解实现过程，只读验收清单、验证证据摘要、提交说明、改动文件统计与变更 diff。
+提交说明超过 20000 字符时只列标题，文件统计超过 20000 字符时按改动量从大到小列出，都不占 diff 的额度。
 `.harness/config.json` 的 `review` 段：
 
 | 字段 | 默认 | 说明 |
@@ -751,6 +753,7 @@ node ~/github/harness/bin/harness.mjs install --local   # 按新锁定的版本�
 | `codexModel` | `null` | `codex` 后端用的模型，不填时用 Codex 的默认值 |
 | `command` | `null` | `command` 后端的命令数组 |
 | `blockSeverities` | `["high", "critical"]` | 哪些级别的发现阻断合并 |
+| `maxDiffChars` | `300000` | 单次评审能接受的 diff 字符数，超过时拒绝评审并给出拆分建议；调高时 `claude` 后端可能还要调高 `maxBudgetUsd` |
 
 - `claude`：在仓库目录里运行 `claude -p`，不开放任何工具，不加载项目设置，只带上你自己的 `~/.claude/settings.json`。
 - `codex`：在空的临时目录里以只读沙箱运行 `codex exec`，读不到项目文件，也不会被项目里的钩子拦住。
@@ -835,7 +838,7 @@ harness 防的是 Agent 的误操作，以及被提示注入后常见的绕过�
 | `review_missing` 或 `review_blocked` | 运行 `harness review`；被拒时按发现修复，提交后重新 verify、review |
 | 验证结果是 `incomplete` | `requires` 里的依赖目录在主 Worktree 里不存在，安装依赖后重跑 |
 | 验证提示“未找到命令” | 本机没装检查用到的工具，装好后重跑 |
-| 评审报 diff 超过上限 | 按输出的目录分组，把改动拆成几个分支分别合并 |
+| 评审报 diff 超过上限 | 按输出的目录分组，把改动拆成几个分支分别合并；确实需要一次评审时调高 `review.maxDiffChars`，属于门禁改动，合入主分支后才生效 |
 | `conflict` | 在任务分支上 `git merge main` 解决冲突，再重新验证与评审 |
 | `main_moved` | 合并过程中主分支前进了，重新运行 `harness merge`，已有证据会复用 |
 | `bootstrap_not_fast_forward` | 首次接入的分支落后于主分支，先在分支上 `git merge main` |
@@ -844,7 +847,7 @@ harness 防的是 Agent 的误操作，以及被提示注入后常见的绕过�
 | `拒绝直接更新 refs/heads/main` | 主分支只接受 `harness merge`；拉取远端见“与远端同步” |
 | `另一个合并正在进行` | 等那个合并结束后重试 |
 | Codex 里的命令没被拦截 | 钩子还没信任，在 Codex 里运行 `/hooks` 信任 |
-| DeepSeek Harness 桌面版里所有工具都被拒绝，提示门禁无法加载项目配置 | 已接入项目在 0.6.0 会因插件缺少工作目录服务依赖出现此问题，升级到 0.7.0 以上；0.7.1 及更早版本在非 Git 会话目录也会误拒，升级到包含非 Git 目录放行修复的版本后重启 DeepSeek Harness |
+| DeepSeek Harness 桌面版里所有工具都被拒绝，提示门禁无法加载项目配置 | 已接入项目在 0.6.0 会因插件缺少工作目录服务依赖出现此问题，升级到 0.7.0 以上；0.7.1 及更早版本在非 Git 会话目录也会误拒，升级到 0.7.2 以上后重启 DeepSeek Harness |
 | `harness worktree clean --yes` 很久没有输出 | 0.7.0 删除时不输出进度，每个 Worktree 又要好几秒；升级到 0.7.1 后逐个输出，Ctrl-C 会处理完当前这个再停 |
 | 中断清理后留下 git 已不认识的目录 | 0.7.0 被 Ctrl-C 打断时可能删到一半；确认目录里已经没有文件后手工删除 |
 | `worktree clean` 删掉了另一个会话正在用的 Worktree | 进程检测认不出每条命令都新开 shell 的客户端；被删的分支已合入主分支、目录里也没有未提交文件，代码不会丢，需要时用 `git worktree add` 重建；以后清理前先用 `git worktree lock` 锁定 |

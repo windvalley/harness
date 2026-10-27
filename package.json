@@ -1,6 +1,6 @@
 {
   "name": "harness",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "private": true,
   "type": "module",
   "description": "Local closed-loop development harness: policy gates, verified evidence, controlled merge.",
