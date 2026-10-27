@@ -184,6 +184,21 @@
         { "kind": "commit", "expect": "deny", "rule": "main-worktree-commit", "linkedWorktree": false },
         { "kind": "commit", "expect": "allow", "linkedWorktree": true }
       ]
+    },
+    {
+      "id": "g17-plan-first",
+      "title": "启用 plan-first 后，方案待批准时只能写方案与验收清单；批准只能由人执行",
+      "kind": "policy",
+      "presets": ["plan-first"],
+      "steps": [
+        { "kind": "write", "path": "src/app.js", "content": "x", "expect": "deny", "rule": "plan-before-code", "planPending": true },
+        { "kind": "write", "path": "src/app.test.js", "content": "x", "expect": "deny", "rule": "plan-before-code", "planPending": true },
+        { "kind": "write", "path": "docs/changes/login/plan.md", "content": "x", "expect": "allow", "planPending": true },
+        { "kind": "write", "path": ".harness/acceptance/feat-login.md", "content": "x", "expect": "allow", "planPending": true },
+        { "kind": "write", "path": "src/app.js", "content": "x", "expect": "allow", "planPending": false },
+        { "kind": "shell", "command": ".harness/bin/harness approve --branch feat/login --yes", "expect": "deny", "rule": "approve-human-only" },
+        { "kind": "shell", "command": ".harness/bin/harness approve --branch feat/login", "expect": "allow" }
+      ]
     }
   ]
 }

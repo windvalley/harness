@@ -1,0 +1,25 @@
+{
+  "id": "plan-first",
+  "description": "先方案后实施：任务分支写了实施方案而方案还没经人批准时，Agent 只能写方案与验收清单；写了方案、改了库表或代码改动超过阈值的分支，合并前必须有人批准过的方案",
+  "rules": [
+    {
+      "id": "plan-before-code",
+      "kind": "write-protect",
+      "when": "plan-pending",
+      "layer": "agent",
+      "paths": ["**"],
+      "allow": ["docs/changes/**", ".harness/acceptance/**"],
+      "allowIgnored": true,
+      "reason": "实施方案还没有经人批准：批准之前只能写方案与验收清单，不能写测试和代码",
+      "fix": "把方案提交到任务分支，请用户查看后在自己的终端运行 harness approve --branch <任务分支> --yes 批准（Claude Code 里可以在输入框用 ! 前缀）；批准后再写测试与实现"
+    },
+    {
+      "id": "approve-human-only",
+      "kind": "shell-forbid",
+      "scope": "whole",
+      "patterns": ["\\bharness(\\.mjs)?\\s+approve\\b[^|;&]*--yes\\b"],
+      "reason": "方案批准必须由人做出，Agent 代为批准等于没有批准",
+      "fix": "运行不带 --yes 的 harness approve 把摘要交给用户，由用户在自己的终端执行带 --yes 的命令"
+    }
+  ]
+}

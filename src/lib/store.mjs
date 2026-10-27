@@ -193,6 +193,7 @@ const RERUN = {
   evidence: "harness verify --branch <分支>",
   review: "harness review --branch <分支>",
   confirm: "harness confirm --branch <分支> --yes",
+  plan: "harness approve --branch <分支> --yes",
 };
 export const RECORD_KINDS = Object.keys(RERUN);
 

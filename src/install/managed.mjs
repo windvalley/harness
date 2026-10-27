@@ -63,6 +63,7 @@ export function writeRules({ root, version }) {
     ["rules/method-design-planning.md", assetPath("rules/method-design-planning.md")],
     ["rules/method-review.md", assetPath("rules/method-review.md")],
     ["rules/method-retrospective.md", assetPath("rules/method-retrospective.md")],
+    ["templates/acceptance.md", assetPath("templates/acceptance.md")],
     ["templates/spec.md", assetPath("templates/spec.md")],
     ["templates/plan.md", assetPath("templates/plan.md")],
   ];
@@ -90,7 +91,12 @@ export function writeGolden({ root }) {
 export function managedBlockBody() {
   return `## Harness
 
-本项目的本地门禁由 harness 管。开发前先读 \`.harness/rules/core.md\`，按场景读同目录下的方法文档。
-合并到主分支只能通过 \`harness merge --branch <任务分支>\`，它要求验证证据、独立评审，涉及其配置改动时还需要人工确认。
+本项目的本地门禁由 harness 管。下面几条对所有任务生效，不得跳过：
+
+- 开始任何任务前（包括分析、设计与评审）先读 \`.harness/rules/core.md\`，再按场景读同目录下的方法文档；读不到时报告，不凭印象继续。
+- 先判断任务分级。小优化、小迭代，不改库表与接口契约，代码改动少于 500 行（以 \`.harness/config.json\` 的 \`intent.plan.maxLines\` 为准）的直接实施；其余先探索、逐个澄清、写方案，交出方案后停下，等用户明确授权再实施。
+- 改变行为的实施默认先红后绿：先把验收标准写成测试并确认失败，再实现到全部通过；不删测试、不弱化断言、不跳过检查。
+- 改动放在任务分支里；合并到主分支只能通过 \`harness merge --branch <任务分支>\`，它要求验证证据与独立评审，门禁改动还需要人工确认。
+
 细则见 \`.harness/rules/harness.md\`。`;
 }

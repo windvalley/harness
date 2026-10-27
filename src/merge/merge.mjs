@@ -20,6 +20,7 @@ import { EVIDENCE_KIND, reusableChecks, verify } from "../verify/verify.mjs";
 import { entryTouched, followUps } from "../install/followups.mjs";
 import { ensureHooksPath } from "../install/install.mjs";
 import { REVIEW_KIND } from "../review/review.mjs";
+import { approvalState, planEnforced, planRequirement } from "../plan/plan.mjs";
 import { MERGE_TOKEN_ENV, mainUpdateToken } from "../githook.mjs";
 
 export class MergeError extends Error {
@@ -227,6 +228,28 @@ export async function mergeTask({ cwd, branch, dryRun = false, log = console.err
         );
       }
       log(`[merge] 门禁改动已确认(确认人: ${confirm.record.by ?? "user"})`);
+    }
+
+    // 方案：写了实施方案、改了库表或改动超过阈值的任务，必须有人批准过方案，且批准后验收清单没有再改。
+    // 实时拦截只能约束走了方案流程的任务，这里兜住没写方案就直接做了大改动的情况。
+    if (planEnforced(project.policy)) {
+      const need = planRequirement({ root, project, base: baseCommit, head: branchCommit });
+      if (need.reasons.length > 0) {
+        const acceptanceText = git(root, ["cat-file", "blob", `${branchCommit}:${acceptancePath(project, branch)}`]);
+        const state = approvalState({ root, branch, acceptanceText: acceptanceText.status === 0 ? acceptanceText.stdout : null });
+        if (!state.approved) {
+          throw new MergeError(
+            [
+              `这次改动需要先由人批准方案（${need.reasons.join("；")}）: ${state.reason}`,
+              `方案包括验收清单 ${acceptancePath(project, branch)}，以及行为说明与实施方案。`,
+              `由人查看并批准: harness approve --branch ${branch}，确认无误后加 --yes；Agent 不能代为批准。`,
+              "批准后重新运行 harness merge。",
+            ].join("\n"),
+            "plan_unapproved",
+          );
+        }
+        log(`[merge] 方案已批准(批准人: ${state.record.by ?? "user"})`);
+      }
     }
 
     // 意图：行为变更应有验收清单。清单可来自分支本身，会标记来源。

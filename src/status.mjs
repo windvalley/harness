@@ -1,11 +1,12 @@
-import { gatePaths, loadGateProject, mainBranch } from "./lib/config.mjs";
+import { acceptancePath, gatePaths, loadGateProject, mainBranch } from "./lib/config.mjs";
 import { matchAny } from "./lib/glob.mjs";
-import { changedPaths, gitOk, isAncestor, mainWorktreeRoot, refExists } from "./lib/git.mjs";
+import { changedPaths, gitOk, isAncestor, mainWorktreeRoot, refExists, showBlob } from "./lib/git.mjs";
 import { readRecord } from "./lib/store.mjs";
 import { EVIDENCE_KIND } from "./verify/verify.mjs";
 import { REVIEW_KIND } from "./review/review.mjs";
 import { CONFIRM_KIND } from "./confirm/confirm.mjs";
 import { mainWorktreeProblems, planMergeResult } from "./merge/merge.mjs";
+import { approvalState, planEnforced, planRequirement } from "./plan/plan.mjs";
 
 // 确认记录绑定合并结果的 tree：快进时就是分支的 tree，三方合并时算出合并后的 tree。
 function confirmFor(project, root, branch) {
@@ -87,6 +88,21 @@ export function branchStatus({ cwd, branch }) {
     result.blockers.push("评审未通过");
   } else {
     add("review", "ok", `评审通过（需求符合度 ${review.record.requirementFit?.rating ?? "?"}，工程质量 ${review.record.engineeringQuality?.rating ?? "?"}，清单来源 ${review.record.acceptanceSource ?? "无"}）`);
+  }
+
+  if (planEnforced(project.policy)) {
+    const base = gitOk(root, ["merge-base", mainCommit, branchCommit]);
+    const need = planRequirement({ root, project, base, head: branchCommit });
+    if (need.reasons.length === 0) {
+      add("plan", "ok", `属于直接实施的范围（代码改动 ${need.lines} 行），不需要批准方案`);
+    } else {
+      const state = approvalState({ root, branch, acceptanceText: showBlob(root, branchCommit, acceptancePath(project, branch)) });
+      if (state.approved) add("plan", "ok", `方案已批准（${need.reasons.join("；")}）`);
+      else {
+        add("plan", "fail", `${need.reasons.join("；")}，${state.reason}：由人运行 harness approve --branch ${branch}`);
+        result.blockers.push("方案待批准");
+      }
+    }
   }
 
   if (project.bootstrap) {

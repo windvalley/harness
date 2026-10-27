@@ -26,6 +26,7 @@ function checkPolicy(task, resolved, root) {
           linkedWorktree: step.linkedWorktree ?? DEFAULT_CONTEXT.linkedWorktree,
           onMainBranch: step.onMainBranch ?? DEFAULT_CONTEXT.onMainBranch,
           ignored: step.ignored ?? false,
+          planPending: step.planPending ?? false,
         },
       });
       decision = result.decision;

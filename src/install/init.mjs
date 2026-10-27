@@ -5,6 +5,7 @@ import { PACKAGE_ROOT } from "../policy/resolve.mjs";
 import { HOOK_NAMES, installAll, publishVersion, storeEntry, versionDir, worktreeHooksConfig } from "./install.mjs";
 import { assetPath, managedBlockBody, packageVersion, writeManagedBlock, writeRules } from "./managed.mjs";
 import { survey } from "./survey.mjs";
+import { planSettings } from "../plan/plan.mjs";
 
 function defaultConfig({ mainBranch }) {
   return {
@@ -21,7 +22,8 @@ function defaultConfig({ mainBranch }) {
     },
     // backend 取 auto 时按 claude、codex 顺序用本机第一个可用的；其他工具用 command 接入。
     review: { backend: "auto", model: "sonnet", maxBudgetUsd: 2, codexModel: null, command: null, blockSeverities: ["high", "critical"] },
-    intent: { mode: "checklist", dir: "acceptance" },
+    // plan：任务分级的机械判定，plan-first 预设据此要求先批准方案；exclude 里的文件不计入代码改动行数。
+    intent: { mode: "checklist", dir: "acceptance", plan: planSettings({}) },
     governance: { confirmOnGateChange: true, gatePaths: [] },
     escalate: {
       triggers: ["需求有歧义且会改变行为或权限", "必要验证被既有问题阻塞", "涉及推送、远程 MR、部署或生产操作", "同一方案连续失败两次"],
@@ -34,7 +36,7 @@ function starterPolicy({ mainBranch }) {
   const hooks = git(process.cwd(), ["config", "--get", "core.hooksPath"]).stdout.trim();
   return {
     version: 1,
-    presets: ["secrets", "git-safety", "gate-self"],
+    presets: ["secrets", "git-safety", "gate-self", "plan-first"],
     disabled: [],
     rules: [
       {
@@ -208,6 +210,8 @@ export function upgradeProject({ cwd = process.cwd() } = {}) {
   const version = packageVersion();
   publishVersion({ version });
   writeRules({ root, version });
+  // 托管块随版本更新：Agent 每次都会加载 AGENTS.md，任务分级等硬性要求写在这里才不会被跳过。
+  writeManagedBlock({ root, body: managedBlockBody() });
   const shim = installAll({ cwd: root });
   return { root, version, shim };
 }

@@ -276,6 +276,7 @@ export function ruleApplies(rule, context) {
   if (rule.when === "main-worktree") return !context.linkedWorktree;
   if (rule.when === "on-main") return Boolean(context.onMainBranch);
   if (rule.when === "not-on-main") return !context.onMainBranch;
+  if (rule.when === "plan-pending") return Boolean(context.planPending);
   return true;
 }
 

@@ -250,12 +250,14 @@ describe("安装与自检", () => {
     if (optional > 0) assert.match(golden.stdout, new RegExp(`跳过 ${optional} 项`));
   });
 
-  test("启用 main-worktree 预设后，起始黄金任务里对应的用例参与重放", () => {
-    const repo = makeRepo({ project: { ".harness/policy.json": { version: 1, presets: ["secrets", "git-safety", "gate-self", "main-worktree"], disabled: [], rules: [] } } });
+  test("启用可选预设后，起始黄金任务里对应的用例参与重放", () => {
+    const presets = ["secrets", "git-safety", "gate-self", "main-worktree", "plan-first"];
+    const repo = makeRepo({ project: { ".harness/policy.json": { version: 1, presets, disabled: [], rules: [] } } });
     repos.push(repo);
     const golden = repo.cli("golden");
     assert.equal(golden.status, 0, golden.stdout + golden.stderr);
     assert.match(golden.stdout, /PASS g16-main-worktree-merge-only/);
+    assert.match(golden.stdout, /PASS g17-plan-first/);
     assert.doesNotMatch(golden.stdout, /跳过/);
   });
 

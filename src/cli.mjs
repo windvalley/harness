@@ -14,6 +14,7 @@ import { planChecks, verify } from "./verify/verify.mjs";
 import { MergeError, mergeTask } from "./merge/merge.mjs";
 import { reviewBranch } from "./review/review.mjs";
 import { approveConfirm, confirmSummary, formatSummary } from "./confirm/confirm.mjs";
+import { approvePlan, formatPlanSummary, planSummary } from "./plan/plan.mjs";
 import { checkCommitMessage, checkStaged, guardReference } from "./githook.mjs";
 import { answerEscalation, listEscalations, openEscalation, readEscalation, resumePlan } from "./escalate/escalate.mjs";
 import { runGolden } from "./golden/golden.mjs";
@@ -37,6 +38,7 @@ const USAGE = `harness <命令> [参数]
   review   --branch <名称>                          独立评审
   status   --branch <名称>                           只读汇总：还差哪几步才能合并
   confirm  --branch <名称> [--yes]                   查看门禁改动；--yes 记录人工确认
+  approve  --branch <名称> [--yes]                   查看任务方案；--yes 由人批准，之后 Agent 才能写测试与实现
   merge    --branch <名称> [--dry-run]               受控合并到主分支
 
 体检与度量
@@ -196,6 +198,25 @@ async function cmdConfirm(argv) {
   }
   const { summary } = approveConfirm({ cwd: process.cwd(), branch: values.branch, note: values.note ?? "" });
   print(`已确认合并结果 tree ${summary.resultTree.slice(0, 12)}，涉及门禁文件 ${summary.gateTouched.length} 个。`);
+  return 0;
+}
+
+function cmdApprove(argv) {
+  const { values } = parseArgs({
+    args: argv,
+    options: { branch: { type: "string" }, yes: { type: "boolean", default: false }, note: { type: "string" } },
+  });
+  if (!values.branch) {
+    process.stderr.write("用法: harness approve --branch <名称> [--yes] [--note 说明]\n");
+    return 2;
+  }
+  if (!values.yes) {
+    print(formatPlanSummary(planSummary({ cwd: process.cwd(), branch: values.branch })));
+    print("\n以上为只读摘要。方案无误后加 --yes 批准；批准后 Agent 才能写测试与实现，验收清单再改需要重新批准。");
+    return 0;
+  }
+  const { summary } = approvePlan({ cwd: process.cwd(), branch: values.branch, note: values.note ?? "" });
+  print(`已批准 ${values.branch} 的方案（验收清单 ${summary.acceptancePath}，方案文件 ${summary.planFiles.length} 个）。`);
   return 0;
 }
 
@@ -644,6 +665,8 @@ export async function main(argv) {
         return cmdMerge(rest);
       case "confirm":
         return cmdConfirm(rest);
+      case "approve":
+        return cmdApprove(rest);
       case "githook":
         return cmdGithook(rest);
       case "hook":
