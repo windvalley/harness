@@ -1,0 +1,965 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>harness 使用教程</title>
+<meta name="description" content="harness 是跑在本机的研发门禁：实时拦截 Agent 的危险操作，合并前要求签名的验证证据与独立评审，主分支只接受受控合并。本教程介绍架构、核心原理与上手步骤。">
+<style>
+:root {
+  --bg: #fafaf8;
+  --fg: #1d1f22;
+  --muted: #5c6168;
+  --line: #d8dad5;
+  --surface: #ffffff;
+  --surface-2: #f1f2ee;
+  --code-bg: #f3f3ef;
+  --accent: #0f766e;
+  --accent-soft: #e0f2ef;
+  --allow: #15803d;
+  --deny: #b91c1c;
+  --deny-soft: #fbeaea;
+  --warn: #a16207;
+  --warn-soft: #fbf3dc;
+  --shadow: 0 1px 2px rgba(0,0,0,.04), 0 2px 8px rgba(0,0,0,.04);
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #121416;
+    --fg: #e5e7e9;
+    --muted: #9aa1a9;
+    --line: #2f3439;
+    --surface: #181b1f;
+    --surface-2: #1f2328;
+    --code-bg: #1a1e22;
+    --accent: #2dd4bf;
+    --accent-soft: #10332f;
+    --allow: #4ade80;
+    --deny: #f87171;
+    --deny-soft: #3a1c1c;
+    --warn: #fbbf24;
+    --warn-soft: #36290c;
+    --shadow: none;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #121416;
+  --fg: #e5e7e9;
+  --muted: #9aa1a9;
+  --line: #2f3439;
+  --surface: #181b1f;
+  --surface-2: #1f2328;
+  --code-bg: #1a1e22;
+  --accent: #2dd4bf;
+  --accent-soft: #10332f;
+  --allow: #4ade80;
+  --deny: #f87171;
+  --deny-soft: #3a1c1c;
+  --warn: #fbbf24;
+  --warn-soft: #36290c;
+  --shadow: none;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; scroll-padding-top: 72px; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 16px/1.75 -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", "Segoe UI", sans-serif;
+  -webkit-text-size-adjust: 100%;
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+code, pre, kbd { font-family: "SF Mono", ui-monospace, Menlo, Consolas, "Liberation Mono", monospace; }
+code { font-size: .88em; background: var(--code-bg); border: 1px solid var(--line); border-radius: 4px; padding: .05em .35em; overflow-wrap: anywhere; }
+pre code { background: none; border: 0; padding: 0; font-size: inherit; overflow-wrap: normal; }
+h1, h2, h3 { line-height: 1.35; }
+h2 { font-size: 1.6rem; margin: 3.2rem 0 1rem; padding-top: .6rem; border-top: 1px solid var(--line); }
+h3 { font-size: 1.18rem; margin: 2.2rem 0 .6rem; }
+p, ul, ol { margin: .7rem 0; }
+li { margin: .25rem 0; }
+strong { font-weight: 600; }
+
+.topbar {
+  position: sticky; top: 0; z-index: 10;
+  display: flex; align-items: center; gap: 16px;
+  padding: 10px 24px;
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: saturate(1.4) blur(8px);
+  -webkit-backdrop-filter: saturate(1.4) blur(8px);
+  border-bottom: 1px solid var(--line);
+}
+.brand { font-weight: 700; color: var(--fg); font-size: 1.05rem; display: flex; align-items: center; gap: 8px; }
+.brand:hover { text-decoration: none; }
+.brand svg { color: var(--accent); }
+.topbar nav { margin-left: auto; display: flex; gap: 18px; align-items: center; font-size: .92rem; }
+.topbar nav a { color: var(--muted); }
+.topbar nav a:hover { color: var(--fg); text-decoration: none; }
+.theme-btn {
+  border: 1px solid var(--line); background: var(--surface); color: var(--muted);
+  border-radius: 6px; padding: 3px 10px; font: inherit; font-size: .85rem; cursor: pointer;
+}
+.theme-btn:hover { color: var(--fg); }
+
+.layout { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 48px; max-width: 1180px; margin: 0 auto; padding: 0 24px; }
+.toc { position: sticky; top: 64px; align-self: start; max-height: calc(100vh - 64px); overflow-y: auto; padding: 28px 0 40px; font-size: .9rem; }
+.toc summary { display: none; }
+.toc ol { list-style: none; margin: 0; padding: 0; }
+.toc ol ol { padding-left: 14px; margin: 2px 0 6px; }
+.toc li { margin: 0; }
+.toc a { display: block; padding: 3px 10px; color: var(--muted); border-left: 2px solid transparent; line-height: 1.5; }
+.toc a:hover { color: var(--fg); text-decoration: none; }
+.toc a.active { color: var(--accent); border-left-color: var(--accent); }
+.toc .toc-title { font-size: .78rem; letter-spacing: .08em; color: var(--muted); padding: 0 10px 8px; }
+
+main { min-width: 0; max-width: 800px; padding: 8px 0 80px; }
+
+.hero { padding: 48px 0 16px; }
+.hero h1 { font-size: 2.3rem; margin: 0 0 .6rem; letter-spacing: -.01em; }
+.hero .lead { font-size: 1.12rem; color: var(--muted); margin: 0 0 1.2rem; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 1rem 0 1.4rem; padding: 0; list-style: none; }
+.chips li { margin: 0; font-size: .82rem; padding: 2px 10px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); background: var(--surface); }
+.actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.btn { display: inline-block; padding: 8px 16px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--fg); font-weight: 500; font-size: .95rem; }
+.btn:hover { text-decoration: none; border-color: var(--accent); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 1rem 0; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; box-shadow: var(--shadow); }
+.card h4 { margin: 0 0 .35rem; font-size: 1rem; }
+.card p { margin: 0; font-size: .92rem; color: var(--muted); }
+
+.callout { border: 1px solid var(--line); border-left: 4px solid var(--accent); background: var(--accent-soft); border-radius: 8px; padding: 10px 14px; margin: 1rem 0; font-size: .95rem; }
+.callout.warn { border-left-color: var(--warn); background: var(--warn-soft); }
+.callout p { margin: .3rem 0; }
+
+.table-wrap { overflow-x: auto; margin: 1rem 0; border: 1px solid var(--line); border-radius: 8px; }
+table { border-collapse: collapse; width: 100%; font-size: .92rem; }
+th, td { text-align: left; vertical-align: top; padding: 8px 12px; border-bottom: 1px solid var(--line); }
+th { background: var(--surface-2); font-weight: 600; white-space: nowrap; }
+tr:last-child td { border-bottom: 0; }
+td code { white-space: nowrap; }
+.t-key td:first-child, .t-key th:first-child { white-space: nowrap; }
+.t-files td:last-child, .t-files th:last-child { white-space: nowrap; }
+
+.code { position: relative; margin: 1rem 0; }
+.code pre { margin: 0; background: var(--code-bg); border: 1px solid var(--line); border-radius: 8px; padding: 34px 16px 14px; overflow-x: auto; font-size: .85rem; line-height: 1.65; }
+.code .c { color: var(--muted); }
+.code .label { position: absolute; top: 8px; left: 16px; font-size: .75rem; color: var(--muted); }
+.copy { position: absolute; top: 6px; right: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--muted); border-radius: 5px; font-size: .75rem; padding: 1px 8px; cursor: pointer; opacity: .85; }
+.copy:hover { color: var(--fg); opacity: 1; }
+.term pre { border-left: 3px solid var(--muted); }
+
+ol.steps { counter-reset: step; list-style: none; padding: 0; margin: 1.2rem 0; }
+ol.steps > li { counter-increment: step; position: relative; padding: 0 0 .6rem 44px; margin: 0 0 .6rem; border-left: 2px solid var(--line); margin-left: 14px; padding-left: 30px; }
+ol.steps > li:last-child { border-left-color: transparent; }
+ol.steps > li::before { content: counter(step); position: absolute; left: -15px; top: 0; width: 28px; height: 28px; border-radius: 50%; background: var(--accent); color: var(--bg); font-weight: 700; font-size: .9rem; display: flex; align-items: center; justify-content: center; }
+ol.steps > li > h4 { margin: 0 0 .4rem; font-size: 1.05rem; line-height: 28px; }
+
+figure { margin: 1.6rem 0; }
+.diagram { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); padding: 12px; }
+.diagram svg { display: block; width: 100%; min-width: 640px; height: auto; }
+figcaption { font-size: .88rem; color: var(--muted); margin-top: .5rem; }
+
+/* 图形元素 */
+.d-box { fill: var(--surface-2); stroke: var(--line); stroke-width: 1.2; }
+.d-box.accent { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.6; }
+.d-box.allow { fill: var(--surface); stroke: var(--allow); stroke-width: 1.4; }
+.d-box.deny { fill: var(--deny-soft); stroke: var(--deny); stroke-width: 1.4; }
+.d-box.opt { stroke-dasharray: 5 4; }
+.d-group { fill: none; stroke: var(--line); stroke-width: 1.2; stroke-dasharray: 4 4; }
+.d-t { fill: var(--fg); font-size: 14px; font-weight: 600; }
+.d-s { fill: var(--muted); font-size: 11.5px; }
+.d-m { fill: var(--muted); font-size: 11.5px; font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace; }
+.d-l { fill: var(--muted); font-size: 11.5px; }
+.d-l.accent { fill: var(--accent); }
+.d-l.deny { fill: var(--deny); }
+.d-l.allow { fill: var(--allow); }
+.d-tag { fill: var(--muted); font-size: 10.5px; }
+.d-line { fill: none; stroke: var(--muted); stroke-width: 1.4; }
+.d-line.accent { stroke: var(--accent); stroke-width: 1.8; }
+.d-line.deny { stroke: var(--deny); stroke-dasharray: 5 4; }
+.d-line.allow { stroke: var(--allow); }
+.d-line.dash { stroke-dasharray: 5 4; }
+.mk { fill: var(--muted); }
+.mk.accent { fill: var(--accent); }
+.mk.deny { fill: var(--deny); }
+.mk.allow { fill: var(--allow); }
+
+footer { border-top: 1px solid var(--line); color: var(--muted); font-size: .88rem; padding: 24px; text-align: center; }
+
+@media (max-width: 960px) {
+  .layout { grid-template-columns: minmax(0, 1fr); gap: 0; padding: 0 16px; }
+  .toc { position: static; max-height: none; padding: 12px 0 0; }
+  .toc details { border: 1px solid var(--line); border-radius: 8px; background: var(--surface); padding: 6px 4px; }
+  .toc summary { display: block; cursor: pointer; padding: 4px 10px; font-weight: 600; color: var(--fg); }
+  .toc .toc-title { display: none; }
+  .topbar { padding: 10px 16px; gap: 10px; }
+  .topbar nav { gap: 12px; }
+  .topbar nav .wide { display: none; }
+  .hero { padding-top: 28px; }
+  .hero h1 { font-size: 1.8rem; }
+  h2 { font-size: 1.4rem; }
+  ol.steps > li { margin-left: 12px; padding-left: 22px; }
+  .code pre { font-size: .8rem; padding-left: 12px; padding-right: 12px; }
+  .code .label { left: 12px; }
+}
+</style>
+</head>
+<body>
+
+<!-- 共享的箭头定义 -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk" d="M0,0 L10,5 L0,10 z"/></marker>
+    <marker id="ar-accent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk accent" d="M0,0 L10,5 L0,10 z"/></marker>
+    <marker id="ar-deny" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk deny" d="M0,0 L10,5 L0,10 z"/></marker>
+    <marker id="ar-allow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk allow" d="M0,0 L10,5 L0,10 z"/></marker>
+  </defs>
+</svg>
+
+<header class="topbar">
+  <a class="brand" href="#top">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6z"/><path d="M8.5 12l2.5 2.5 4.5-5"/></svg>
+    harness
+  </a>
+  <nav>
+    <a href="#quickstart">快速开始</a>
+    <a class="wide" href="https://github.com/windvalley/harness/blob/main/docs/reference.md">参考手册</a>
+    <a href="https://github.com/windvalley/harness">GitHub</a>
+    <button class="theme-btn" id="theme-btn" type="button" aria-label="切换浅色或深色主题">主题</button>
+  </nav>
+</header>
+
+<div class="layout" id="top">
+  <aside class="toc">
+    <details id="toc" open>
+      <summary>目录</summary>
+      <div class="toc-title">目录</div>
+      <ol>
+        <li><a href="#why">它解决什么问题</a></li>
+        <li><a href="#arch">架构总览</a>
+          <ol>
+            <li><a href="#layers">三层防线</a></li>
+            <li><a href="#components">组件与数据放在哪</a></li>
+          </ol>
+        </li>
+        <li><a href="#principles">核心原理</a>
+          <ol>
+            <li><a href="#lifecycle">一次任务的生命周期</a></li>
+            <li><a href="#signing">签名记录</a></li>
+            <li><a href="#token">主分支只认合并令牌</a></li>
+            <li><a href="#trust-root">配置只从主分支读取</a></li>
+            <li><a href="#selection">按改动选检查</a></li>
+            <li><a href="#review">独立评审</a></li>
+            <li><a href="#plan-first">任务分级与实施授权</a></li>
+            <li><a href="#pinning">版本锁定的入口</a></li>
+          </ol>
+        </li>
+        <li><a href="#quickstart">快速开始</a></li>
+        <li><a href="#daily">日常工作流</a></li>
+        <li><a href="#blocked">被拦截时怎么办</a></li>
+        <li><a href="#customize">按项目定制</a></li>
+        <li><a href="#team">团队与多机</a></li>
+        <li><a href="#limits">信任模型与限制</a></li>
+        <li><a href="#cheatsheet">命令速查</a></li>
+      </ol>
+    </details>
+  </aside>
+
+  <main>
+    <section class="hero">
+      <h1>harness 使用教程</h1>
+      <p class="lead">跑在本机的研发门禁，面向“Agent 写代码、人把关”的 git 项目。它在 Agent 调用工具时拦下危险操作，在合并前要求验证证据与独立评审，并让主分支只接受它的合并命令写入。</p>
+      <ul class="chips">
+        <li>本机运行，不依赖云端 CI</li>
+        <li>没有 npm 依赖</li>
+        <li>Node.js 20+</li>
+        <li>git 2.38+</li>
+        <li>macOS / Linux</li>
+        <li>MIT 许可</li>
+      </ul>
+      <div class="actions">
+        <a class="btn primary" href="#quickstart">快速开始</a>
+        <a class="btn" href="#arch">看架构图</a>
+        <a class="btn" href="https://github.com/windvalley/harness/blob/main/docs/reference.md">参考手册</a>
+      </div>
+    </section>
+
+    <!-- ============ 为什么 ============ -->
+    <h2 id="why">它解决什么问题</h2>
+    <p>让 Agent 写代码效率很高，但它会犯一些人很少犯的错，而且常常不自知：</p>
+    <ul>
+      <li>读到 <code>.env</code>、私钥，或者把它们写进命令外发；</li>
+      <li>用 <code>git reset --hard</code>、<code>git stash</code>、<code>rm -rf</code>、强推，丢掉自己或别人的改动；</li>
+      <li>测试没跑或没跑全，就宣布“完成”；</li>
+      <li>直接在主分支上提交，或者为了让检查通过，顺手把检查规则改松；</li>
+      <li>大需求不先对齐方案就动手，改完才发现方向不对。</li>
+    </ul>
+    <p>写进提示词或规范里的要求，Agent 未必每次都遵守。harness 的做法是<strong>把能机械判定的要求变成门禁</strong>：由程序在本机判定、拦截并记录，Agent 照着拦截信息改道，人只在关键节点把关。</p>
+    <div class="cards">
+      <div class="card"><h4>当场纠正</h4><p>危险的工具调用在执行之前被拦下，拦截信息带着原因和正确做法。</p></div>
+      <div class="card"><h4>结果把关</h4><p>没有签名的验证证据和独立评审，改动进不了主分支，对所有客户端和人都一样。</p></div>
+      <div class="card"><h4>放宽不了自己</h4><p>任务分支改了规则也不影响它自己的判定，门禁改动合并前必须由人确认。</p></div>
+      <div class="card"><h4>本机、可审计</h4><p>判定都在本机完成，记录签名后存进仓库自己的 git 目录，随时可以核对。</p></div>
+    </div>
+
+    <!-- ============ 架构 ============ -->
+    <h2 id="arch">架构总览</h2>
+
+    <h3 id="layers">三层防线</h3>
+    <p>一次改动从 Agent 调用工具开始，到写进主分支为止，要依次经过三层检查。前两层在过程中纠正，第三层在结果上把关。</p>
+    <figure>
+      <div class="diagram">
+        <svg viewBox="0 0 900 345" role="img" aria-label="三层防线：Agent 的工具调用先经过实时拦截；提交经过 git 钩子；任务分支依次经过 verify、review、confirm，再由 merge 带着合并令牌写入主分支，其他对主分支的写入被 reference-transaction 钩子拒绝。">
+          <!-- 第一层 -->
+          <path class="d-line deny" d="M350,58 C350,22 95,22 95,58" marker-end="url(#ar-deny)"/>
+          <text class="d-l deny" x="222" y="22" text-anchor="middle">拒绝：原因 + 正确做法，Agent 改道</text>
+          <rect class="d-box" x="20" y="60" width="150" height="50" rx="8"/>
+          <text class="d-t" x="95" y="82" text-anchor="middle">Agent 调用工具</text>
+          <text class="d-s" x="95" y="100" text-anchor="middle">读、写、执行命令</text>
+          <line class="d-line" x1="170" y1="85" x2="246" y2="85" marker-end="url(#ar)"/>
+          <text class="d-l" x="208" y="78" text-anchor="middle">调用前</text>
+          <rect class="d-box accent" x="250" y="60" width="200" height="50" rx="8"/>
+          <text class="d-t" x="350" y="82" text-anchor="middle">① 实时拦截</text>
+          <text class="d-s" x="350" y="100" text-anchor="middle">PreToolUse 钩子 / DSH 插件</text>
+          <line class="d-line allow" x1="450" y1="85" x2="526" y2="85" marker-end="url(#ar-allow)"/>
+          <text class="d-l allow" x="488" y="78" text-anchor="middle">放行</text>
+          <rect class="d-box" x="530" y="60" width="150" height="50" rx="8"/>
+          <text class="d-t" x="605" y="90" text-anchor="middle">执行调用</text>
+
+          <!-- 左侧时间线 -->
+          <line class="d-line" x1="95" y1="110" x2="95" y2="166" marker-end="url(#ar)"/>
+          <text class="d-l" x="103" y="142">写完，提交</text>
+
+          <!-- 第二层 -->
+          <rect class="d-box" x="20" y="170" width="150" height="50" rx="8"/>
+          <text class="d-t" x="95" y="192" text-anchor="middle">git commit</text>
+          <text class="d-s" x="95" y="210" text-anchor="middle">Agent 或人</text>
+          <line class="d-line" x1="170" y1="195" x2="246" y2="195" marker-end="url(#ar)"/>
+          <rect class="d-box accent" x="250" y="170" width="200" height="50" rx="8"/>
+          <text class="d-t" x="350" y="192" text-anchor="middle">② git 钩子</text>
+          <text class="d-s" x="350" y="210" text-anchor="middle">pre-commit、commit-msg</text>
+          <line class="d-line allow" x1="450" y1="195" x2="526" y2="195" marker-end="url(#ar-allow)"/>
+          <text class="d-l allow" x="488" y="188" text-anchor="middle">通过</text>
+          <rect class="d-box" x="530" y="170" width="150" height="50" rx="8"/>
+          <text class="d-t" x="605" y="200" text-anchor="middle">提交进任务分支</text>
+
+          <line class="d-line" x1="95" y1="220" x2="95" y2="276" marker-end="url(#ar)"/>
+          <text class="d-l" x="103" y="252">准备合并</text>
+
+          <!-- 其他写入 -->
+          <rect class="d-box deny" x="730" y="170" width="150" height="50" rx="8"/>
+          <text class="d-t" x="805" y="192" text-anchor="middle">其他写入 main</text>
+          <text class="d-s" x="805" y="210" text-anchor="middle">commit、pull、reset</text>
+          <line class="d-line deny" x1="830" y1="220" x2="830" y2="276" marker-end="url(#ar-deny)"/>
+          <text class="d-l deny" x="820" y="246" text-anchor="end">reference-transaction</text>
+          <text class="d-l deny" x="820" y="262" text-anchor="end">钩子拒绝</text>
+
+          <!-- 第三层 -->
+          <rect class="d-box" x="20" y="280" width="150" height="52" rx="8"/>
+          <text class="d-t" x="95" y="303" text-anchor="middle">任务分支</text>
+          <text class="d-s" x="95" y="321" text-anchor="middle">Linked Worktree</text>
+          <line class="d-line" x1="170" y1="306" x2="206" y2="306" marker-end="url(#ar)"/>
+          <rect class="d-box" x="210" y="280" width="110" height="52" rx="8"/>
+          <text class="d-t" x="265" y="303" text-anchor="middle">verify</text>
+          <text class="d-s" x="265" y="321" text-anchor="middle">签名证据</text>
+          <line class="d-line" x1="320" y1="306" x2="346" y2="306" marker-end="url(#ar)"/>
+          <rect class="d-box" x="350" y="280" width="110" height="52" rx="8"/>
+          <text class="d-t" x="405" y="303" text-anchor="middle">review</text>
+          <text class="d-s" x="405" y="321" text-anchor="middle">独立评审</text>
+          <line class="d-line" x1="460" y1="306" x2="486" y2="306" marker-end="url(#ar)"/>
+          <rect class="d-box opt" x="490" y="280" width="110" height="52" rx="8"/>
+          <text class="d-t" x="545" y="303" text-anchor="middle">confirm</text>
+          <text class="d-s" x="545" y="321" text-anchor="middle">仅门禁改动</text>
+          <line class="d-line" x1="600" y1="306" x2="626" y2="306" marker-end="url(#ar)"/>
+          <rect class="d-box accent" x="630" y="280" width="110" height="52" rx="8"/>
+          <text class="d-t" x="685" y="303" text-anchor="middle">③ merge</text>
+          <text class="d-s" x="685" y="321" text-anchor="middle">带令牌写入</text>
+          <line class="d-line accent" x1="740" y1="306" x2="776" y2="306" marker-end="url(#ar-accent)"/>
+          <rect class="d-box allow" x="780" y="280" width="100" height="52" rx="8"/>
+          <text class="d-t" x="830" y="311" text-anchor="middle">main</text>
+        </svg>
+      </div>
+      <figcaption>图 1　三层防线。①② 在过程中当场纠正，③ 在结果上把关；能写主分支的只有 <code>harness merge</code>。</figcaption>
+    </figure>
+
+    <div class="table-wrap"><table class="t-key">
+      <thead><tr><th>层</th><th>何时生效</th><th>管什么</th><th>覆盖谁</th></tr></thead>
+      <tbody>
+        <tr><td>① 实时拦截</td><td>Agent 每次调用工具之前</td><td>读取密钥、改写门禁入口、不可逆的 git 操作、绕过开关</td><td>Claude Code、Codex、DeepSeek Harness</td></tr>
+        <tr><td>② git 钩子</td><td>每次提交与引用更新</td><td>提交信息、暂存的密钥文件、主分支的写入</td><td>所有客户端和人</td></tr>
+        <tr><td>③ 受控合并</td><td>合并到主分支时</td><td>验证证据、独立评审、门禁改动的人工确认</td><td>所有客户端和人</td></tr>
+      </tbody>
+    </table></div>
+    <p>即使某个客户端没有接上实时拦截（例如 Codex 还没信任钩子），git 层的提交检查和主分支保护照样有效，没有证据和评审的改动依然进不了主分支。</p>
+
+    <h3 id="components">组件与数据放在哪</h3>
+    <p>项目里只入库配置和一个很小的入口脚本，门禁代码、密钥和运行记录都留在本机。</p>
+    <figure>
+      <div class="diagram">
+        <svg viewBox="0 0 900 400" role="img" aria-label="组件关系：Agent 客户端的钩子和 git 钩子都调用项目里的入口 .harness/bin/harness，入口按锁定的版本转发到本机的门禁代码；门禁代码从主分支的 git 对象读取配置，用本机密钥签名后把记录写进 .git/harness，并在固定检出里执行检查。">
+          <rect class="d-box" x="20" y="40" width="190" height="56" rx="8"/>
+          <text class="d-t" x="115" y="64" text-anchor="middle">Agent 客户端</text>
+          <text class="d-s" x="115" y="83" text-anchor="middle">Claude Code、Codex、DSH</text>
+          <rect class="d-box" x="20" y="164" width="190" height="56" rx="8"/>
+          <text class="d-t" x="115" y="188" text-anchor="middle">git 钩子</text>
+          <text class="d-m" x="115" y="207" text-anchor="middle">.git/hooks/</text>
+
+          <rect class="d-box accent" x="290" y="100" width="210" height="60" rx="8"/>
+          <text class="d-t" x="395" y="125" text-anchor="middle">入口脚本</text>
+          <text class="d-m" x="395" y="145" text-anchor="middle">.harness/bin/harness</text>
+          <text class="d-tag" x="492" y="94" text-anchor="end">入库，锁定版本</text>
+
+          <line class="d-line" x1="210" y1="68" x2="286" y2="116" marker-end="url(#ar)"/>
+          <text class="d-l" x="226" y="64">工具调用前</text>
+          <line class="d-line" x1="210" y1="192" x2="286" y2="146" marker-end="url(#ar)"/>
+          <text class="d-l" x="238" y="202">提交、写引用</text>
+
+          <rect class="d-box" x="580" y="100" width="300" height="60" rx="8"/>
+          <text class="d-t" x="730" y="125" text-anchor="middle">门禁代码</text>
+          <text class="d-m" x="730" y="145" text-anchor="middle">~/.local/share/harness/versions/&lt;版本&gt;/</text>
+          <text class="d-tag" x="872" y="94" text-anchor="end">本机，所有项目共用</text>
+          <line class="d-line" x1="500" y1="130" x2="576" y2="130" marker-end="url(#ar)"/>
+          <text class="d-l" x="538" y="122" text-anchor="middle">转发</text>
+
+          <rect class="d-box" x="290" y="270" width="190" height="56" rx="8"/>
+          <text class="d-t" x="385" y="294" text-anchor="middle">主分支上的配置</text>
+          <text class="d-m" x="385" y="313" text-anchor="middle">main:.harness/*.json</text>
+          <rect class="d-box" x="500" y="270" width="190" height="56" rx="8"/>
+          <text class="d-t" x="595" y="294" text-anchor="middle">签名记录与账本</text>
+          <text class="d-m" x="595" y="313" text-anchor="middle">.git/harness/</text>
+          <rect class="d-box" x="710" y="270" width="170" height="56" rx="8"/>
+          <text class="d-t" x="795" y="294" text-anchor="middle">固定检出</text>
+          <text class="d-m" x="795" y="313" text-anchor="middle">~/.cache/harness/</text>
+
+          <line class="d-line" x1="640" y1="160" x2="400" y2="266" marker-end="url(#ar)"/>
+          <text class="d-l" x="470" y="210" text-anchor="middle">只读配置</text>
+          <line class="d-line" x1="700" y1="160" x2="610" y2="266" marker-end="url(#ar)"/>
+          <text class="d-l" x="636" y="215" text-anchor="end">签名写入</text>
+          <line class="d-line" x1="790" y1="160" x2="795" y2="266" marker-end="url(#ar)"/>
+          <text class="d-l" x="800" y="222">执行检查</text>
+
+          <rect class="d-box" x="500" y="350" width="190" height="40" rx="8"/>
+          <text class="d-m" x="595" y="375" text-anchor="middle">evidence.key（权限 600）</text>
+          <line class="d-line dash" x1="595" y1="350" x2="595" y2="326"/>
+          <text class="d-l" x="604" y="343">签名密钥</text>
+        </svg>
+      </div>
+      <figcaption>图 2　谁调用谁。客户端钩子与 git 钩子都只调用入口脚本；真正的判定代码按版本装在本机，配置一律从主分支读取。</figcaption>
+    </figure>
+    <div class="table-wrap"><table class="t-files">
+      <thead><tr><th>位置</th><th>内容</th><th>入库</th></tr></thead>
+      <tbody>
+        <tr><td><code>.harness/config.json</code>、<code>policy.json</code>、<code>verify.json</code></td><td>项目参数、拦截规则、检查映射</td><td>是</td></tr>
+        <tr><td><code>.harness/golden/tasks.json</code></td><td>对规则本身的回归用例（黄金任务）</td><td>是</td></tr>
+        <tr><td><code>.harness/rules/</code>、<code>.harness/templates/</code></td><td>给 Agent 读的研发规范与模板，升级时整份重写</td><td>是</td></tr>
+        <tr><td><code>.harness/bin/harness</code>、<code>.harness/VERSION</code></td><td>入口与锁定的版本号</td><td>是</td></tr>
+        <tr><td><code>.claude/settings.json</code>、<code>.codex/hooks.json</code></td><td>客户端的实时拦截配置</td><td>是</td></tr>
+        <tr><td><code>AGENTS.md</code> 托管块</td><td>Agent 每次都会加载的硬性要求</td><td>是</td></tr>
+        <tr><td><code>.git/hooks/</code></td><td><code>pre-commit</code>、<code>commit-msg</code>、<code>reference-transaction</code></td><td>默认否</td></tr>
+        <tr><td><code>.git/harness/</code></td><td>证据、评审、确认、授权记录与账本，所有 Worktree 共用</td><td>否</td></tr>
+        <tr><td><code>~/.local/share/harness/</code></td><td>按版本安装的门禁代码与签名密钥</td><td>否</td></tr>
+        <tr><td><code>~/.cache/harness/checkouts/</code></td><td>verify 的固定检出</td><td>否</td></tr>
+      </tbody>
+    </table></div>
+
+    <!-- ============ 原理 ============ -->
+    <h2 id="principles">核心原理</h2>
+
+    <h3 id="lifecycle">一次任务的生命周期</h3>
+    <p>每一步都会留下一条签名记录，并且<strong>绑定到具体的内容</strong>上。内容一变，对应的记录就作废，需要重跑那一步。这样合并时核对的永远是“这一份代码”的证据，而不是“某个时候跑过一次”。</p>
+    <figure>
+      <div class="diagram">
+        <svg viewBox="0 18 900 222" role="img" aria-label="任务生命周期：approve（大任务）、实现并提交、verify、review、confirm（仅门禁改动）、merge、main；每一步的记录绑定到具体内容，评审被拒后修复再提交，证据与评审重新生成；主分支前进时 merge 只重跑被波及的检查。">
+          <path class="d-line dash" d="M455,96 C455,40 197,40 197,96" marker-end="url(#ar)"/>
+          <text class="d-l" x="326" y="36" text-anchor="middle">被拒或再提交：证据与评审作废，重新 verify、review</text>
+          <path class="d-line dash" d="M680,98 C680,58 735,58 735,98" marker-end="url(#ar)"/>
+          <text class="d-l" x="707" y="50" text-anchor="middle">主分支前进：只重跑被波及的检查</text>
+
+          <rect class="d-box opt" x="10" y="100" width="105" height="56" rx="8"/>
+          <text class="d-t" x="62" y="124" text-anchor="middle">approve</text>
+          <text class="d-s" x="62" y="143" text-anchor="middle">大任务先授权</text>
+          <line class="d-line" x1="115" y1="128" x2="136" y2="128" marker-end="url(#ar)"/>
+          <rect class="d-box" x="140" y="100" width="115" height="56" rx="8"/>
+          <text class="d-t" x="197" y="124" text-anchor="middle">实现并提交</text>
+          <text class="d-s" x="197" y="143" text-anchor="middle">任务分支</text>
+          <line class="d-line" x1="255" y1="128" x2="276" y2="128" marker-end="url(#ar)"/>
+          <rect class="d-box" x="280" y="100" width="105" height="56" rx="8"/>
+          <text class="d-t" x="332" y="124" text-anchor="middle">verify</text>
+          <text class="d-s" x="332" y="143" text-anchor="middle">签名证据</text>
+          <line class="d-line" x1="385" y1="128" x2="401" y2="128" marker-end="url(#ar)"/>
+          <rect class="d-box" x="405" y="100" width="100" height="56" rx="8"/>
+          <text class="d-t" x="455" y="124" text-anchor="middle">review</text>
+          <text class="d-s" x="455" y="143" text-anchor="middle">独立评审</text>
+          <line class="d-line" x1="505" y1="128" x2="521" y2="128" marker-end="url(#ar)"/>
+          <rect class="d-box opt" x="525" y="100" width="110" height="56" rx="8"/>
+          <text class="d-t" x="580" y="124" text-anchor="middle">confirm</text>
+          <text class="d-s" x="580" y="143" text-anchor="middle">仅门禁改动</text>
+          <line class="d-line" x1="635" y1="128" x2="651" y2="128" marker-end="url(#ar)"/>
+          <rect class="d-box accent" x="655" y="100" width="105" height="56" rx="8"/>
+          <text class="d-t" x="707" y="124" text-anchor="middle">merge</text>
+          <text class="d-s" x="707" y="143" text-anchor="middle">核对后合并</text>
+          <line class="d-line accent" x1="760" y1="128" x2="786" y2="128" marker-end="url(#ar-accent)"/>
+          <rect class="d-box allow" x="790" y="100" width="100" height="56" rx="8"/>
+          <text class="d-t" x="840" y="133" text-anchor="middle">main</text>
+
+          <text class="d-tag" x="62" y="180" text-anchor="middle">绑定验收清单</text>
+          <text class="d-tag" x="332" y="180" text-anchor="middle">绑定分支提交</text>
+          <text class="d-tag" x="455" y="180" text-anchor="middle">绑定分支提交</text>
+          <text class="d-tag" x="580" y="180" text-anchor="middle">绑定合并结果 tree</text>
+          <text class="d-tag" x="707" y="180" text-anchor="middle">令牌绑定新旧提交</text>
+          <line class="d-line dash" x1="10" y1="200" x2="890" y2="200"/>
+          <text class="d-l" x="450" y="226" text-anchor="middle">虚线框表示按条件出现的步骤；每一条记录都用本机密钥签名，存进 .git/harness/</text>
+        </svg>
+      </div>
+      <figcaption>图 3　每条记录绑定什么。分支上再提交，证据与评审作废；主分支前进导致合并结果变化，确认也要重做。</figcaption>
+    </figure>
+    <ul>
+      <li><strong>verify</strong> 在固定检出里检出分支提交，只验证已提交的内容；工作区里没提交的改动不算。</li>
+      <li><strong>review</strong> 要求先有通过的验证证据，评审结论同样绑定分支提交。</li>
+      <li><strong>confirm</strong> 只在改动涉及门禁本身（配置、规则、入口、钩子）时需要，绑定的是合并结果的 tree。</li>
+      <li><strong>merge</strong> 发现没有证据，或主分支的新改动波及某些检查时，会自己重跑这些检查；评审不会自动重做。</li>
+    </ul>
+
+    <h3 id="signing">签名记录</h3>
+    <p>证据、评审、确认与实施授权都是 JSON 记录，用本机密钥 <code>~/.local/share/harness/evidence.key</code>（权限 600）做 HMAC-SHA256 签名，存在仓库的 <code>.git/harness/</code> 下，所有 Worktree 共用，另有一份追加式账本 <code>ledger.jsonl</code>。</p>
+    <p>记录被改动、密钥轮换或丢失时，签名校验失败，harness 会指出该重跑哪一步（例如 <code>harness verify --branch &lt;分支&gt;</code>），而不只是报“签名不匹配”。</p>
+
+    <h3 id="token">主分支只认合并令牌</h3>
+    <p>主分支的保护不靠“约定不要直接提交”，而是由 git 自己的 <code>reference-transaction</code> 钩子执行：每次更新 <code>refs/heads/main</code> 时，钩子都要求环境里带着合并令牌。</p>
+    <figure>
+      <div class="diagram">
+        <svg viewBox="0 0 900 250" role="img" aria-label="合并令牌：harness merge 核对记录后，用密钥对旧提交和新提交签名得到令牌，带着令牌更新主分支，reference-transaction 钩子重算并比对后放行；在主分支上直接 commit、pull、reset 没有令牌，被钩子拒绝。">
+          <rect class="d-box accent" x="20" y="30" width="190" height="60" rx="8"/>
+          <text class="d-t" x="115" y="55" text-anchor="middle">harness merge</text>
+          <text class="d-s" x="115" y="75" text-anchor="middle">先核对证据、评审、确认</text>
+          <line class="d-line accent" x1="210" y1="60" x2="266" y2="60" marker-end="url(#ar-accent)"/>
+          <rect class="d-box" x="270" y="30" width="230" height="60" rx="8"/>
+          <text class="d-t" x="385" y="55" text-anchor="middle">生成令牌</text>
+          <text class="d-m" x="385" y="75" text-anchor="middle">HMAC(密钥, 旧提交, 新提交)</text>
+          <line class="d-line accent" x1="500" y1="60" x2="556" y2="60" marker-end="url(#ar-accent)"/>
+          <text class="d-l accent" x="528" y="52" text-anchor="middle">带令牌</text>
+
+          <rect class="d-box deny" x="20" y="160" width="190" height="60" rx="8"/>
+          <text class="d-t" x="115" y="185" text-anchor="middle">直接写 main</text>
+          <text class="d-s" x="115" y="205" text-anchor="middle">commit、pull、reset 等</text>
+          <line class="d-line deny" x1="210" y1="190" x2="556" y2="190" marker-end="url(#ar-deny)"/>
+          <text class="d-l deny" x="385" y="182" text-anchor="middle">没有令牌</text>
+
+          <rect class="d-box" x="560" y="30" width="170" height="190" rx="8"/>
+          <text class="d-t" x="645" y="112" text-anchor="middle">reference-</text>
+          <text class="d-t" x="645" y="130" text-anchor="middle">transaction 钩子</text>
+          <text class="d-s" x="645" y="152" text-anchor="middle">重算令牌并比对</text>
+
+          <line class="d-line allow" x1="730" y1="60" x2="776" y2="60" marker-end="url(#ar-allow)"/>
+          <rect class="d-box allow" x="780" y="30" width="100" height="60" rx="8"/>
+          <text class="d-t" x="830" y="65" text-anchor="middle">main 更新</text>
+          <line class="d-line deny" x1="730" y1="190" x2="776" y2="190" marker-end="url(#ar-deny)"/>
+          <rect class="d-box deny" x="780" y="160" width="100" height="60" rx="8"/>
+          <text class="d-t" x="830" y="195" text-anchor="middle">拒绝写入</text>
+        </svg>
+      </div>
+      <figcaption>图 4　同一个钩子，两种结果。令牌只能由持有密钥的 <code>harness merge</code> 生成，而且只对这一次“旧提交到新提交”有效。</figcaption>
+    </figure>
+    <p>所以在主分支上 <code>git commit</code> 或 <code>git pull</code> 被拒绝是预期行为。同步远端主分支的做法见 <a href="#team">团队与多机</a>。</p>
+
+    <h3 id="trust-root">配置只从主分支读取</h3>
+    <p>如果任务分支能改规则并立即生效，Agent 就可以“先关掉检查再提交”。harness 的所有判定（实时拦截、git 钩子、verify 选检查、merge 的合并条件）都<strong>从主分支的 git 对象读取配置</strong>，不读工作区，也不读任务分支。</p>
+    <figure>
+      <div class="diagram">
+        <svg viewBox="0 0 900 260" role="img" aria-label="信任根：门禁判定只读取主分支上已确认的配置；任务分支改了 policy.json 不会影响它自己的判定；改动门禁的分支必须由人确认后合并，合入后新配置才生效。">
+          <rect class="d-box accent" x="30" y="20" width="240" height="80" rx="8"/>
+          <text class="d-t" x="150" y="52" text-anchor="middle">main 分支</text>
+          <text class="d-m" x="150" y="74" text-anchor="middle">.harness/ 已确认的配置</text>
+          <rect class="d-box" x="30" y="170" width="240" height="70" rx="8"/>
+          <text class="d-t" x="150" y="198" text-anchor="middle">任务分支</text>
+          <text class="d-s" x="150" y="220" text-anchor="middle">改了 policy.json，关掉一条规则</text>
+
+          <rect class="d-box" x="360" y="100" width="230" height="64" rx="8"/>
+          <text class="d-t" x="475" y="126" text-anchor="middle">门禁判定</text>
+          <text class="d-s" x="475" y="146" text-anchor="middle">拦截、钩子、选检查、合并条件</text>
+
+          <line class="d-line accent" x1="270" y1="80" x2="356" y2="116" marker-end="url(#ar-accent)"/>
+          <text class="d-l accent" x="300" y="112" text-anchor="middle">读取</text>
+          <line class="d-line deny" x1="270" y1="182" x2="356" y2="152" marker-end="url(#ar-deny)"/>
+          <text class="d-l deny" x="300" y="158" text-anchor="middle">不读取</text>
+
+          <line class="d-line" x1="270" y1="222" x2="636" y2="222" marker-end="url(#ar)"/>
+          <text class="d-l" x="455" y="214" text-anchor="middle">门禁改动：合并前必须由人确认</text>
+          <rect class="d-box" x="640" y="190" width="240" height="64" rx="8"/>
+          <text class="d-t" x="760" y="216" text-anchor="middle">confirm --yes + merge</text>
+          <text class="d-s" x="760" y="236" text-anchor="middle">确认绑定合并结果 tree</text>
+          <path class="d-line accent" d="M760,190 L760,40 L274,40" marker-end="url(#ar-accent)"/>
+          <text class="d-l accent" x="770" y="120">合入后才生效</text>
+        </svg>
+      </div>
+      <figcaption>图 5　信任根在主分支上。任务分支改了规则，只有在人确认并合入之后，新规则才开始约束后面的任务。</figcaption>
+    </figure>
+    <ul>
+      <li>门禁文件包括 <code>.harness/</code> 下的配置、规则、用例与入口，客户端配置和钩子目录，以及 <code>governance.gatePaths</code> 追加的路径。</li>
+      <li>Agent 执行带 <code>--yes</code> 的确认会被拦截，确认必须由人执行；确认后如果分支再提交或主分支前进导致合并结果变化，要重新确认。</li>
+      <li>首次接入时主分支上还没有配置，这时按接入分支提议的配置执行，并且无论改了什么都要人确认；确认后以快进方式合入，这份配置从此成为信任根。</li>
+      <li>改规则之前可以用 <code>harness golden --worktree</code> 按工作区的配置重放黄金任务，确认新规则的判定符合预期。</li>
+    </ul>
+
+    <h3 id="selection">按改动选检查</h3>
+    <p><code>verify</code> 不是每次全量跑测试，而是按 <code>.harness/verify.json</code> 的映射，用“分支相对合并基线改了哪些路径”选出要跑的检查：</p>
+    <div class="code"><span class="label">verify.json 片段</span><pre><code>{ "id": "web-typecheck", "tier": "gate",
+  "when": ["web/src/**", "web/package.json"],
+  "cwd": "web", "cmd": ["pnpm", "typecheck"],
+  "requires": ["web/node_modules"] }</code></pre></div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>tier</th><th>含义</th></tr></thead>
+      <tbody>
+        <tr><td><code>gate</code></td><td>必过，失败就不能合并</td></tr>
+        <tr><td><code>extended</code></td><td>不自动执行，记入证据的“未执行”清单，并附补验方式</td></tr>
+        <tr><td><code>advisory</code></td><td>只提示，不计入未执行</td></tr>
+      </tbody>
+    </table></div>
+    <ul>
+      <li>检查在固定检出 <code>~/.cache/harness/checkouts/&lt;哈希&gt;/work</code> 里执行，它是一个分离头指针的 Linked Worktree，不受你工作区状态影响，增量缓存可以复用。</li>
+      <li><code>requires</code> 里的依赖目录（如 <code>node_modules</code>）从主 Worktree 软链接进检出；缺失时证据记为 <code>incomplete</code>，不能评审与合并。</li>
+      <li>命令不存在时证据里单独标出“未找到命令”，说明是缺工具，不是代码有问题。</li>
+      <li><code>harness verify --plan --branch &lt;分支&gt;</code> 只列出会执行的检查，不执行。</li>
+    </ul>
+
+    <h3 id="review">独立评审</h3>
+    <p>写代码的 Agent 很难客观评价自己的改动。<code>review</code> 启动一个<strong>不了解实现过程</strong>的评审进程，只给它三样东西：验收清单、diff 和验证证据摘要，从“需求符合度”和“工程质量”两个维度给出结论。</p>
+    <ul>
+      <li>后端默认 <code>auto</code>：本机有 <code>claude</code> 就用它，否则用 <code>codex</code>；都没有时可以接入任意命令（<code>command</code> 后端）。</li>
+      <li><code>claude</code> 后端不开放任何工具、不加载项目设置；<code>codex</code> 与 <code>command</code> 后端在空的临时目录里运行，读不到项目文件。</li>
+      <li>有 <code>high</code> 或 <code>critical</code> 级别的发现时拒绝合并，级别可以用 <code>review.blockSeverities</code> 调整。</li>
+      <li>有验收清单 <code>.harness/acceptance/&lt;分支名&gt;.md</code> 时评审逐条核对，需求符合度为 <code>unknown</code> 或 <code>unmet</code> 都会被拒绝。</li>
+    </ul>
+
+    <h3 id="plan-first">任务分级与实施授权</h3>
+    <p>规则写在 <code>.harness/rules/core.md</code>，要点同时写进 <code>AGENTS.md</code> 的托管块，Agent 开始任务前先判断分级：</p>
+    <div class="cards">
+      <div class="card"><h4>直接实施</h4><p>小优化、小迭代或缺陷修复：不改库表与迁移，不改接口契约、权限与数据兼容性，代码改动少于 500 行（测试、文档、锁文件不计）。</p></div>
+      <div class="card"><h4>先方案后实施</h4><p>其余任务和拿不准的任务：先探索仓库，一次问一个问题，写出验收清单、spec 与 plan，提交后停下等你授权。</p></div>
+    </div>
+    <p>默认启用的 <code>plan-first</code> 预设把“停下等授权”变成门禁：</p>
+    <ul>
+      <li>任务分支写了实施方案（默认 <code>docs/changes/*/plan.md</code>）、还没有授权记录时，Agent 只能写方案与验收清单，写测试和代码会被拦截。</li>
+      <li>你在对话里说“开始实施”之类的话就是授权，不需要执行命令。Agent 会运行 <code>harness approve --branch &lt;分支&gt; --yes --note "&lt;你的原话&gt;"</code> 照录原话。</li>
+      <li>写了方案、改了库表相关文件或代码改动超过阈值的分支，没有授权记录不能合并（<code>plan_unapproved</code>）。</li>
+      <li>合并输出与 <code>harness status</code> 会显示记录下来的原话，你可以随时核对。</li>
+    </ul>
+    <p>实施默认<strong>先红后绿</strong>：先把每条验收写成测试并确认失败，再实现到全部通过。</p>
+
+    <h3 id="pinning">版本锁定的入口</h3>
+    <p>门禁代码如果放在项目里，Agent 就可以改它。所以项目只入库一个入口 <code>.harness/bin/harness</code>，它按 <code>.harness/VERSION</code> 锁定的版本，转发到本机的 <code>~/.local/share/harness/versions/&lt;版本&gt;/</code>。</p>
+    <ul>
+      <li>版本目录带内容哈希清单，<code>harness doctor</code> 会校验它没有被就地改写。</li>
+      <li>入口与钩子 Agent 不能手改，只能在任务分支运行 <code>harness install</code>、<code>init</code> 或 <code>upgrade</code> 重新生成，合并前同样要人确认。</li>
+      <li>入口随仓库分发，每个 Linked Worktree 检出即可用；同一台机器上的多个项目可以锁定不同版本。</li>
+    </ul>
+
+    <!-- ============ 快速开始 ============ -->
+    <h2 id="quickstart">快速开始</h2>
+    <div class="callout">
+      <p><strong>需要</strong>：macOS 或 Linux，Node.js 20 及以上，git 2.38 及以上（合并用到 <code>git merge-tree --write-tree</code>），以及本机已登录的 <code>claude</code>（Claude Code CLI）或 <code>codex</code>，用来做独立评审。</p>
+    </div>
+
+    <ol class="steps">
+      <li>
+        <h4>获取 harness</h4>
+        <div class="code"><pre><code>git clone https://github.com/windvalley/harness.git ~/github/harness</code></pre></div>
+        <p>没有 npm 依赖，也不需要全局安装。克隆到别的目录也可以，把后面命令里的路径换掉即可。</p>
+      </li>
+      <li>
+        <h4>在任务分支里接入项目</h4>
+        <p>接入本身也走一遍门禁流程。建议在 Linked Worktree 里做，让主 Worktree 一直停在主分支且洁净，<code>merge</code> 要在那里更新主分支。</p>
+        <div class="code"><pre><code>cd &lt;项目&gt;        <span class="c"># 主 Worktree，停在 main 且洁净</span>
+git worktree add -b chore/harness-onboard ../&lt;项目&gt;-onboard main
+cd ../&lt;项目&gt;-onboard
+
+node ~/github/harness/bin/harness.mjs init --dry-run   <span class="c"># 预览将写入的文件，不落盘</span>
+node ~/github/harness/bin/harness.mjs init
+git add -A
+git commit -m "chore(harness): 接入门禁" -m "- 写入门禁配置、规则与入口"</code></pre></div>
+        <p><code>init</code> 会写入 <code>.harness/</code> 配置与规则、入口脚本、三个 git 钩子、客户端拦截配置和 <code>AGENTS.md</code> 托管块，并按技术栈生成起始检查（<code>go.mod</code>、<code>frontend/package.json</code>、<code>Cargo.toml</code>、pytest 配置）。</p>
+        <p>项目里已有 husky、自定义钩子等其他门禁时，先看 <code>--dry-run</code> 列出的冲突和处理建议，详见<a href="https://github.com/windvalley/harness/blob/main/docs/reference.md#已有其他门禁的项目">参考手册</a>。</p>
+      </li>
+      <li>
+        <h4>验证、评审、确认、合并</h4>
+        <div class="code"><pre><code>.harness/bin/harness verify  --branch chore/harness-onboard
+.harness/bin/harness review  --branch chore/harness-onboard
+.harness/bin/harness confirm --branch chore/harness-onboard          <span class="c"># 只读摘要</span>
+.harness/bin/harness confirm --branch chore/harness-onboard --yes    <span class="c"># 由人执行</span>
+.harness/bin/harness merge   --branch chore/harness-onboard</code></pre></div>
+        <p>首次接入一定要人确认：<code>confirm</code> 的摘要会列出涉及的门禁文件、将生效的规则数与检查项。只有带 <code>--yes</code> 的这一条必须由人执行，在 Claude Code 里可以用 <code>!</code> 前缀直接运行；其余步骤都可以交给 Agent。</p>
+      </li>
+      <li>
+        <h4>让客户端用上实时拦截</h4>
+        <ul>
+          <li><strong>Claude Code</strong>：重启正在运行的会话，钩子在会话启动时读入。</li>
+          <li><strong>Codex</strong>：运行 <code>/hooks</code>，进入 <code>Review hooks</code> 后按 <code>t</code> 信任；每个 Worktree 首次使用时各信任一次。</li>
+          <li><strong>DeepSeek Harness</strong>：在自己的终端注册一次插件，<code>--profile</code> 桌面版用 <code>desktop</code>，浏览器版用 <code>web</code>：</li>
+        </ul>
+        <div class="code"><pre><code>dsh plugin --profile &lt;desktop|web&gt; add &lt;主 Worktree 路径&gt;/.harness/dsh-plugin</code></pre></div>
+        <p>最后在主 Worktree 运行 <code>.harness/bin/harness doctor</code>，逐项检查接入状态：</p>
+        <div class="code term"><span class="label">输出节选</span><pre><code>  [ok] git:reference-transaction: &lt;项目&gt;/.git/hooks/reference-transaction
+  [ok] client:claude: PreToolUse 已接入（CLI 已验证；桌面版仅静态确认，未端到端实测）
+  [!!] client:codex: 钩子已接入但尚未信任：在 Codex 里运行 /hooks 批准一次，否则命令不会经过门禁
+  [ok] project:main: 配置取自主分支 main
+  [ok] main-worktree: &lt;项目&gt; 停在 main 且洁净，可以接收合并</code></pre></div>
+        <p><code>[!!]</code> 表示需要处理，<code>[?]</code> 表示文件已就位但客户端是否真正调用尚未实测。</p>
+      </li>
+      <li>
+        <h4>收尾</h4>
+        <div class="code"><pre><code>cd ../&lt;项目&gt;
+git worktree remove ../&lt;项目&gt;-onboard
+git branch -d chore/harness-onboard</code></pre></div>
+      </li>
+    </ol>
+    <div class="callout warn">
+      <p>小项目没有其他门禁、也不需要评审时，可以直接在主分支上运行 <code>init</code> 并提交；提交之后主分支立即受保护，再有改动就要走任务分支和 <code>harness merge</code>。</p>
+    </div>
+
+    <!-- ============ 日常 ============ -->
+    <h2 id="daily">日常工作流</h2>
+    <p>规则已经写进项目（<code>AGENTS.md</code> 托管块与 <code>.harness/rules/</code>），平时只需要告诉 Agent 这次做什么、按什么节奏。下文的 <code>harness</code> 都指项目里的入口 <code>.harness/bin/harness</code>。</p>
+
+    <h3 id="prompts">配合使用的提示词</h3>
+    <div class="code"><span class="label">开始任务</span><pre><code>需求：&lt;描述&gt;
+按 harness 规则先判断任务分级并说明依据。属于先方案后实施的，先探索仓库再逐个问我，方案提交后停下等我说开始。</code></pre></div>
+    <div class="code"><span class="label">澄清完毕</span><pre><code>问题问完了，写验收清单、spec 和 plan，提交到任务分支后给我看。</code></pre></div>
+    <div class="code"><span class="label">授权实施</span><pre><code>可以，开始实施。</code></pre></div>
+    <p>最后一句就是授权，Agent 会照录原话记下授权，然后按 plan 先红后绿连续做到完成。</p>
+
+    <h3 id="one-task">一次任务</h3>
+    <div class="code"><pre><code>cd &lt;项目&gt;
+git worktree add -b feat/login ../&lt;项目&gt;-login main
+cd ../&lt;项目&gt;-login
+<span class="c"># 可选：写验收清单 .harness/acceptance/feat-login.md</span>
+<span class="c"># 实现并提交</span>
+harness verify --branch feat/login   <span class="c"># 选检查，在固定检出里执行，写签名证据</span>
+harness review --branch feat/login   <span class="c"># 独立评审</span>
+harness status --branch feat/login   <span class="c"># 只读：还差哪几步才能合并</span>
+harness merge  --branch feat/login   <span class="c"># 核对证据与评审，更新主分支</span></code></pre></div>
+    <p><code>status</code> 一眼看出还差什么：</p>
+    <div class="code term"><pre><code>分支 feat/login -> main
+
+  [ok] branch: 待合入 5685e8a474 -> main
+  [ok] main-worktree: 主 Worktree 停在 main 且洁净
+  [ok] evidence: 验证通过，主分支自验证以来新增 0 个文件，未波及已执行的检查，可直接复用
+  [ok] review: 评审通过（需求符合度 unknown，工程质量 good，清单来源 无）
+  [ok] plan: 属于直接实施的范围（代码改动 1 行），不需要实施授权
+  [ok] gate: 本次没有改动门禁配置与规则
+  [-] acceptance: 验收清单约定位置：acceptance/feat-login.md（存在时评审会核对需求符合度）
+
+可以合并：harness merge --branch feat/login</code></pre></div>
+    <ul>
+      <li><code>merge</code> 在哪个 Worktree 里运行都可以，但主 Worktree 必须停在主分支、洁净、没有进行中的 merge、rebase 或 cherry-pick。</li>
+      <li>合并有冲突时，在任务分支上 <code>git merge main</code> 解决冲突并提交，再重新 verify、review。</li>
+      <li><code>merge --dry-run</code> 只做核对，不更新主分支。</li>
+    </ul>
+
+    <h3 id="acceptance">验收清单</h3>
+    <p>清单放在 <code>.harness/acceptance/&lt;分支名&gt;.md</code>，分支名里的 <code>/</code> 等字符换成 <code>-</code>，例如 <code>feat/login</code> 对应 <code>feat-login.md</code>。每条写成能用测试或命令验证的结果。没有清单时评审只评工程质量；<code>intent.mode</code> 设为 <code>required</code> 时没有清单不能合并。</p>
+
+    <h3 id="commit-msg">提交信息</h3>
+    <p>默认规范分两处检查：<code>commit-msg</code> 钩子要求标题是 <code>类型: 说明</code> 或 <code>类型(范围): 说明</code>；<code>merge</code> 进一步要求标题之后空一行，其余每行都是 <code>- </code> 开头的要点。</p>
+    <div class="code"><pre><code>git commit -m "feat(login): 支持短信验证码登录" -m "- 新增验证码发送与校验接口
+- 登录页增加验证码输入"</code></pre></div>
+    <p>每个 <code>-m</code> 是一段，多条要点要写在同一个 <code>-m</code> 里换行。只有标题的提交能通过钩子，但合并时会报 <code>bad_commit_message</code>。</p>
+
+    <h3 id="cleanup">清理任务 Worktree</h3>
+    <p>合并后 harness 不会删除任务 Worktree，因为会话可能还停在里面。需要时先预览再清理：</p>
+    <div class="code"><pre><code>harness worktree clean                            <span class="c"># 预览，不删除</span>
+harness worktree clean --yes                      <span class="c"># 删除可清理的 Worktree 与分支</span>
+harness worktree clean --yes --with-local-files   <span class="c"># 含 .env 这类本机文件的也一起删</span></code></pre></div>
+    <p>只有提交已在主分支上、没有未提交文件、没有进程停在里面、没有被 <code>git worktree lock</code> 锁定的 Worktree 才会被清理。想保留某个 Worktree，锁定它即可。</p>
+
+    <!-- ============ 被拦截 ============ -->
+    <h2 id="blocked">被拦截时怎么办</h2>
+    <p>拦截信息包含原因、对象、正确做法和规则 id，Agent 照着“正确做法”改道即可：</p>
+    <div class="code term"><pre><code>[harness] 已拦截: 强制推送会覆盖远端历史
+对象: git push --force origin main
+正确做法: 普通推送到任务分支；确需强推请用户明确授权具体分支
+规则: git-force-push</code></pre></div>
+    <div class="code term"><pre><code>拒绝直接更新 refs/heads/main(5685e8a474 -> 5d3ce6d65d)
+本地主分支只允许由 harness merge 更新，它会先核对证据与评审。
+正确做法: 在任务分支提交后运行 harness merge --branch &lt;任务分支&gt;。</code></pre></div>
+    <p>常见的合并拒绝原因：</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>提示</th><th>处理</th></tr></thead>
+      <tbody>
+        <tr><td><code>bad_commit_message</code></td><td>分支上有提交不符合合并时的格式；在任务分支改写提交信息，再重新 verify、review</td></tr>
+        <tr><td><code>review_missing</code> / <code>review_blocked</code></td><td>运行 <code>harness review</code>；被拒时按发现修复，提交后重新 verify、review</td></tr>
+        <tr><td><code>gate_change_unconfirmed</code></td><td>由人运行 <code>harness confirm --branch &lt;分支&gt;</code> 看过摘要，再加 <code>--yes</code></td></tr>
+        <tr><td><code>plan_unapproved</code></td><td>大改动没有实施授权记录；补齐方案，你同意后由 Agent 照录原话运行 <code>harness approve</code></td></tr>
+        <tr><td><code>conflict</code></td><td>在任务分支上 <code>git merge main</code> 解决冲突，再重新验证与评审</td></tr>
+        <tr><td><code>main_moved</code></td><td>合并过程中主分支前进了，重新运行 <code>harness merge</code>，已有证据会复用</td></tr>
+        <tr><td>验证结果 <code>incomplete</code></td><td><code>requires</code> 里的依赖目录在主 Worktree 不存在，装好依赖后重跑</td></tr>
+        <tr><td>主 Worktree 不在 main 或不洁净</td><td>把主 Worktree 切回主分支并处理掉改动；<code>status</code> 与 <code>doctor</code> 会提前报出</td></tr>
+      </tbody>
+    </table></div>
+    <p>更多见参考手册的<a href="https://github.com/windvalley/harness/blob/main/docs/reference.md#常见问题">常见问题</a>。手工判定一条命令会不会被拦：<code>harness check --kind shell --command "&lt;命令&gt;"</code>；列出所有生效规则：<code>harness rules</code>。</p>
+
+    <!-- ============ 定制 ============ -->
+    <h2 id="customize">按项目定制</h2>
+    <p>四个文件决定门禁的行为，Agent 可以直接改，但它们都属于门禁改动，合并前要人确认，合入后才生效。</p>
+    <div class="cards">
+      <div class="card"><h4><code>config.json</code></h4><p>主分支名、合并要求、提交格式、评审后端、验收清单模式、任务分级阈值、Worktree 清理命令。</p></div>
+      <div class="card"><h4><code>verify.json</code></h4><p>改了哪些路径跑哪些检查、检查的级别、执行目录与依赖。</p></div>
+      <div class="card"><h4><code>policy.json</code></h4><p>启用哪些预设、关掉哪些规则、项目自己的拦截规则。</p></div>
+      <div class="card"><h4><code>golden/tasks.json</code></h4><p>对规则本身的回归用例，改坏规则的分支在 verify 阶段就被拦下。</p></div>
+    </div>
+    <p>加一条项目规则，例如禁止改已上线的迁移基线：</p>
+    <div class="code"><span class="label">policy.json 片段</span><pre><code>{
+  "id": "migration-baseline",
+  "kind": "write-protect",
+  "paths": ["db/migrations/0001_*.sql"],
+  "reason": "迁移基线已经上线，改它会让已部署的库与代码不一致",
+  "fix": "新增一个迁移文件，不要改已有的基线"
+}</code></pre></div>
+    <p>每条规则都要写 <code>reason</code> 和 <code>fix</code>，拦截时原样展示给 Agent。默认启用的预设：</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>预设</th><th>内容</th></tr></thead>
+      <tbody>
+        <tr><td><code>secrets</code></td><td>禁止读取、写入或用命令外发 <code>.env</code>、私钥、凭据与证据密钥</td></tr>
+        <tr><td><code>git-safety</code></td><td>拦截递归删除、丢弃改动、强删 Worktree、删分支、强推、<code>stash</code>、<code>--no-verify</code>，以及在主分支上合并、变基、重置</td></tr>
+        <tr><td><code>gate-self</code></td><td>保护执行器入口与绕过开关；轮换密钥与人工确认只能由人执行</td></tr>
+        <tr><td><code>plan-first</code></td><td>没有实施授权时只能写方案文件，大改动合并前必须有授权记录</td></tr>
+        <tr><td><code>main-worktree</code>（可选）</td><td>主 Worktree 只用来合并，多个会话并行时推荐启用</td></tr>
+      </tbody>
+    </table></div>
+    <p>字段的完整说明见参考手册的<a href="https://github.com/windvalley/harness/blob/main/docs/reference.md#配置">配置</a>一节。</p>
+
+    <!-- ============ 团队 ============ -->
+    <h2 id="team">团队与多机</h2>
+
+    <h3 id="new-machine">新成员或新机器</h3>
+    <p>入口与客户端配置随仓库分发，门禁代码与 git 钩子留在各自的机器上。克隆项目后运行一次：</p>
+    <div class="code"><pre><code>cd &lt;项目&gt;
+node ~/github/harness/bin/harness.mjs install --local
+harness doctor</code></pre></div>
+    <p><code>install --local</code> 按项目锁定的版本安装代码（必要时从对应的 <code>v&lt;版本&gt;</code> 标签导出），再写入本机的钩子与插件目录，不改任何入库文件。装好之前，Claude Code 与 Codex 的实时拦截会拒绝一切调用并提示这条命令。</p>
+
+    <h3 id="upgrade">升级</h3>
+    <div class="code"><pre><code>git -C ~/github/harness pull --tags
+cd &lt;项目&gt;
+git worktree add -b chore/harness-upgrade ../&lt;项目&gt;-upgrade main
+cd ../&lt;项目&gt;-upgrade
+node ~/github/harness/bin/harness.mjs upgrade
+git add -A
+git commit -m "chore(harness): 升级到 &lt;版本&gt;" -m "- 更新入口锁定的版本与规则文档"</code></pre></div>
+    <p>然后照常 verify、review、confirm、merge。<code>upgrade</code> 会整份重写 <code>rules/</code> 与 <code>templates/</code>，项目自己的规范请写在 <code>AGENTS.md</code> 托管块之外。</p>
+
+    <h3 id="sync">与远端同步</h3>
+    <p>harness 只管本地主分支。Agent 推送主分支会被拦截，由人推送；Agent 可以推送任务分支，但不能强推。同步远端主分支有两种做法：</p>
+    <div class="code"><span class="label">做法一：走一遍本机门禁</span><pre><code>git fetch origin
+harness verify --branch origin/main
+harness review --branch origin/main
+harness merge  --branch origin/main</code></pre></div>
+    <div class="code"><span class="label">做法二：由人决定信任远端，只能快进</span><pre><code>git fetch origin
+HARNESS_MAIN_BYPASS=1 git merge --ff-only origin/main</code></pre></div>
+    <p><code>HARNESS_MAIN_BYPASS</code> 是绕过开关，只能由人在自己的终端使用，Agent 设置它会被拦截。</p>
+
+    <h3 id="parallel">多个会话并行</h3>
+    <p>只要有一个 Agent 在主 Worktree 里切走分支或留下改动，所有任务的合并都会被挡住。并行的项目建议在 <code>policy.json</code> 的 <code>presets</code> 里加上 <code>main-worktree</code>：Agent 不能改主 Worktree 里的文件、不能把它切离主分支，<code>pre-commit</code> 也拒绝主 Worktree 里的提交。</p>
+
+    <!-- ============ 限制 ============ -->
+    <h2 id="limits">信任模型与限制</h2>
+    <p>harness 防的是 Agent 的误操作，以及被提示注入后常见的绕过写法；<strong>不防</strong>拥有本机权限、有意破坏的人或进程。</p>
+    <ul>
+      <li>签名密钥在你的用户目录里，能读到它的进程就能伪造记录。密钥损坏或怀疑泄露时，由人运行 <code>harness key rotate --yes</code>，已有记录全部作废。</li>
+      <li><code>HARNESS_MAIN_BYPASS</code> 等环境变量与 <code>core.hooksPath</code> 能让门禁失效，只能由人使用，Agent 设置或读取会被拦截。</li>
+      <li>路径规则只约束写文件、读文件类的工具调用；用 shell 命令读写同一个文件，要靠命令规则覆盖。</li>
+      <li>Codex 没有信任钩子时没有实时拦截；DeepSeek Harness 浏览器版未实测；Claude 桌面版只做了静态确认。git 层对它们都生效。</li>
+      <li>任务分级与先红后绿仍由 Agent 判断，门禁只兜底能机械判定的部分；授权记录里的原话要靠你在合并输出或 <code>harness status</code> 里核对。</li>
+    </ul>
+
+    <!-- ============ 速查 ============ -->
+    <h2 id="cheatsheet">命令速查</h2>
+    <p>运行 <code>harness help</code> 查看全部命令与参数。</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>命令</th><th>用途</th></tr></thead>
+      <tbody>
+        <tr><td><code>init [--dry-run] [--take-over]</code></td><td>接入当前项目，<code>--dry-run</code> 只预览</td></tr>
+        <tr><td><code>verify --branch &lt;分支&gt; [--plan]</code></td><td>验证并写签名证据；<code>--plan</code> 只列计划</td></tr>
+        <tr><td><code>review --branch &lt;分支&gt;</code></td><td>独立评审</td></tr>
+        <tr><td><code>status [--branch &lt;分支&gt;]</code></td><td>只读汇总还差哪几步才能合并</td></tr>
+        <tr><td><code>confirm --branch &lt;分支&gt; [--yes]</code></td><td>查看门禁改动摘要；带 <code>--yes</code> 由人记录确认</td></tr>
+        <tr><td><code>approve --branch &lt;分支&gt; [--yes --note &lt;原话&gt;]</code></td><td>查看方案与授权状态；记录实施授权</td></tr>
+        <tr><td><code>merge --branch &lt;分支&gt; [--dry-run]</code></td><td>受控合并到主分支</td></tr>
+        <tr><td><code>worktree clean [--yes]</code></td><td>预览并清理已合并的任务 Worktree</td></tr>
+        <tr><td><code>doctor</code></td><td>安装与接入自检</td></tr>
+        <tr><td><code>rules</code>、<code>check --kind ...</code></td><td>列出生效规则；手工判定一次调用</td></tr>
+        <tr><td><code>golden [--worktree]</code></td><td>重放黄金任务</td></tr>
+        <tr><td><code>install --local</code>、<code>upgrade</code></td><td>新机器安装；升级项目到当前版本</td></tr>
+        <tr><td><code>uninstall [--dry-run] [--purge]</code></td><td>解除接入</td></tr>
+      </tbody>
+    </table></div>
+
+    <div class="callout">
+      <p><strong>下一步</strong>：配置字段、钩子目录接管、例外上报、卸载等细节见<a href="https://github.com/windvalley/harness/blob/main/docs/reference.md">参考手册</a>；版本变化见 <a href="https://github.com/windvalley/harness/blob/main/CHANGELOG.md">CHANGELOG</a>。</p>
+    </div>
+  </main>
+</div>
+
+<footer>
+  harness · MIT 许可 · <a href="https://github.com/windvalley/harness">GitHub</a> · <a href="https://github.com/windvalley/harness/blob/main/docs/reference.md">参考手册</a>
+</footer>
+
+<script>
+(function () {
+  // 主题：auto -> dark -> light 循环，偏好只存本机
+  var root = document.documentElement;
+  var btn = document.getElementById("theme-btn");
+  var names = { auto: "主题：自动", dark: "主题：深色", light: "主题：浅色" };
+  function read() { try { return localStorage.getItem("harness-theme") || "auto"; } catch (e) { return "auto"; } }
+  function apply(mode) {
+    if (mode === "auto") root.removeAttribute("data-theme"); else root.setAttribute("data-theme", mode);
+    btn.textContent = names[mode];
+  }
+  var mode = read();
+  apply(mode);
+  btn.addEventListener("click", function () {
+    mode = mode === "auto" ? "dark" : mode === "dark" ? "light" : "auto";
+    apply(mode);
+    try { localStorage.setItem("harness-theme", mode); } catch (e) {}
+  });
+
+  // 窄屏默认收起目录，点链接后收起
+  var toc = document.getElementById("toc");
+  var narrow = window.matchMedia("(max-width: 960px)");
+  if (narrow.matches) toc.removeAttribute("open");
+  narrow.addEventListener && narrow.addEventListener("change", function (e) { if (!e.matches) toc.setAttribute("open", ""); });
+  toc.addEventListener("click", function (e) { if (e.target.tagName === "A" && narrow.matches) toc.removeAttribute("open"); });
+
+  // 代码块复制按钮
+  document.querySelectorAll(".code").forEach(function (box) {
+    var b = document.createElement("button");
+    b.type = "button"; b.className = "copy"; b.textContent = "复制";
+    b.addEventListener("click", function () {
+      var text = box.querySelector("pre").innerText.replace(/\n$/, "");
+      var done = function () { b.textContent = "已复制"; setTimeout(function () { b.textContent = "复制"; }, 1500); };
+      if (navigator.clipboard) navigator.clipboard.writeText(text).then(done, function () {});
+    });
+    box.appendChild(b);
+  });
+
+  // 目录高亮当前章节
+  var links = {};
+  document.querySelectorAll(".toc a[href^='#']").forEach(function (a) { links[a.getAttribute("href").slice(1)] = a; });
+  var heads = Array.prototype.filter.call(document.querySelectorAll("main h2[id], main h3[id]"), function (h) { return links[h.id]; });
+  function update() {
+    var current = null;
+    for (var i = 0; i < heads.length; i++) { if (heads[i].getBoundingClientRect().top < 120) current = heads[i]; else break; }
+    Object.keys(links).forEach(function (k) { links[k].classList.remove("active"); });
+    if (current) links[current.id].classList.add("active");
+  }
+  window.addEventListener("scroll", update, { passive: true });
+  update();
+})();
+</script>
+</body>
+</html>
