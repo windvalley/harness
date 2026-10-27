@@ -14,6 +14,7 @@ import {
   run,
   statusShort,
   treeOf,
+  worktreeEntries,
 } from "../lib/git.mjs";
 import { appendLedger, dataDir, readRecord, writeRecord } from "../lib/store.mjs";
 import { EVIDENCE_KIND, reusableChecks, verify } from "../verify/verify.mjs";
@@ -22,6 +23,7 @@ import { ensureHooksPath } from "../install/install.mjs";
 import { REVIEW_KIND } from "../review/review.mjs";
 import { approvalState, planEnforced, planRequirement } from "../plan/plan.mjs";
 import { MERGE_TOKEN_ENV, mainUpdateToken } from "../githook.mjs";
+import { leftoverWorktrees } from "../worktree/clean.mjs";
 
 export class MergeError extends Error {
   constructor(message, code = "merge_refused") {
@@ -402,6 +404,17 @@ export async function mergeTask({ cwd, branch, dryRun = false, log = console.err
           "post_merge_failed",
         );
       }
+    }
+
+    // 任务 Worktree 合并后保留：会话常常还停在里面，也可能要回来补改。需要时由用户运行 harness worktree clean 清理。
+    try {
+      const own = worktreeEntries(mainRoot).find((entry) => entry.branch === branch);
+      const leftover = leftoverWorktrees({ root: mainRoot, mainRef }).length;
+      if (own || leftover > 0) {
+        log(`[merge] ${own ? `任务 Worktree 保留在 ${own.path}；` : ""}已合并但还没清理的 Worktree 有 ${leftover} 个，需要时运行 harness worktree clean 预览后清理`);
+      }
+    } catch {
+      // 只是提示，读不到 Worktree 列表不影响合并结果。
     }
 
     return { dryRun: false, bootstrap, fastForward, newHead, resultTree, gateTouched, postMerge, refresh, followUps: notes };

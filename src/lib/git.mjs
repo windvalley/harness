@@ -53,6 +53,27 @@ export function worktreeRoots(cwd) {
     .map((line) => line.slice("worktree ".length));
 }
 
+/** git worktree list 的结构化结果，第一项是主 Worktree。branch 去掉了 refs/heads/ 前缀，分离头指针时为 null。 */
+export function worktreeEntries(cwd) {
+  const entries = [];
+  let current = null;
+  for (const line of gitOk(cwd, ["worktree", "list", "--porcelain"]).split("\n")) {
+    if (line.startsWith("worktree ")) {
+      current = { path: line.slice("worktree ".length), head: null, branch: null, locked: false, lockReason: "", prunable: false };
+      entries.push(current);
+      continue;
+    }
+    if (!current || !line) continue;
+    const [key, ...rest] = line.split(" ");
+    const value = rest.join(" ");
+    if (key === "HEAD") current.head = value;
+    else if (key === "branch") current.branch = value.replace(/^refs\/heads\//, "");
+    else if (key === "locked") Object.assign(current, { locked: true, lockReason: value });
+    else if (key === "prunable") current.prunable = true;
+  }
+  return entries;
+}
+
 export function mainWorktreeRoot(cwd) {
   const roots = worktreeRoots(cwd);
   if (roots.length === 0) throw new Error("无法定位主 Worktree");

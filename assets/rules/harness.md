@@ -10,23 +10,18 @@
 2. `harness verify --branch <任务分支>`：在固定检出目录里按改动路径选择检查集，结果写成绑定该分支提交的签名证据。主分支自上次验证后新增的改动若未触及某项检查，那项检查直接复用。
 3. `harness review --branch <任务分支>`：独立评审只读验收清单、证据摘要和 diff，分需求符合度与工程质量两个维度。有 high 或 critical 级别的发现会被拒绝。
 4. `harness merge --branch <任务分支>`：核对证据与评审，合并到主分支。改动涉及门禁配置时必须先由人确认。
-5. 合并成功后按下面的“收尾”清理任务 Worktree 与任务分支。
+5. 合并后任务 Worktree 保留，清理按下面的“收尾”由用户发起。
 
-## 收尾：清理任务 Worktree
+## 收尾：任务 Worktree 由用户发起清理
 
-`harness merge` 报告主分支已更新后，删除这次任务创建的 Linked Worktree 和任务分支；合并没有成功就不删。
+合并后保留任务 Worktree 和任务分支，不要自行删除：会话常常还停在里面，合并后也可能要回来补改，删除时还会连带删掉被忽略的本机文件。
 
-- 先离开要删除的 Worktree，在主 Worktree 里执行，或者写明路径：`git -C <主 Worktree> worktree remove <任务 Worktree 的绝对路径>`。
-  会话停在被删除的目录里时，之后的 git 命令会找不到工作目录。
-- 不加 `--force`：Worktree 里有未提交或未跟踪的文件时 git 会拒绝，这时停下报告用户，不要强删。
-- 再删分支：`git branch -d <任务分支>`，不用 `-D`；git 报告分支没有完全合并时停下报告。
-- Worktree 里启动过服务、建过隔离数据库或占用了端口时，先按项目规则停止和清理；归属不明时停下报告，不要宽泛清理。
-- 以下情况不删，在汇报里说明：
-  - 用户要求保留；
-  - Worktree 不是这次任务创建的；
-  - 由客户端自己管理的 Worktree（例如 Claude Code 建在 `.claude/worktrees/` 下的），交给客户端的退出流程；
-  - verify 的固定检出（`~/.cache/harness/checkouts/` 下），它用来复用增量缓存。
-- 汇报里写明删了哪些 Worktree 与分支，没删的说明原因。
+- `harness merge` 的输出写明任务 Worktree 保留在哪里，以及已合并但还没清理的 Worktree 有几个；汇报时把这两点转告用户。
+- 用户要求清理时，先运行 `harness worktree clean` 把预览交给用户：哪些可以删、会连带删掉哪些被忽略的文件，哪些跳过以及原因。
+- 用户确认后运行 `harness worktree clean --yes`。
+  预览里有含 `.env` 这类本机文件的 Worktree 时，用户明确同意删除这些文件才加 `--with-local-files`。
+- 不要绕开这个命令自己删除：`git worktree remove --force` 与 `git branch -D` 会被拦截，它们会丢掉未提交的改动或未合并的提交。
+- 不在会话里删除会话所在的 Worktree，`harness worktree clean` 也会跳过命令所在的 Worktree。
 
 ## 验收清单
 

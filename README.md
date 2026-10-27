@@ -280,8 +280,52 @@ harness merge  --branch feat/login   # 核对证据与评审，更新主分支
 - `merge` 在哪个 Worktree 里运行都可以，但主 Worktree 必须停在主分支、洁净、没有进行中的 merge、rebase 或 cherry-pick。
   只用一个目录工作时，合并前先切回主分支。
 - 合并有冲突时，在任务分支上 `git merge main` 解决冲突并提交，再重新 verify、review。
-- 合并成功后，Agent 按 `.harness/rules/harness.md` 的“收尾”删掉这个 Linked Worktree 和任务分支：不加 `--force`、不用 `-D`。
-  Worktree 里有未提交的文件、本机服务或数据库还没清理、Worktree 不是这次任务创建的，Agent 会停下报告，不会强删。
+- 合并后任务 Worktree 保留，需要时按下面的“清理任务 Worktree”清理。
+
+### 清理任务 Worktree
+
+合并后 harness 不删除任务 Worktree：会话常常还停在里面，也可能要回来补改。
+合并输出和 `harness doctor` 会报告已合并但还没清理的 Worktree 有几个，需要时清理：
+
+```bash
+harness worktree clean                            # 预览，不删除
+harness worktree clean --yes                      # 删除可清理的 Worktree 与分支
+harness worktree clean --yes --with-local-files   # 含本机文件的也一起删
+```
+
+在对话里让 Agent 清理也可以：它先把预览给你看，你确认后再执行。
+
+可清理的 Worktree 要同时满足：
+
+- 检出的提交已在主分支上：有分支的看分支，分离头指针（例如 Codex 建的 Worktree）看 HEAD。
+- 不是刚建好的：建好不到 24 小时、还没有新提交的 Worktree 和主分支指向同一个提交，看起来已合并，其实是刚开始的任务，按 Worktree 自己的 HEAD 日志认出来后跳过。
+  建好超过 24 小时、一直没有提交的，已经没有独有的内容，可以清理。
+- 没有未提交或未跟踪的文件。
+- 没有进程的工作目录停在里面：Linux 读 `/proc`，其他系统用 `lsof`，只看得到当前用户的进程。
+- 没有被 `git worktree lock` 锁定；想保留某个 Worktree，锁定它即可。
+
+主 Worktree、命令当前所在的 Worktree 和 verify 的固定检出永远不删。
+
+- 删除用不带 `--force` 的 `git worktree remove`，分支用 `git branch -d`；分离头指针的 Worktree 没有分支可删。
+- `git worktree remove` 会连带删掉被忽略的文件，例如 `node_modules` 和构建产物，预览里逐个列出。
+  其中按 `secrets` 预设的读取保护认出的本机文件（`.env`、私钥、凭据），默认整个 Worktree 跳过，加 `--with-local-files` 才删。
+- 目录已经被手工删掉、只剩 git 记录的，清理记录与分支。
+- Worktree 起的服务、建的数据库不会跟着删除，在 `.harness/config.json` 里配置删除前要运行的命令：
+
+```json
+{ "worktree": { "cleanup": [["make", "worktree.dev.down"], ["make", "worktree.db.drop"]] } }
+```
+
+命令在 Worktree 里依次运行，可以用 `{worktree}`、`{main}`、`{branch}` 占位符，或同义的 `HARNESS_WORKTREE`、`HARNESS_MAIN`、`HARNESS_BRANCH` 环境变量。
+任一命令失败就保留那个 Worktree，结果里写明原因。
+命令跑的是那个 Worktree 自己检出的文件，较早的检出里可能还没有这些目标，命令失败后那个 Worktree 会一直留着；这种情况先判断目标存在再执行：
+
+```json
+[["sh", "-c", "! grep -q '^worktree.dev.down:' Makefile || make --no-print-directory worktree.dev.down"]]
+```
+
+这份配置从主分支读取，改动属于门禁改动，合并前由人确认。
+有进程停在里面的 Worktree 在运行清理命令之前就被跳过，还开着服务的先在那个 Worktree 里停掉。
 
 ### 验收清单
 
@@ -476,6 +520,7 @@ node ~/github/harness/bin/harness.mjs install --local   # 按新锁定的版本�
 | `governance.gatePaths` | `[]` | 追加的门禁文件 glob |
 | `escalate.triggers` | 四条 | 建议上报的情形，写给 Agent 看，harness 不据此自动触发 |
 | `env` | `{}` | 执行检查时附加的环境变量 |
+| `worktree.cleanup` | `[]` | `harness worktree clean` 删除 Worktree 前在里面依次运行的命令，见“清理任务 Worktree” |
 | `git.hooksDir`、`git.projectHooks` | 不设置 | 由 harness 接管 git 钩子目录，见下文 |
 
 ### verify.json：检查映射
@@ -708,6 +753,7 @@ node ~/github/harness/bin/harness.mjs install --local   # 按新锁定的版本�
 | `confirm --branch <分支> [--yes] [--note <说明>]` | 查看门禁改动摘要；带 `--yes` 由人记录确认 |
 | `approve --branch <分支> [--yes --note <原话>]` | 查看任务方案与授权状态；用户同意实施后由 Agent 带 `--yes` 照录原话记录授权 |
 | `merge --branch <分支> [--dry-run]` | 受控合并到主分支 |
+| `worktree clean [--yes] [--with-local-files]` | 预览已合并的任务 Worktree；`--yes` 删除 Worktree 与分支 |
 | `doctor` | 安装与接入自检 |
 | `rules` | 列出解析后的生效规则 |
 | `check --kind <shell\|write\|read\|search\|commit> ...` | 手工判定一次调用，可加 `--on-main`、`--linked-worktree`、`--ignored` 指定位置 |
@@ -765,7 +811,7 @@ harness 防的是 Agent 的误操作，以及被提示注入后常见的绕过�
 | `拒绝直接更新 refs/heads/main` | 主分支只接受 `harness merge`；拉取远端见“与远端同步” |
 | `另一个合并正在进行` | 等那个合并结束后重试 |
 | Codex 里的命令没被拦截 | 钩子还没信任，在 Codex 里运行 `/hooks` 信任 |
-| `git worktree remove --force` 被 `git-discard-changes` 拦截 | 强删会丢掉 Worktree 里未提交的改动；先看 `git -C <Worktree> status`，需要的提交，确认不要时由你在自己的终端删除 |
+| `git worktree remove --force` 被 `git-discard-changes` 拦截 | 强删会丢掉 Worktree 里未提交的改动；已合并的用 `harness worktree clean` 预览后清理，有未提交改动的先看 `git -C <Worktree> status` 再决定 |
 
 ## 卸载与版本管理
 

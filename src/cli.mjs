@@ -27,6 +27,7 @@ import { formatSurvey } from "./install/survey.mjs";
 import { followUps } from "./install/followups.mjs";
 import { doctor, formatDoctor } from "./install/doctor.mjs";
 import { conformance, formatConformance } from "./conformance.mjs";
+import { cleanWorktrees, formatCleanPlan, formatCleanResult, planCleanup } from "./worktree/clean.mjs";
 import { packageVersion } from "./install/managed.mjs";
 
 const ADAPTERS = { claude, codex, dsh };
@@ -40,6 +41,7 @@ const USAGE = `harness <命令> [参数]
   confirm  --branch <名称> [--yes]                   查看门禁改动；--yes 记录人工确认
   approve  --branch <名称> [--yes --note <原话>]     查看任务方案；用户同意实施后加 --yes，--note 照录用户原话
   merge    --branch <名称> [--dry-run]               受控合并到主分支
+  worktree clean [--yes] [--with-local-files]       预览已合并的任务 Worktree；--yes 才删除，含 .env 这类本机文件的要再加 --with-local-files
 
 体检与度量
   doctor                                             安装与接入自检
@@ -217,6 +219,21 @@ function cmdApprove(argv) {
   }
   const { summary } = approvePlan({ cwd: process.cwd(), branch: values.branch, note: values.note ?? "" });
   print(`已记录 ${values.branch} 的实施授权（依据：${values.note.trim()}；验收清单 ${summary.acceptancePath}，方案文件 ${summary.planFiles.length} 个）。`);
+  return 0;
+}
+
+function cmdWorktree(argv) {
+  const [action, ...rest] = argv;
+  if (action !== "clean") {
+    process.stderr.write("用法: harness worktree clean [--yes] [--with-local-files]\n");
+    return 2;
+  }
+  const { values } = parseArgs({
+    args: rest,
+    options: { yes: { type: "boolean", default: false }, "with-local-files": { type: "boolean", default: false } },
+  });
+  const options = { cwd: process.cwd(), withLocalFiles: values["with-local-files"] };
+  print(values.yes ? formatCleanResult(cleanWorktrees(options)) : formatCleanPlan(planCleanup(options)));
   return 0;
 }
 
@@ -667,6 +684,8 @@ export async function main(argv) {
         return cmdConfirm(rest);
       case "approve":
         return cmdApprove(rest);
+      case "worktree":
+        return cmdWorktree(rest);
       case "githook":
         return cmdGithook(rest);
       case "hook":

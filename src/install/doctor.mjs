@@ -8,6 +8,7 @@ import { mainWorktreeProblems } from "../merge/merge.mjs";
 import { commandExists, resolveBackend } from "../review/review.mjs";
 import { resolvePolicy } from "../policy/resolve.mjs";
 import { packageVersion, MARK_START } from "./managed.mjs";
+import { leftoverWorktrees } from "../worktree/clean.mjs";
 import {
   currentHooksConfig,
   gitHooksDir,
@@ -219,6 +220,13 @@ export function doctor({ cwd = process.cwd() } = {}) {
         mainProblems.length === 0
           ? `${mainRoot} 停在 ${mainBranch(project)} 且洁净，可以接收合并`
           : `${mainProblems.join("；")}。主 Worktree 未就绪时所有任务的 harness merge 都会被拒绝`,
+    });
+    // 合并后不自动删除任务 Worktree，这里只报告堆积的数量，不算失败。
+    const leftover = leftoverWorktrees({ root, mainRef: mainBranch(project) }).length;
+    checks.push({
+      id: "worktrees",
+      ok: true,
+      detail: `已合并但还没清理的 Worktree ${leftover} 个${leftover > 0 ? "，需要时运行 harness worktree clean 预览后清理" : ""}`,
     });
     if (project.config.merge?.requireReview !== false) {
       try {

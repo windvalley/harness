@@ -29,6 +29,8 @@ function defaultConfig({ mainBranch }) {
       triggers: ["需求有歧义且会改变行为或权限", "必要验证被既有问题阻塞", "涉及推送、远程 MR、部署或生产操作", "同一方案连续失败两次"],
     },
     env: {},
+    // 清理任务 Worktree 前在里面依次运行的命令，例如停服务、删隔离数据库；见 harness worktree clean。
+    worktree: { cleanup: [] },
   };
 }
 

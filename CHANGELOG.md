@@ -17,8 +17,10 @@
 - 独立评审把有授权记录的验收清单标注为用户同意过的需求。
 - 验收清单模板 `templates/acceptance.md`；行为说明与实施方案模板按“问题、验收、失败时、这次不做、待确认”与“验收到测试的对应、实现顺序、环境、复用”重写。
 - 起始黄金任务 `g17-plan-first`，只在启用这个预设时重放。
-- 规则要求合并成功后清理任务 Worktree 与任务分支：不加 `--force`、不用 `-D`；有未提交的文件、本机服务或数据库没清理、Worktree 不是这次任务创建的，停下报告。
-  `AGENTS.md` 托管块同步写明这一条。
+- `harness worktree clean` 预览可以清理的 Linked Worktree：检出的提交已在主分支上、不是建好不到 24 小时的新任务、没有未提交文件、没有进程停在里面、没有锁定；分离头指针的 Worktree 同样适用。
+  `--yes` 删除 Worktree 与分支，Worktree 不加 `--force`，分支用 `-d`；含 `.env` 这类本机文件的默认跳过，`--with-local-files` 才删。
+- `.harness/config.json` 新增 `worktree.cleanup`：删除前在 Worktree 里依次运行的命令，例如停服务、删隔离数据库，失败就保留那个 Worktree。
+- 合并后保留任务 Worktree，合并输出与 `doctor` 报告已合并但还没清理的 Worktree 数量；规则与 `AGENTS.md` 托管块写明不自行删除，清理由用户发起。
 
 ### 变更
 
@@ -34,6 +36,7 @@
 
 ### 升级说明
 
+- 需要在清理 Worktree 前停服务、删数据库的项目，在 `config.json` 里加 `worktree.cleanup`，不加时只删 Worktree 与分支。
 - 已接入项目的 `golden/tasks.json` 不会自动更新，`g05` 新增的两步需要时从 `assets/golden/starter.json` 复制。
 - `upgrade` 不改 `config.json` 与 `policy.json`：要启用实施授权，在 `policy.json` 的 `presets` 里加 `plan-first`，需要时在 `config.json` 的 `intent` 里加 `plan`（不加按默认值）；起始黄金任务 `g17-plan-first` 从 `assets/golden/starter.json` 复制。
 - 本机 `~/.local/share/harness/versions/0.6.0` 若装过 0.6.0 发布后的代码，内容会与标签 `v0.6.0` 不一致；升级到 0.7.0 后可以用 `harness prune` 清理。

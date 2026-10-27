@@ -226,11 +226,14 @@ async function acquireCheckoutLock({ dir, timeoutMs = 120_000, log }) {
   return null;
 }
 
+/** verify 固定检出所在的目录；worktree clean 据此认出它们，不当成任务 Worktree 删除。 */
+export function checkoutsDir() {
+  return join(process.env.HARNESS_CACHE_DIR || join(homedir(), ".cache", "harness"), "checkouts");
+}
+
 function checkoutRootFor(root) {
-  const base = process.env.HARNESS_CACHE_DIR || join(homedir(), ".cache", "harness");
   const dir = join(
-    base,
-    "checkouts",
+    checkoutsDir(),
     createHash("sha1").update(mainWorktreeRoot(root)).digest("hex").slice(0, 12),
   );
   mkdirSync(dir, { recursive: true });
