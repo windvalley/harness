@@ -222,7 +222,7 @@ function cmdApprove(argv) {
   return 0;
 }
 
-function cmdWorktree(argv) {
+async function cmdWorktree(argv) {
   const [action, ...rest] = argv;
   if (action !== "clean") {
     process.stderr.write("用法: harness worktree clean [--yes] [--with-local-files]\n");
@@ -232,9 +232,15 @@ function cmdWorktree(argv) {
     args: rest,
     options: { yes: { type: "boolean", default: false }, "with-local-files": { type: "boolean", default: false } },
   });
-  const options = { cwd: process.cwd(), withLocalFiles: values["with-local-files"] };
-  print(values.yes ? formatCleanResult(cleanWorktrees(options)) : formatCleanPlan(planCleanup(options)));
-  return 0;
+  // 进度写到 stderr，结果写到 stdout：重定向结果时照样能看到进度。
+  const options = { cwd: process.cwd(), withLocalFiles: values["with-local-files"], log: (line) => process.stderr.write(`${line}\n`) };
+  if (!values.yes) {
+    print(formatCleanPlan(planCleanup(options)));
+    return 0;
+  }
+  const outcome = await cleanWorktrees(options);
+  print(formatCleanResult(outcome));
+  return outcome.interrupted ? 130 : 0;
 }
 
 function cmdGithook(argv) {

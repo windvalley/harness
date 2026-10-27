@@ -295,6 +295,11 @@ harness worktree clean --yes --with-local-files   # 含本机文件的也一起�
 
 在对话里让 Agent 清理也可以：它先把预览给你看，你确认后再执行。
 
+每个 Worktree 要删掉几万个文件，还要运行清理命令，一个常常需要好几秒。
+删除时每处理一个就在 stderr 输出一行进度和用时，结果汇总写到 stdout。
+中途按 Ctrl-C，会处理完当前这个 Worktree 再停下，并列出已完成的部分；再按一次立即退出。
+清理命令和 git 在独立的进程组里运行，Ctrl-C 不会把它们打断在半路，重新运行会接着处理剩下的。
+
 可清理的 Worktree 要同时满足：
 
 - 检出的提交已在主分支上：有分支的看分支，分离头指针（例如 Codex 建的 Worktree）看 HEAD。

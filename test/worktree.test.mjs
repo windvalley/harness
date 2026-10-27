@@ -182,6 +182,54 @@ describe("harness worktree clean", () => {
     assert.ok(lines.includes(`${ok}|${root}|${ok}|task/ok`), lines.join("\n"));
   });
 
+  test("删除时逐个输出进度与结果，预览开始时说明正在检查", () => {
+    const { repo, root } = setup();
+    task(repo, root, "one");
+    task(repo, root, "two");
+    const preview = clean(repo);
+    assert.match(preview.stderr, /正在检查 2 个 Linked Worktree/);
+    const result = clean(repo, "--yes");
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stderr, /\[1\/2\] .*one.*task\/one/);
+    assert.match(result.stderr, /\[2\/2\] .*two.*task\/two/);
+    assert.match(result.stderr, /已删除，分支已删除（\d+(\.\d)?s）/);
+  });
+
+  test("Ctrl-C 后处理完当前 Worktree 再停下，不留下删到一半的目录", async () => {
+    const config = {
+      ...CONFIG,
+      worktree: { cleanup: [["sh", "-c", 'touch "$1/../started-$(basename "$1")"; sleep 1', "_", "{worktree}"]] },
+    };
+    const { repo, root } = setup(config);
+    const names = ["a", "b", "c"];
+    const paths = names.map((name) => task(repo, root, name));
+    const marker = (name) => join(root, "..", `started-${name}`);
+    // 和终端里按 Ctrl-C 一样，把 SIGINT 发给整个前台进程组：命令本身与它启动的子进程都会收到。
+    const child = spawn(join(repo.root, ".harness/bin/harness"), ["worktree", "clean", "--yes"], {
+      cwd: repo.root,
+      env: { ...process.env, ...repo.env },
+      detached: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    children.push(child);
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => (stdout += chunk));
+    child.stderr.on("data", (chunk) => (stderr += chunk));
+    const started = Date.now();
+    while (!existsSync(marker("a")) && Date.now() - started < 20_000) await new Promise((r) => setTimeout(r, 50));
+    assert.ok(existsSync(marker("a")), "第一个 Worktree 的清理命令应已开始");
+    process.kill(-child.pid, "SIGINT");
+    const code = await new Promise((resolve) => child.on("close", resolve));
+    assert.equal(code, 130, stdout + stderr);
+    assert.match(stderr, /收到中断，处理完当前 Worktree 后停止/);
+    assert.equal(existsSync(paths[0]), false, "当前这个照常删完");
+    assert.equal(branchExists(repo, "task/a"), false);
+    assert.ok(existsSync(paths[1]) && existsSync(paths[2]), "后面的不再处理");
+    assert.match(stdout, /已删除 1 个/);
+    assert.match(stdout, /已中断，还有 2 个没有处理/);
+  });
+
   test("合并后保留任务 Worktree，并提示可以清理；doctor 报告已合并未清理的数量", () => {
     const { repo, root } = setup();
     const path = task(repo, root, "landing", { merged: false });
