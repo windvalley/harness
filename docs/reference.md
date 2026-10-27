@@ -844,7 +844,7 @@ harness 防的是 Agent 的误操作，以及被提示注入后常见的绕过�
 | `拒绝直接更新 refs/heads/main` | 主分支只接受 `harness merge`；拉取远端见“与远端同步” |
 | `另一个合并正在进行` | 等那个合并结束后重试 |
 | Codex 里的命令没被拦截 | 钩子还没信任，在 Codex 里运行 `/hooks` 信任 |
-| DeepSeek Harness 桌面版里所有工具都被拒绝，提示门禁无法加载项目配置 | 0.6.0 的插件缺少工作目录服务依赖；项目升级到 0.7.0 以上，合并后重启 DeepSeek Harness |
+| DeepSeek Harness 桌面版里所有工具都被拒绝，提示门禁无法加载项目配置 | 已接入项目在 0.6.0 会因插件缺少工作目录服务依赖出现此问题，升级到 0.7.0 以上；0.7.1 及更早版本在非 Git 会话目录也会误拒，升级到包含非 Git 目录放行修复的版本后重启 DeepSeek Harness |
 | `harness worktree clean --yes` 很久没有输出 | 0.7.0 删除时不输出进度，每个 Worktree 又要好几秒；升级到 0.7.1 后逐个输出，Ctrl-C 会处理完当前这个再停 |
 | 中断清理后留下 git 已不认识的目录 | 0.7.0 被 Ctrl-C 打断时可能删到一半；确认目录里已经没有文件后手工删除 |
 | `worktree clean` 删掉了另一个会话正在用的 Worktree | 进程检测认不出每条命令都新开 shell 的客户端；被删的分支已合入主分支、目录里也没有未提交文件，代码不会丢，需要时用 `git worktree add` 重建；以后清理前先用 `git worktree lock` 锁定 |

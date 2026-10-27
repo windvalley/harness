@@ -2,6 +2,12 @@
 
 按 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 组织，版本号遵循语义化版本。
 
+## [Unreleased]
+
+### 修复
+
+- DeepSeek Harness 会话位于非 Git 目录时不再误拒所有工具，未接入的 Git 仓库继续放行，工作目录无法确定或已接入项目配置异常时仍按失败关闭处理。
+
 ## [0.7.1] - 2026-10-27
 
 ### 修复

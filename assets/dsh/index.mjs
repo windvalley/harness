@@ -23,6 +23,7 @@ export function apply(ctx) {
     } catch {
       cwd = undefined;
     }
+    if (!cwd) return { kind: "deny", reason: "[harness] 门禁无法确定会话工作目录" };
     const outcome = guard({
       adapter: dsh,
       payload: {

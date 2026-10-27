@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { refExists, repoRoot, showBlob } from "./git.mjs";
+import { git, refExists, repoRoot, showBlob } from "./git.mjs";
 
 export const PROJECT_DIR = ".harness";
 export const FILES = ["config.json", "policy.json", "verify.json"];
@@ -63,10 +63,16 @@ export function loadProject(cwd, { fromRef, root = repoRoot(cwd) } = {}) {
  * 拦截层使用的配置来源。
  * 主分支已有配置就读主分支，保持信任根不变；
  * 主分支还没有（例如 init 之后的第一次提交）时退回工作区，让配置本身能被提交进去；
- * 两边都没有配置时返回 null，表示这个仓库没有接入 harness，钩子应当放行。
+ * 两边都没有配置时返回 null，表示这个仓库没有接入 harness，钩子应当放行；非 Git 目录同样放行。
  */
 export function loadGuardProject(cwd) {
-  const root = repoRoot(cwd);
+  const args = ["rev-parse", "--show-toplevel"];
+  const probe = git(cwd, args, { env: { ...process.env, LC_ALL: "C" } });
+  if (probe.status !== 0) {
+    if (probe.status === 128 && probe.stderr.startsWith("fatal: not a git repository ")) return null;
+    throw new Error(`git ${args.join(" ")} 失败(${probe.status}): ${probe.stderr.trim()}`);
+  }
+  const root = probe.stdout.trim();
   let ref;
   try {
     ref = trustedMainRef(root);
