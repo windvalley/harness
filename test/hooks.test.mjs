@@ -162,7 +162,10 @@ describe("安装与自检", () => {
     for (const rel of [".harness/config.json", ".harness/policy.json", ".harness/verify.json", ".harness/rules/core.md", ".harness/rules/harness.md", ".harness/templates/spec.md"]) {
       assert.ok(existsSync(join(repo.root, rel)), rel);
     }
-    assert.match(readFileSync(join(repo.root, "AGENTS.md"), "utf8"), /harness:start/);
+    const agents = readFileSync(join(repo.root, "AGENTS.md"), "utf8");
+    assert.match(agents, /harness:start/);
+    assert.match(agents, /合并成功后清理任务 Worktree/, "托管块写明收尾时清理任务 Worktree");
+    assert.match(readFileSync(join(repo.root, ".harness/rules/harness.md"), "utf8"), /## 收尾：清理任务 Worktree/);
     // 二次执行不覆盖已有配置
     writeFileSync(join(repo.root, ".harness/config.json"), JSON.stringify({ version: 1, mainBranch: "main", marker: "保留" }, null, 2));
     const second = repo.rawCli("init");

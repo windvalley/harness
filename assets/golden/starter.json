@@ -54,6 +54,8 @@
         { "kind": "shell", "command": "git clean -fd", "expect": "deny", "rule": "git-discard-changes" },
         { "kind": "shell", "command": "git push --force origin x", "expect": "deny", "rule": "git-force-push" },
         { "kind": "shell", "command": "git stash pop", "expect": "deny", "rule": "git-stash" },
+        { "kind": "shell", "command": "git worktree remove --force ../task-x", "expect": "deny", "rule": "git-discard-changes" },
+        { "kind": "shell", "command": "git worktree remove ../task-x", "expect": "allow" },
         { "kind": "shell", "command": "git status --short", "expect": "allow" }
       ]
     },

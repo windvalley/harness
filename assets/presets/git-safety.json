@@ -19,10 +19,11 @@
         "\\bgit\\s+checkout\\s+--\\s",
         "\\bgit\\s+restore\\s+(?!.*--staged)(.*\\s)?\\.\\s*$",
         "\\bgit\\s+restore\\s+(?!.*--staged)(.*\\s)?--worktree\\b",
-        "\\bgit\\s+branch\\s+(.*\\s)?-D\\b"
+        "\\bgit\\s+branch\\s+(.*\\s)?-D\\b",
+        "\\bgit\\s+worktree\\s+remove\\b.*\\s(-f+|--force)(?=\\s|$)"
       ],
       "reason": "会丢弃未提交改动或删除分支，必须逐项取得用户授权",
-      "fix": "先用 git status 确认范围；需要暂存用临时 WIP 提交;确需丢弃请用户明确点名该文件或分支"
+      "fix": "先用 git status 确认范围；需要暂存用临时 WIP 提交；删除 Worktree 不加 --force，git 遇到未提交或未跟踪的文件会拒绝；确需丢弃请用户明确点名该文件、分支或 Worktree"
     },
     {
       "id": "git-force-push",

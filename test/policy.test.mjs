@@ -135,6 +135,15 @@ describe("命令判定", () => {
     assert.equal(denies({ kind: "shell", command: "git status --short" }), false);
   });
 
+  test("强制删除 Worktree 会连带丢掉未提交改动，普通删除与清理记录放行", () => {
+    for (const command of ["git worktree remove --force ../x", "git worktree remove -f ../x", "git worktree remove ../x --force", "git -C /repo worktree remove -f -f ../x"]) {
+      assert.ok(denies({ kind: "shell", command }), command);
+    }
+    for (const command of ["git worktree remove ../my-feature", "git worktree prune", "git branch -d feat/x"]) {
+      assert.equal(denies({ kind: "shell", command }), false, command);
+    }
+  });
+
   test("git 全局选项不构成绕过", () => {
     assert.ok(denies({ kind: "shell", command: "git -C /tmp/x stash" }));
     assert.ok(denies({ kind: "shell", command: "git -c core.pager=cat reset --hard" }));

@@ -280,7 +280,8 @@ harness merge  --branch feat/login   # 核对证据与评审，更新主分支
 - `merge` 在哪个 Worktree 里运行都可以，但主 Worktree 必须停在主分支、洁净、没有进行中的 merge、rebase 或 cherry-pick。
   只用一个目录工作时，合并前先切回主分支。
 - 合并有冲突时，在任务分支上 `git merge main` 解决冲突并提交，再重新 verify、review。
-- 合并完成后删掉这个 Linked Worktree 和已合并的分支。
+- 合并成功后，Agent 按 `.harness/rules/harness.md` 的“收尾”删掉这个 Linked Worktree 和任务分支：不加 `--force`、不用 `-D`。
+  Worktree 里有未提交的文件、本机服务或数据库还没清理、Worktree 不是这次任务创建的，Agent 会停下报告，不会强删。
 
 ### 验收清单
 
@@ -604,7 +605,7 @@ node ~/github/harness/bin/harness.mjs install --local   # 按新锁定的版本�
 | 预设 | 内容 |
 | --- | --- |
 | `secrets` | 禁止读取、写入或用命令外发 `.env`、私钥、凭据文件与证据密钥，同名 `.example` 文件放行 |
-| `git-safety` | 拦截递归删除、丢弃改动、删除分支、强推、`stash`、`--no-verify`，以及在主分支上合并、变基、重置和绕过合并工具写主分支 |
+| `git-safety` | 拦截递归删除、丢弃改动、强制删除 Worktree、删除分支、强推、`stash`、`--no-verify`，以及在主分支上合并、变基、重置和绕过合并工具写主分支 |
 | `gate-self` | 保护执行器入口与绕过开关，轮换密钥与人工确认只能由人执行；规则与配置本身允许修改，合并前由人确认 |
 | `plan-first` | 先方案后实施：没有实施授权记录时 Agent 只能写方案文件，大改动合并前必须有授权记录；你在对话里同意后由 Agent 照录原话记录 |
 | `main-worktree` | 可选，`init` 不启用：主 Worktree 只用来合并，改动、切分支与提交都放在 Linked Worktree |
@@ -764,6 +765,7 @@ harness 防的是 Agent 的误操作，以及被提示注入后常见的绕过�
 | `拒绝直接更新 refs/heads/main` | 主分支只接受 `harness merge`；拉取远端见“与远端同步” |
 | `另一个合并正在进行` | 等那个合并结束后重试 |
 | Codex 里的命令没被拦截 | 钩子还没信任，在 Codex 里运行 `/hooks` 信任 |
+| `git worktree remove --force` 被 `git-discard-changes` 拦截 | 强删会丢掉 Worktree 里未提交的改动；先看 `git -C <Worktree> status`，需要的提交，确认不要时由你在自己的终端删除 |
 
 ## 卸载与版本管理
 

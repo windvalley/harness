@@ -17,11 +17,14 @@
 - 独立评审把有授权记录的验收清单标注为用户同意过的需求。
 - 验收清单模板 `templates/acceptance.md`；行为说明与实施方案模板按“问题、验收、失败时、这次不做、待确认”与“验收到测试的对应、实现顺序、环境、复用”重写。
 - 起始黄金任务 `g17-plan-first`，只在启用这个预设时重放。
+- 规则要求合并成功后清理任务 Worktree 与任务分支：不加 `--force`、不用 `-D`；有未提交的文件、本机服务或数据库没清理、Worktree 不是这次任务创建的，停下报告。
+  `AGENTS.md` 托管块同步写明这一条。
 
 ### 变更
 
 - `core.md` 改为默认先红后绿，直接实施的任务同样适用，并要求交付前按验收清单逐条给出证据；需求澄清改为一次一个问题、给出推荐答案、“待定”原样记录。
 - 去掉方案“不新增审批节点”的说法。
+- `git-safety` 的 `git-discard-changes` 拦截 `git worktree remove --force`，它和 `git reset --hard` 一样会丢掉未提交的改动；起始黄金任务 `g05` 补上对应用例。
 - `AGENTS.md` 托管块写明任务分级、先红后绿等硬性要求，不再只指向 `core.md`；`upgrade` 会刷新托管块。
 - 同一个版本号已经装了不同的代码时，`publish`、`install` 直接报错，不再替换版本目录并重写清单；被就地改动的版本目录按原内容恢复。
 
@@ -31,6 +34,7 @@
 
 ### 升级说明
 
+- 已接入项目的 `golden/tasks.json` 不会自动更新，`g05` 新增的两步需要时从 `assets/golden/starter.json` 复制。
 - `upgrade` 不改 `config.json` 与 `policy.json`：要启用实施授权，在 `policy.json` 的 `presets` 里加 `plan-first`，需要时在 `config.json` 的 `intent` 里加 `plan`（不加按默认值）；起始黄金任务 `g17-plan-first` 从 `assets/golden/starter.json` 复制。
 - 本机 `~/.local/share/harness/versions/0.6.0` 若装过 0.6.0 发布后的代码，内容会与标签 `v0.6.0` 不一致；升级到 0.7.0 后可以用 `harness prune` 清理。
 
