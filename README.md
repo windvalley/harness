@@ -321,8 +321,10 @@ harness worktree clean --yes --with-local-files   # 含本机文件的也一起�
 命令跑的是那个 Worktree 自己检出的文件，较早的检出里可能还没有这些目标，命令失败后那个 Worktree 会一直留着；这种情况先判断目标存在再执行：
 
 ```json
-[["sh", "-c", "! grep -q '^worktree.dev.down:' Makefile || make --no-print-directory worktree.dev.down"]]
+[["sh", "-c", "make -q worktree.dev.down >/dev/null 2>&1; [ $? -eq 2 ] || make --no-print-directory worktree.dev.down"]]
 ```
+
+`make -q` 在目标不存在时退出码为 2，写在被 include 的文件里的目标也能认出来；用 `grep` 查 Makefile 认不出这种目标，清理会被静默跳过。
 
 这份配置从主分支读取，改动属于门禁改动，合并前由人确认。
 有进程停在里面的 Worktree 在运行清理命令之前就被跳过，还开着服务的先在那个 Worktree 里停掉。
