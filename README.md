@@ -120,7 +120,7 @@ git commit -m "chore(harness): 接入门禁" -m "- 写入门禁配置、规则�
 .harness/bin/harness verify  --branch chore/harness-onboard
 .harness/bin/harness review  --branch chore/harness-onboard
 .harness/bin/harness confirm --branch chore/harness-onboard          # 只读摘要
-.harness/bin/harness confirm --branch chore/harness-onboard --yes    # 由人执行
+.harness/bin/harness confirm --branch chore/harness-onboard --yes    # 由人执行，只记录确认，不合并
 .harness/bin/harness merge   --branch chore/harness-onboard
 
 # 5. 收尾
@@ -198,6 +198,7 @@ dsh plugin --profile <desktop|web> add <主 Worktree 路径>/.harness/dsh-plugin
 
 `--profile` 必须与实际使用的 DeepSeek Harness 一致：桌面版用 `desktop`，浏览器版用 `web`。
 用别的名称会新建一个独立的 profile，桌面版和浏览器版都不会加载它。
+注册的是主 Worktree 里的插件目录，升级合并后 harness 会重写它，让它指向新版本的代码；重启 DeepSeek Harness，确保加载的是新插件。
 
 | 客户端 | 实时拦截 | 状态 |
 | --- | --- | --- |
@@ -205,7 +206,8 @@ dsh plugin --profile <desktop|web> add <主 Worktree 路径>/.harness/dsh-plugin
 | Claude 桌面版 | 同一套钩子实现 | 仅静态确认，未端到端实测 |
 | Codex CLI | `.codex/hooks.json` 的 `PreToolUse` | 已实测；需先信任钩子 |
 | Codex 桌面版（ChatGPT.app 内置引擎） | 同上 | 已实测；需先信任钩子 |
-| DeepSeek Harness | Cordis 插件 `tools/pre-execute` | 需自行注册插件，尚未完成端到端实测 |
+| DeepSeek Harness 桌面版 | Cordis 插件 `tools/pre-execute` | 需自行注册插件；已在运行中的桌面版里看到插件放行正常调用、拒绝信息送达 Agent |
+| DeepSeek Harness 浏览器版 | 同上 | 未实测 |
 
 git 层对所有客户端生效，实时拦截没接上时，提交检查与主分支保护仍然有效。
 `harness doctor` 逐项报告接入状态，`[!!]` 表示需要处理，`[?]` 表示文件已就位但客户端是否真正调用尚未实测。
@@ -295,6 +297,7 @@ harness worktree clean --yes --with-local-files   # 含本机文件的也一起�
 
 在对话里让 Agent 清理也可以：它先把预览给你看，你确认后再执行。
 
+预览要逐个读取每个 Worktree 的状态，上百个 Worktree 需要二三十秒，开始时会先输出正在检查多少个。
 每个 Worktree 要删掉几万个文件，还要运行清理命令，一个常常需要好几秒。
 删除时每处理一个就在 stderr 输出一行进度和用时，结果汇总写到 stdout。
 中途按 Ctrl-C，会处理完当前这个 Worktree 再停下，并列出已完成的部分；再按一次立即退出。
@@ -307,9 +310,16 @@ harness worktree clean --yes --with-local-files   # 含本机文件的也一起�
   建好超过 24 小时、一直没有提交的，已经没有独有的内容，可以清理。
 - 没有未提交或未跟踪的文件。
 - 没有进程的工作目录停在里面：Linux 读 `/proc`，其他系统用 `lsof`，只看得到当前用户的进程。
+  每条命令都新开 shell 的客户端看不出来，例如 DeepSeek Harness 的主进程停在它自己的 profile 目录里，它正在用的 Worktree 要先锁定。
 - 没有被 `git worktree lock` 锁定；想保留某个 Worktree，锁定它即可。
 
 主 Worktree、命令当前所在的 Worktree 和 verify 的固定检出永远不删。
+其他会话还要用的 Worktree，清理前锁定，用完再解锁：
+
+```bash
+git -C <主 Worktree> worktree lock <Worktree 路径>
+git -C <主 Worktree> worktree unlock <Worktree 路径>
+```
 
 - 删除用不带 `--force` 的 `git worktree remove`，分支用 `git branch -d`；分离头指针的 Worktree 没有分支可删。
 - `git worktree remove` 会连带删掉被忽略的文件，例如 `node_modules` 和构建产物，预览里逐个列出。
@@ -333,6 +343,9 @@ harness worktree clean --yes --with-local-files   # 含本机文件的也一起�
 
 这份配置从主分支读取，改动属于门禁改动，合并前由人确认。
 有进程停在里面的 Worktree 在运行清理命令之前就被跳过，还开着服务的先在那个 Worktree 里停掉。
+
+合并输出和 `harness doctor` 报告的“已合并但还没清理”的数量只看提交是否已在主分支上、是否锁定，不检查未提交文件、本机文件和进程，所以通常比预览里可清理的多。
+`harness worktree clean` 只处理还有 Worktree 的分支；Worktree 早已删掉、只剩本地分支的，不在它的处理范围内。
 
 ### 验收清单
 
@@ -397,6 +410,7 @@ Agent 按“正确做法”改道即可，实时拦截每次都会记进账本�
 
 `harness confirm --branch <分支>` 输出只读摘要：涉及哪些门禁文件、生效规则的增删与改动（包括只改 `disabled` 关掉某条预设规则）、检查项的增删。
 人确认无误后运行带 `--yes` 的同一条命令，可以加 `--note <说明>`。
+确认只在账本里记下这一次确认，不会合并，主分支上也不会出现新提交；之后还要运行 `harness merge`，这一步可以交给 Agent。
 确认绑定合并结果的 tree：分支再提交，或者主分支前进让合并结果变了，都要重新确认。
 
 ### 与远端同步
@@ -457,7 +471,7 @@ node ~/github/harness/bin/harness.mjs install --local
 harness doctor
 ```
 
-`install --local` 读取项目锁定的版本：harness 仓库当前就是这个版本时直接安装，否则从对应的标签（例如 `v0.6.0`）导出那一版安装。
+`install --local` 读取项目锁定的版本：harness 仓库当前就是这个版本时直接安装，否则从对应的标签（例如 `v0.7.1`）导出那一版安装。
 然后写入本机的 git 钩子和 DSH 插件目录，不改动任何入库文件。
 找不到标签时先运行 `git -C ~/github/harness fetch --tags`。
 
@@ -627,7 +641,8 @@ node ~/github/harness/bin/harness.mjs install --local   # 按新锁定的版本�
 ### golden/tasks.json：黄金任务
 
 黄金任务是对规则本身的回归用例，`harness golden` 重放。
-`init` 自带 16 个起始用例，覆盖预设规则与起始检查；只针对可选预设的用例（例如 `g16`）在预设未启用时跳过。
+`init` 自带 17 个起始用例，覆盖预设规则与起始检查。
+只针对某个预设的用例在该预设未启用时跳过：`g16` 对应可选的 `main-worktree`，`g17` 对应 `plan-first`。
 
 给上面的规则加一个用例：
 
@@ -790,7 +805,9 @@ harness 防的是 Agent 的误操作，以及被提示注入后常见的绕过�
 - 默认的 `.git/hooks` 不入库，目前没有规则阻止 Agent 直接改写或删除其中的钩子，也没有拦截 `harness uninstall`。
   钩子被删除或摘掉 harness 的块时，`harness doctor` 会报出来。
 - 路径规则只约束写文件、读文件类的工具调用，用 shell 命令读写同一个文件要靠 `shell-forbid` 一类的命令规则覆盖。
-- Codex 没有信任钩子时没有实时拦截；DeepSeek Harness 插件尚未完成端到端实测；Claude 桌面版只做了静态确认。
+- Codex 没有信任钩子时没有实时拦截；DeepSeek Harness 浏览器版没有实测；Claude 桌面版只做了静态确认。
+- `harness worktree clean` 判断有没有会话在用某个 Worktree，只看进程的工作目录，DeepSeek Harness 这类客户端看不出来，要靠锁定保护。
+  删除前只停得掉项目在 `worktree.cleanup` 里写明的服务与数据库。
 - 任务分级与先红后绿的判断仍由 Agent 做出，门禁只兜底可以机械判定的部分：
   写了方案的任务在记录授权前改不了代码，超过阈值或改了库表的分支没有授权记录合不进去。
   授权记录由 Agent 写入，门禁能保证它存在、照录了原话并且清单没有再改，但无法核实你是否真的说过这句话，要靠你在合并输出或 `harness status` 里核对。
@@ -804,6 +821,7 @@ harness 防的是 Agent 的误操作，以及被提示注入后常见的绕过�
 | `主 Worktree 当前不在 main 分支` 或 `存在未提交或未跟踪文件` | 把主 Worktree 切回主分支并处理掉改动；`harness status` 与 `harness doctor` 会提前报出 |
 | `本机没有安装门禁锁定的版本` | 在项目目录运行 `node ~/github/harness/bin/harness.mjs install --local` |
 | `gate_change_unconfirmed` | 由人运行 `harness confirm --branch <分支>` 看过摘要，再加 `--yes` |
+| 运行 `confirm --yes` 后主分支没有新提交 | 确认只记录，不合并；接着运行 `harness merge --branch <分支>` |
 | `plan_unapproved` | 大改动没有实施授权记录，或授权后验收清单又改了；补齐方案并提交，向用户说明，用户同意后照录原话运行 `harness approve --branch <分支> --yes --note "<原话>"` |
 | 写代码时被 `plan-before-code` 拦截 | 任务分支里有实施方案但还没有授权记录；用户还没同意就停下等，已经同意就按上一条记录；只是借用了 `docs/changes/` 下的旧方案时，把它移出这次改动 |
 | `review_missing` 或 `review_blocked` | 运行 `harness review`；被拒时按发现修复，提交后重新 verify、review |
@@ -818,6 +836,10 @@ harness 防的是 Agent 的误操作，以及被提示注入后常见的绕过�
 | `拒绝直接更新 refs/heads/main` | 主分支只接受 `harness merge`；拉取远端见“与远端同步” |
 | `另一个合并正在进行` | 等那个合并结束后重试 |
 | Codex 里的命令没被拦截 | 钩子还没信任，在 Codex 里运行 `/hooks` 信任 |
+| DeepSeek Harness 桌面版里所有工具都被拒绝，提示门禁无法加载项目配置 | 0.6.0 的插件缺少工作目录服务依赖；项目升级到 0.7.0 以上，合并后重启 DeepSeek Harness |
+| `harness worktree clean --yes` 很久没有输出 | 0.7.0 删除时不输出进度，每个 Worktree 又要好几秒；升级到 0.7.1 后逐个输出，Ctrl-C 会处理完当前这个再停 |
+| 中断清理后留下 git 已不认识的目录 | 0.7.0 被 Ctrl-C 打断时可能删到一半；确认目录里已经没有文件后手工删除 |
+| `worktree clean` 删掉了另一个会话正在用的 Worktree | 进程检测认不出每条命令都新开 shell 的客户端；被删的分支已合入主分支、目录里也没有未提交文件，代码不会丢，需要时用 `git worktree add` 重建；以后清理前先用 `git worktree lock` 锁定 |
 | `git worktree remove --force` 被 `git-discard-changes` 拦截 | 强删会丢掉 Worktree 里未提交的改动；已合并的用 `harness worktree clean` 预览后清理，有未提交改动的先看 `git -C <Worktree> status` 再决定 |
 
 ## 卸载与版本管理
@@ -842,4 +864,7 @@ npm test
 
 自测在临时仓库里运行，使用隔离的数据、密钥与版本目录，不碰本机已有的 harness 安装。
 版本号只写在 `package.json` 里。
+改了分发的内容（`src`、`assets`、`bin`、`package.json`）就要升版本号：同一个版本号已经装进版本目录、内容又不同时，`publish` 与 `install` 直接报错。
+只改 README、CHANGELOG、测试这类不分发的文件，不用升版本号。
 发版时更新 `CHANGELOG.md`，打 `v<版本>` 标签并推送：其他机器的 `install --local` 按项目锁定的版本从这个标签安装代码。
+标签指向的提交，分发内容要和本机已安装的同版本一致，否则别的机器装出来的门禁和你本机跑的不是同一份。
