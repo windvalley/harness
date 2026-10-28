@@ -17,7 +17,7 @@ import {
   run,
   treeOf,
 } from "../lib/git.mjs";
-import { appendLedger, dataDir, readRecord, writeRecord } from "../lib/store.mjs";
+import { appendLedger, canonical, dataDir, readRecord, writeRecord } from "../lib/store.mjs";
 import { selectGoPackages } from "./selectors/go-packages.mjs";
 import { selectVitestFiles } from "./selectors/vitest.mjs";
 
@@ -58,6 +58,21 @@ function execute(cmd, args, { cwd, env, timeoutMs }) {
   });
 }
 
+const digest = (value) => createHash("sha256").update(canonical(value)).digest("hex").slice(0, 16);
+
+/** 一项检查的定义指纹：命令、目录、依赖、选择器或注入的环境变量一变，旧结果就不能沿用。 */
+export function checkFingerprint(check, env = {}) {
+  return digest({ check, env });
+}
+
+/** 整份检查配置的指纹：新增、删除或改动任何检查都会改变它，合并据此判断旧证据是否还代表当前的检查集。 */
+export function verifyConfigDigest(project) {
+  const map = project.verify ?? {};
+  return digest({ checks: map.checks ?? [], docOnly: map.docOnly ?? null, fullSuiteTriggers: map.fullSuiteTriggers ?? null, env: project.config?.env ?? {} });
+}
+
+const cmdText = (cmd) => (Array.isArray(cmd) ? cmd.join(" ") : cmd);
+
 function listTracked(cwd, prefix) {
   return gitOk(cwd, ["ls-files", "-z", "--", prefix]).split("\0").filter(Boolean);
 }
@@ -75,10 +90,12 @@ export function planChecks({ project, cwd, changed, exists = (path) => existsSyn
   const notExecuted = [];
   const advisory = [];
   const full = changed.some((path) => matchAny(path, map.fullSuiteTriggers?.paths ?? []));
+  const env = project.config?.env ?? {};
 
   for (const check of map.checks) {
     const hit = changed.filter((path) => matchAny(path, check.when));
     if (hit.length === 0) continue;
+    const def = checkFingerprint(check, env);
 
     if (check.tier === "advisory") {
       // advisory 只提示，不进入未执行清单，避免常见改动长期显示“未验证”。
@@ -105,6 +122,7 @@ export function planChecks({ project, cwd, changed, exists = (path) => existsSyn
         cwd: ".",
         cmd: ["go", "test", "-count=1", ...packages],
         when: check.when,
+        def,
         note: full ? "命中公共底层路径，扩大为全量 go test" : selection.note ?? `${selection.mode}: ${packages.length} 个包`,
       });
       continue;
@@ -136,6 +154,7 @@ export function planChecks({ project, cwd, changed, exists = (path) => existsSyn
         cmd: ["pnpm", "exec", "vitest", "run", ...selection.files.map((file) => file.replace(/^[^/]+\//, ""))],
         requires: check.requires ?? [],
         when: check.when,
+        def,
         note: `${selection.files.length} 个测试文件`,
       });
       continue;
@@ -149,6 +168,7 @@ export function planChecks({ project, cwd, changed, exists = (path) => existsSyn
       cmd: check.cmd,
       requires: check.requires ?? [],
       when: check.when,
+      def,
       note: `命中 ${hit.length} 个路径`,
     });
   }
@@ -168,6 +188,7 @@ export function planChecks({ project, cwd, changed, exists = (path) => existsSyn
  * 判定哪些检查可以沿用已有证据。
  * 只有当“主分支自上次验证以来新增的改动”与某项检查的触发范围没有交集时才复用：
  * 有交集说明该检查覆盖的文件被别人改过，原结果不再可信。
+ * 检查的定义（指纹）或实际命令与上次不同也要重跑：同一个 ID 已经不是同一项检查。
  */
 export function reusableChecks({ previous, plan, mainDelta }) {
   if (!previous || previous.status !== "passed") return { reuse: new Map(), rerun: plan.map((item) => item.id) };
@@ -177,7 +198,8 @@ export function reusableChecks({ previous, plan, mainDelta }) {
   for (const item of plan) {
     const prior = priorById.get(item.id);
     const touched = mainDelta.some((path) => matchAny(path, item.when ?? []));
-    if (prior && prior.exit === 0 && !touched) reuse.set(item.id, prior);
+    const same = prior && prior.def === item.def && cmdText(prior.cmd) === cmdText(item.cmd);
+    if (same && prior.exit === 0 && !touched) reuse.set(item.id, prior);
     else rerun.push(item.id);
   }
   return { reuse, rerun };
@@ -340,7 +362,7 @@ export async function verify({
 
       const missing = (item.requires ?? []).filter((rel) => !existsSync(join(mainRoot, rel)) && !existsSync(join(checkout, rel)));
       if (missing.length > 0) {
-        results.push({ id: item.id, cmd: item.cmd.join(" "), exit: null, skipped: true, reason: `缺少依赖目录 ${missing.join(", ")}` });
+        results.push({ id: item.id, cmd: item.cmd.join(" "), def: item.def, exit: null, skipped: true, reason: `缺少依赖目录 ${missing.join(", ")}` });
         notExecuted.push({
           id: item.id,
           reason: `缺少依赖目录 ${missing.join(", ")}`,
@@ -362,6 +384,7 @@ export async function verify({
         id: item.id,
         cmd: item.cmd.join(" "),
         cwd: item.cwd,
+        def: item.def,
         exit: outcome.exit,
         spawnError: outcome.spawnError,
         durationMs: outcome.durationMs,
@@ -386,6 +409,7 @@ export async function verify({
       baseCommit,
       baseRef,
       tree,
+      configDigest: verifyConfigDigest(project),
       changedCount: changed.length,
       changed: changed.slice(0, 500),
       docOnly,

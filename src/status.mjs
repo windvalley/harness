@@ -5,7 +5,7 @@ import { readRecord } from "./lib/store.mjs";
 import { EVIDENCE_KIND } from "./verify/verify.mjs";
 import { REVIEW_KIND } from "./review/review.mjs";
 import { CONFIRM_KIND } from "./confirm/confirm.mjs";
-import { mainWorktreeProblems, planMergeResult } from "./merge/merge.mjs";
+import { mainWorktreeProblems, planMergeResult, reuseDecision, reviewStaleFiles } from "./merge/merge.mjs";
 import { approvalState, planEnforced, planRequirement } from "./plan/plan.mjs";
 
 // 确认记录绑定合并结果的 tree：快进时就是分支的 tree，三方合并时算出合并后的 tree。
@@ -62,17 +62,15 @@ export function branchStatus({ cwd, branch }) {
     add("evidence", "fail", `证据状态是 ${evidence.record.status}，需要修好后重跑 verify`);
     result.blockers.push("验证未通过");
   } else {
-    const mainDelta = changedPaths(root, evidence.record.baseCommit, mainCommit);
-    const checks = project.verify.checks ?? [];
-    const touched = checks
-      .filter((check) => evidence.record.checks?.some((item) => item.id === check.id))
-      .filter((check) => mainDelta.some((path) => matchAny(path, check.when ?? [])));
+    const reuse = reuseDecision({ project, root, evidence: evidence.record, mainCommit });
     const pending = evidence.record.notExecuted?.length ?? 0;
     const advisory = evidence.record.advisory?.length ?? 0;
-    if (touched.length === 0) {
-      add("evidence", "ok", `验证通过，主分支自验证以来新增 ${mainDelta.length} 个文件，未波及已执行的检查，可直接复用`);
+    if (reuse.configChanged) {
+      add("evidence", "warn", "验证通过，但检查配置在验证之后有变化，合并时会按当前配置重新验证");
+    } else if (reuse.evidenceReusable) {
+      add("evidence", "ok", `验证通过，主分支自验证以来新增 ${reuse.mainDelta.length} 个文件，未波及已执行的检查，可直接复用`);
     } else {
-      add("evidence", "warn", `验证通过，但主分支新增改动波及 ${touched.map((c) => c.id).join(", ")}，合并时会重跑`);
+      add("evidence", "warn", `验证通过，但主分支新增改动波及 ${reuse.rerunChecks.join(", ")}，合并时会重跑`);
     }
     if (pending > 0) add("evidence:notExecuted", "warn", `${pending} 项检查未执行，合并后需在汇报里说明`);
     if (advisory > 0) add("evidence:advisory", "info", `${advisory} 项咨询项，仅提示`);
@@ -80,12 +78,16 @@ export function branchStatus({ cwd, branch }) {
 
   const review = readRecord(root, REVIEW_KIND, branchCommit);
   const blocking = review.ok ? (review.record.blocking ?? []) : [];
+  const stale = review.ok ? reviewStaleFiles({ root, review: review.record, mainCommit, branchCommit }) : [];
   if (!review.ok) {
     add("review", "fail", `缺少独立评审：${review.reason}。运行 harness review --branch ${branch}`);
     result.blockers.push("缺独立评审");
   } else if (review.record.verdict !== "approve" || blocking.length > 0) {
     add("review", "fail", `评审结论 ${review.record.verdict}${blocking.length ? `，${blocking.length} 条阻断级发现` : ""}`);
     result.blockers.push("评审未通过");
+  } else if (stale.length > 0) {
+    add("review", "fail", `主分支在评审之后改了本分支也改过的文件（${stale.slice(0, 5).join("、")}${stale.length > 5 ? " 等" : ""}），在任务分支上 git merge ${mainRef} 后重新 verify、review`);
+    result.blockers.push("评审之后主分支改了同一批文件");
   } else {
     add("review", "ok", `评审通过（需求符合度 ${review.record.requirementFit?.rating ?? "?"}，工程质量 ${review.record.engineeringQuality?.rating ?? "?"}，清单来源 ${review.record.acceptanceSource ?? "无"}）`);
   }

@@ -543,7 +543,7 @@ footer { border-top: 1px solid var(--line); color: var(--muted); font-size: .88r
       <li><strong>verify</strong> 在固定检出里检出分支提交，只验证已提交的内容；工作区里没提交的改动不算。</li>
       <li><strong>review</strong> 要求先有通过的验证证据，评审结论同样绑定分支提交。</li>
       <li><strong>confirm</strong> 只在改动涉及门禁本身（配置、规则、入口、钩子）时需要，绑定的是合并结果的 tree。</li>
-      <li><strong>merge</strong> 发现没有证据，或主分支的新改动波及某些检查时，会自己重跑这些检查；评审不会自动重做。</li>
+      <li><strong>merge</strong> 发现没有证据、主分支的新改动波及某些检查，或检查配置变了时，会自己重跑需要的检查；评审不会自动重做，主分支在评审之后改了本分支也改过的文件时评审作废。</li>
     </ul>
 
     <h3 id="signing">签名记录</h3>
@@ -813,6 +813,7 @@ dsh plugin --profile web add ~/.local/share/harness/dsh-plugin</code></pre></div
         <tr><td><code>plan_unapproved</code></td><td>大改动没有实施授权记录；补齐方案，你同意后由 Agent 照录原话运行 <code>harness approve</code></td></tr>
         <tr><td><code>conflict</code></td><td>在任务分支上 <code>git merge main</code> 解决冲突，再重新验证与评审</td></tr>
         <tr><td><code>main_moved</code></td><td>合并过程中主分支前进了，重新运行 <code>harness merge</code>，已有证据会复用</td></tr>
+        <tr><td><code>review_stale</code></td><td>主分支在评审之后改了本分支也改过的文件；在任务分支上 <code>git merge main</code> 并提交，再重新验证与评审</td></tr>
         <tr><td>验证结果 <code>incomplete</code></td><td><code>requires</code> 里的依赖目录在主 Worktree 不存在，装好依赖后重跑</td></tr>
         <tr><td>主 Worktree 不在 main 或不洁净</td><td>Agent 先核对状态并保留已有改动，按项目规则准备主 Worktree；需要处置用户改动时先说明具体对象并取得授权</td></tr>
       </tbody>

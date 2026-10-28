@@ -17,7 +17,7 @@ import {
   worktreeEntries,
 } from "../lib/git.mjs";
 import { appendLedger, dataDir, readRecord, writeRecord } from "../lib/store.mjs";
-import { EVIDENCE_KIND, reusableChecks, verify } from "../verify/verify.mjs";
+import { EVIDENCE_KIND, verify, verifyConfigDigest } from "../verify/verify.mjs";
 import { entryTouched, followUps } from "../install/followups.mjs";
 import { ensureHooksPath } from "../install/install.mjs";
 import { REVIEW_KIND } from "../review/review.mjs";
@@ -137,25 +137,30 @@ export function planMergeResult({ project, root, branch }) {
  * 只有当某个检查的触发范围与 mainDelta 无交集时才复用它的结果，
  * 这样 main 前进一次不必整轮重跑，但被波及的检查一定重跑。
  */
-export function reuseDecision({ project, root, evidence, review, mainCommit, branchCommit }) {
-  const checksTouched = [];
-  let reusable = false;
-  if (evidence?.status === "passed") {
-    const mainDelta = changedPaths(root, evidence.baseCommit, mainCommit);
-    const plan = (project.verify.checks ?? []).filter((check) => evidence.checks?.some((item) => item.id === check.id));
-    const touched = plan.filter((check) => mainDelta.some((path) => matchAny(path, check.when ?? [])));
-    checksTouched.push(...touched.map((check) => check.id));
-    reusable = touched.length === 0;
+export function reuseDecision({ project, root, evidence, mainCommit }) {
+  if (evidence?.status !== "passed") return { evidenceReusable: false, rerunChecks: [], configChanged: false, mainDelta: [] };
+  const mainDelta = changedPaths(root, evidence.baseCommit, mainCommit);
+  // 检查配置变了（新增、删除或改了某项检查），旧证据不再代表当前该跑的检查集，整体交给 verify 按当前配置重算；
+  // verify 会按每项检查的定义指纹沿用没变的结果，不会整轮重跑。
+  if (evidence.configDigest !== verifyConfigDigest(project)) {
+    return { evidenceReusable: false, rerunChecks: [], configChanged: true, mainDelta };
   }
+  const plan = (project.verify.checks ?? []).filter((check) => evidence.checks?.some((item) => item.id === check.id));
+  const touched = plan.filter((check) => mainDelta.some((path) => matchAny(path, check.when ?? [])));
+  return { evidenceReusable: touched.length === 0, rerunChecks: touched.map((check) => check.id), configChanged: false, mainDelta };
+}
 
-  let reviewReusable = false;
-  if (review?.verdict === "approve" && review.reviewedCommit === branchCommit && evidence) {
-    const mainDelta = changedPaths(root, evidence.baseCommit, mainCommit);
-    const branchFiles = changedPaths(root, evidence.base, branchCommit);
-    reviewReusable = !mainDelta.some((path) => branchFiles.includes(path));
-  }
-
-  return { evidenceReusable: reusable, rerunChecks: checksTouched, reviewReusable };
+/**
+ * 评审看到的是“评审基线..分支提交”的 diff。主分支之后改了同一批文件时，合并结果里这些文件的内容评审没有看过，
+ * 即使三方合并没有文本冲突也不能沿用。返回两边都改过的文件。
+ * 早期手写的评审记录可能没有 baseCommit，按分叉点计算，与评审当时算出的基线一致。
+ */
+export function reviewStaleFiles({ root, review, mainCommit, branchCommit }) {
+  const base = review.baseCommit ?? gitOk(root, ["merge-base", mainCommit, branchCommit]);
+  const mainDelta = changedPaths(root, base, mainCommit);
+  if (mainDelta.length === 0) return [];
+  const branchFiles = new Set(changedPaths(root, base, branchCommit));
+  return mainDelta.filter((path) => branchFiles.has(path));
 }
 
 export async function mergeTask({ cwd, branch, dryRun = false, log = console.error }) {
@@ -276,8 +281,8 @@ export async function mergeTask({ cwd, branch, dryRun = false, log = console.err
       let evidence = readRecord(root, EVIDENCE_KIND, branchCommit);
       let review = readRecord(root, REVIEW_KIND, branchCommit);
       const reuse = evidence.ok
-        ? reuseDecision({ project, root, evidence: evidence.record, review: review.ok ? review.record : null, mainCommit, branchCommit })
-        : { evidenceReusable: false, rerunChecks: [], reviewReusable: false };
+        ? reuseDecision({ project, root, evidence: evidence.record, mainCommit })
+        : { evidenceReusable: false, rerunChecks: [], configChanged: false };
 
       if (evidence.ok && reuse.evidenceReusable) {
         log(
@@ -285,7 +290,8 @@ export async function mergeTask({ cwd, branch, dryRun = false, log = console.err
             (evidence.record.reusedChecks?.length ? `(其中 ${evidence.record.reusedChecks.length} 项为再复用)` : ""),
         );
       } else {
-        if (evidence.ok) log(`[merge] 主分支改动波及 ${reuse.rerunChecks.join(", ") || "多项检查"}，重新验证`);
+        if (evidence.ok && reuse.configChanged) log("[merge] 检查配置在验证之后有变化，按当前配置重新验证");
+        else if (evidence.ok) log(`[merge] 主分支改动波及 ${reuse.rerunChecks.join(", ") || "多项检查"}，重新验证`);
         else log(`[merge] 没有针对该分支的验证证据(${evidence.reason})，先验证`);
         const outcome = await verify({ cwd: root, head: newHead, recordKey: branchCommit, base: mainRef, gateBranch: branch, log });
         if (outcome.status !== "passed") {
@@ -308,6 +314,17 @@ export async function mergeTask({ cwd, branch, dryRun = false, log = console.err
           review.record.reviewedCommit === branchCommit &&
           blocking.length === 0;
         if (reviewReusable) {
+          const stale = reviewStaleFiles({ root, review: review.record, mainCommit, branchCommit });
+          if (stale.length > 0) {
+            throw new MergeError(
+              [
+                `主分支在评审之后改了本分支也改过的文件（${stale.length} 个），合并结果里这些文件的内容没有经过评审:`,
+                `  ${stale.slice(0, 12).join("\n  ")}`,
+                `在任务分支上 git merge ${mainRef}（或变基到 ${mainRef}）并提交，再重新运行 harness verify 与 harness review --branch ${branch}`,
+              ].join("\n"),
+              "review_stale",
+            );
+          }
           log("[merge] 复用该分支已通过的独立评审");
         } else {
           throw new MergeError(

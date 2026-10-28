@@ -84,6 +84,23 @@ describe("证据复用判定", () => {
     assert.deepEqual(rerun, ["frontend"]);
   });
 
+  test("检查定义或命令与上次不同时重跑，不按 ID 复用", () => {
+    const current = [
+      { id: "frontend", when: ["frontend/**"], def: "v2" },
+      { id: "go", when: ["internal/**"], cmd: ["go", "test", "./b"], def: "g1" },
+    ];
+    const prior = {
+      status: "passed",
+      checks: [
+        { id: "frontend", exit: 0, def: "v1" },
+        { id: "go", exit: 0, cmd: "go test ./a", def: "g1" },
+      ],
+    };
+    const { reuse, rerun } = reusableChecks({ previous: prior, plan: current, mainDelta: [] });
+    assert.equal(reuse.size, 0);
+    assert.deepEqual(rerun, ["frontend", "go"]);
+  });
+
   test("没有历史证据或状态非通过时全部重跑", () => {
     assert.equal(reusableChecks({ previous: null, plan, mainDelta: [] }).rerun.length, 2);
     assert.equal(reusableChecks({ previous: { ...previous, status: "failed" }, plan, mainDelta: [] }).rerun.length, 2);
@@ -169,6 +186,92 @@ describe("验证与证据", () => {
     const again = repo.cli("verify", "--branch", "task/a");
     assert.equal(again.status, 0, again.stderr);
     assert.match(again.stderr, /复用/);
+  });
+});
+
+/** 主分支上改检查配置：模拟另一个已合入的任务改了 verify.json。 */
+function changeMainChecks(repo, checks) {
+  const verifyJson = JSON.parse(readFileSync(join(repo.root, ".harness/verify.json"), "utf8"));
+  verifyJson.checks = checks(verifyJson.checks);
+  commit(repo.root, "chore(harness): 调整检查\n\n- 修改检查配置\n- 模拟其他任务合入", {
+    ".harness/verify.json": `${JSON.stringify(verifyJson, null, 2)}\n`,
+  });
+}
+const FAIL_CMD = ["node", "-e", "process.exit(1)"];
+
+describe("主分支在验证或评审之后前进", () => {
+  test("主分支改了检查命令后，重新 verify 按新命令执行，不复用旧结果", () => {
+    const repo = setup();
+    repo.branch("task/a", { "src/a.js": "a\n" });
+    assert.equal(repo.cli("verify", "--branch", "task/a").status, 0);
+    changeMainChecks(repo, (checks) => checks.map((check) => (check.id === "unit" ? { ...check, cmd: FAIL_CMD } : check)));
+    const again = repo.cli("verify", "--branch", "task/a");
+    assert.notEqual(again.status, 0, "改了命令的检查必须重跑并失败");
+    assert.match(again.stderr, /-> unit:/);
+  });
+
+  test("主分支改了检查命令后，合并重新验证并按新命令拒绝", () => {
+    const repo = setup();
+    repo.branch("task/a", { "src/a.js": "a\n" });
+    assert.equal(repo.cli("verify", "--branch", "task/a").status, 0);
+    writeReview(repo, git(repo.root, "rev-parse", "task/a"), "approve");
+    changeMainChecks(repo, (checks) => checks.map((check) => (check.id === "unit" ? { ...check, cmd: FAIL_CMD } : check)));
+    const status = repo.cli("status", "--branch", "task/a");
+    assert.match(status.stdout, /检查配置在验证之后有变化/);
+    const before = git(repo.root, "rev-parse", "main");
+    const merged = repo.cli("merge", "--branch", "task/a");
+    assert.notEqual(merged.status, 0);
+    assert.match(merged.stderr, /verify_failed/);
+    assert.equal(git(repo.root, "rev-parse", "main"), before);
+  });
+
+  test("主分支新增了覆盖本分支改动的检查后，合并补跑这项检查", () => {
+    const repo = setup();
+    repo.branch("task/a", { "src/a.js": "a\n" });
+    assert.equal(repo.cli("verify", "--branch", "task/a").status, 0);
+    writeReview(repo, git(repo.root, "rev-parse", "task/a"), "approve");
+    changeMainChecks(repo, (checks) => [...checks, { id: "extra", tier: "gate", when: ["src/**"], cmd: FAIL_CMD }]);
+    const merged = repo.cli("merge", "--branch", "task/a");
+    assert.notEqual(merged.status, 0);
+    assert.match(merged.stderr, /-> extra:/);
+    assert.match(merged.stderr, /verify_failed/);
+  });
+
+  test("主分支在评审之后改了本分支也改过的文件时拒绝合并，集成主分支并重新评审后放行", () => {
+    const lines = (first, last) => [first, "2", "3", "4", "5", "6", last].join("\n") + "\n";
+    const repo = setup({ files: { "src/shared.js": lines("1", "7") } });
+    repo.branch("task/a", { "src/shared.js": lines("task", "7") });
+    assert.equal(repo.cli("verify", "--branch", "task/a").status, 0);
+    writeReview(repo, git(repo.root, "rev-parse", "task/a"), "approve");
+    commit(repo.root, "feat(other): 主分支改同一文件\n\n- 改另一处\n- 三方合并无冲突", { "src/shared.js": lines("1", "main") });
+
+    const status = repo.cli("status", "--branch", "task/a");
+    assert.notEqual(status.status, 0);
+    assert.match(status.stdout, /主分支在评审之后改了本分支也改过的文件.*src\/shared\.js/);
+    const before = git(repo.root, "rev-parse", "main");
+    const rejected = repo.cli("merge", "--branch", "task/a");
+    assert.notEqual(rejected.status, 0);
+    assert.match(rejected.stderr, /review_stale/);
+    assert.match(rejected.stderr, /src\/shared\.js/);
+    assert.match(rejected.stderr, /git merge main/);
+    assert.equal(git(repo.root, "rev-parse", "main"), before);
+
+    git(repo.root, "checkout", "-q", "task/a");
+    git(repo.root, "merge", "-q", "--no-edit", "main");
+    git(repo.root, "checkout", "-q", "main");
+    writeReview(repo, git(repo.root, "rev-parse", "task/a"), "approve");
+    const merged = repo.cli("merge", "--branch", "task/a");
+    assert.equal(merged.status, 0, merged.stderr);
+    assert.equal(readFileSync(join(repo.root, "src/shared.js"), "utf8"), lines("task", "main"));
+  });
+
+  test("主分支只改了本分支没碰的文件时，评审继续有效", () => {
+    const repo = setup();
+    repo.branch("task/a", { "src/a.js": "a\n" });
+    writeReview(repo, git(repo.root, "rev-parse", "task/a"), "approve");
+    commit(repo.root, "feat(other): 主分支前进\n\n- 改别的文件\n- 与本分支无交集", { "src/other.js": "o\n" });
+    const merged = repo.cli("merge", "--branch", "task/a");
+    assert.equal(merged.status, 0, merged.stderr);
   });
 });
 
