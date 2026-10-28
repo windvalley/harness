@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>harness 使用教程</title>
-<meta name="description" content="harness 是跑在本机的研发门禁：实时拦截 Agent 的危险操作，合并前要求签名的验证证据与独立评审，主分支只接受受控合并。本教程介绍架构、核心原理与上手步骤。">
+<meta name="description" content="harness 是跑在本机的 AI-Native 研发流程：聊清需求、同意实施后，Agent 连续完成实现、测试、验证与独立评审直到合入主分支，能否合入由门禁机械判定，人负责最终验收。本教程介绍架构、核心原理与上手步骤。">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%230f766e' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6z'/%3E%3Cpath d='M8.5 12l2.5 2.5 4.5-5'/%3E%3C/svg%3E">
 <style>
 :root {
@@ -243,7 +243,11 @@ footer { border-top: 1px solid var(--line); color: var(--muted); font-size: .88r
       <summary>目录</summary>
       <div class="toc-title">目录</div>
       <ol>
-        <li><a href="#why">它解决什么问题</a></li>
+        <li><a href="#why">它解决什么问题</a>
+          <ol>
+            <li><a href="#delivery">一个需求怎么交付</a></li>
+          </ol>
+        </li>
         <li><a href="#arch">架构总览</a>
           <ol>
             <li><a href="#layers">三层防线</a></li>
@@ -276,7 +280,7 @@ footer { border-top: 1px solid var(--line); color: var(--muted); font-size: .88r
   <main>
     <section class="hero">
       <h1>harness 使用教程</h1>
-      <p class="lead">跑在本机的研发门禁，面向“Agent 写代码、人把关”的 git 项目。它在 Agent 调用工具时拦下危险操作，在合并前要求验证证据与独立评审，并让主分支只接受它的合并命令写入。</p>
+      <p class="lead">跑在本机的 AI-Native 研发流程，让 Agent 在 git 项目里高质量地完成从需求到合并的全过程。你和 Agent 聊清需求、同意实施后，Agent 连续完成实现、测试、验证和独立评审，直到合入主分支；能否合入由门禁机械判定，你只需在交付时验收结果。</p>
       <ul class="chips">
         <li>本机运行，不依赖云端 CI</li>
         <li>没有 npm 依赖</li>
@@ -294,7 +298,7 @@ footer { border-top: 1px solid var(--line); color: var(--muted); font-size: .88r
 
     <!-- ============ 为什么 ============ -->
     <h2 id="why">它解决什么问题</h2>
-    <p>让 Agent 写代码效率很高，但它会犯一些人很少犯的错，而且常常不自知：</p>
+    <p>Agent 已经能写代码、写测试、跑检查，但要放心让它从需求一路做到合并，还要防住它常犯又不自知的错：</p>
     <ul>
       <li>读到 <code>.env</code>、私钥，或者把它们写进命令外发；</li>
       <li>用 <code>git reset --hard</code>、<code>git stash</code>、<code>rm -rf</code>、强推，丢掉自己或别人的改动；</li>
@@ -302,13 +306,27 @@ footer { border-top: 1px solid var(--line); color: var(--muted); font-size: .88r
       <li>直接在主分支上提交，或者为了让检查通过，顺手把检查规则改松；</li>
       <li>大需求不先对齐方案就动手，改完才发现方向不对。</li>
     </ul>
-    <p>写进提示词或规范里的要求，Agent 未必每次都遵守。harness 的做法是<strong>把能机械判定的要求变成门禁</strong>：由程序在本机判定、拦截并记录，Agent 照着拦截信息改道，人只在关键节点把关。</p>
+    <p>写进提示词或规范里的要求，Agent 未必每次都遵守。harness 把研发流程写成项目规范，并<strong>把其中能机械判定的要求变成门禁</strong>：由程序在本机判定、拦截并记录，Agent 照着拦截信息改道继续。你只需聊清需求、同意实施，再在交付时验收；中间的实现、测试、验证、评审与合并由 Agent 连续完成。</p>
     <div class="cards">
       <div class="card"><h4>当场纠正</h4><p>危险的工具调用在执行之前被拦下，拦截信息带着原因和正确做法。</p></div>
       <div class="card"><h4>结果把关</h4><p>没有签名的验证证据和独立评审，改动进不了主分支，对所有客户端和人都一样。</p></div>
       <div class="card"><h4>放宽不了自己</h4><p>任务分支改了规则也不影响它自己的判定，门禁改动合并前必须由人确认。</p></div>
       <div class="card"><h4>本机、可审计</h4><p>判定都在本机完成，记录签名后存进仓库自己的 git 目录，随时可以核对。</p></div>
     </div>
+
+    <h3 id="delivery">一个需求怎么交付</h3>
+    <div class="table-wrap"><table class="t-key">
+      <thead><tr><th>阶段</th><th>Agent 做什么</th><th>由什么保证</th></tr></thead>
+      <tbody>
+        <tr><td>理解与澄清</td><td>读仓库、判断任务分级；大需求逐个澄清关键问题，写出验收清单、行为说明与实施方案后停下，等你同意实施</td><td>方案获同意前写不了测试和代码，没有授权记录的大改动合并时被拒</td></tr>
+        <tr><td>实施</td><td>先把每条验收标准写成单元、集成或 E2E 测试并确认失败，再实现到全部通过；只在缺权限、需要业务拍板等情况下停下</td><td>读取密钥、不可逆的 git 操作等危险调用当场被拦下，Agent 按提示改道继续</td></tr>
+        <tr><td>验证</td><td>在固定检出里按改动路径执行项目配置的检查</td><td>结果写成绑定提交的签名证据，提交一变就要重跑</td></tr>
+        <tr><td>独立评审</td><td>由不了解实现过程的评审进程按验收清单核对需求符合度，并评工程质量</td><td>需求未满足或有高危发现即拒绝</td></tr>
+        <tr><td>合并</td><td>按项目授权运行 <code>harness merge</code> 合入主分支</td><td>主分支只接受 <code>harness merge</code> 写入，它先核对证据与评审对最新提交仍然有效</td></tr>
+        <tr><td>交付</td><td>逐条给出验收证据、合并状态与待处理项</td><td>由你最终验收</td></tr>
+      </tbody>
+    </table></div>
+    <p>小需求核实范围后跳过方案，直接从实施开始。任务分级和先红后绿由 Agent 按项目规范执行，门禁兜底其中能机械判定的部分，见<a href="#limits">信任模型与限制</a>。</p>
 
     <!-- ============ 架构 ============ -->
     <h2 id="arch">架构总览</h2>
