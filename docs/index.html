@@ -322,7 +322,7 @@ footer { border-top: 1px solid var(--line); color: var(--muted); font-size: .88r
         <tr><td>实施</td><td>先把每条验收标准写成单元、集成或 E2E 测试并确认失败，再实现到全部通过；只在缺权限、需要业务拍板等情况下停下</td><td>读取密钥、不可逆的 git 操作等危险调用当场被拦下，Agent 按提示改道继续</td></tr>
         <tr><td>验证</td><td>在固定检出里按改动路径执行项目配置的检查</td><td>结果写成绑定提交的签名证据，提交一变就要重跑</td></tr>
         <tr><td>独立评审</td><td>由不了解实现过程的评审进程按验收清单核对需求符合度，并评工程质量</td><td>需求未满足或有高危发现即拒绝</td></tr>
-        <tr><td>合并</td><td>按项目授权运行 <code>harness merge</code> 合入主分支</td><td>主分支只接受 <code>harness merge</code> 写入，它先核对证据与评审对最新提交仍然有效</td></tr>
+        <tr><td>交付到主分支</td><td>本地交付运行 <code>harness merge</code> 合入主分支；远程交付运行 <code>harness submit</code> 推送核对过的提交并创建 PR/MR，由团队在平台上合并</td><td>两条路都先核对证据与评审对最新提交仍然有效；本地主分支只接受 <code>harness merge</code> 与 <code>harness sync</code> 写入</td></tr>
         <tr><td>交付</td><td>逐条给出验收证据、合并状态与待处理项</td><td>由你最终验收</td></tr>
       </tbody>
     </table></div>
@@ -812,7 +812,10 @@ dsh plugin --profile web add ~/.local/share/harness/dsh-plugin</code></pre></div
         <tr><td><code>gate_change_unconfirmed</code></td><td>Agent 展示确认摘要；由人在自己的终端执行它给出的带 <code>--yes</code> 的确认命令，再告诉 Agent 继续</td></tr>
         <tr><td><code>plan_unapproved</code></td><td>大改动没有实施授权记录；补齐方案，你同意后由 Agent 照录原话运行 <code>harness approve</code></td></tr>
         <tr><td><code>conflict</code></td><td>在任务分支上 <code>git merge main</code> 解决冲突，再重新验证与评审</td></tr>
-        <tr><td><code>main_moved</code></td><td>合并过程中主分支前进了，重新运行 <code>harness merge</code>，已有证据会复用</td></tr>
+        <tr><td><code>main_moved</code></td><td>合并或同步过程中主分支前进了，重新运行同一条命令，已有证据会复用</td></tr>
+        <tr><td><code>delivery_remote</code>、<code>delivery_local</code></td><td>交付方式和当前命令不匹配：远程模式下用 <code>harness submit</code>，本地模式下用 <code>harness merge</code></td></tr>
+        <tr><td><code>base_stale</code>、<code>not_fast_forward</code></td><td>本地主分支与远程不一致：先 <code>harness sync</code>；本地有远程没有的提交时 <code>sync</code> 拒绝，不改写历史</td></tr>
+        <tr><td><code>platform_missing</code>、<code>platform_failed</code></td><td>平台命令没装或调用失败，由人安装并运行 <code>gh auth login</code> 或 <code>glab auth login</code></td></tr>
         <tr><td><code>review_stale</code></td><td>主分支在评审之后改了本分支也改过的文件；在任务分支上 <code>git merge main</code> 并提交，再重新验证与评审</td></tr>
         <tr><td>验证结果 <code>incomplete</code></td><td><code>requires</code> 里的依赖目录在主 Worktree 不存在，装好依赖后重跑</td></tr>
         <tr><td>主 Worktree 不在 main 或不洁净</td><td>Agent 先核对状态并保留已有改动，按项目规则准备主 Worktree；需要处置用户改动时先说明具体对象并取得授权</td></tr>
@@ -874,7 +877,10 @@ node ~/github/harness/bin/harness.mjs install --local
     <div class="code"><span class="label">同步需求示例</span><pre class="prompt"><code>我想把远端主分支的更新同步到本地。</code></pre></div>
     <p>Agent 应检查差异并说明同步方式和影响，在项目授权范围内处理，最后汇报结果。</p>
     <p>远程写入仍须按项目规则单独取得授权，请求本地接入或合并不代表允许推送。下面是同步机制与命令参考。</p>
-    <p>harness 只管本地主分支。Agent 推送主分支会被拦截，由人推送；Agent 可以推送任务分支，但不能强推。同步远端主分支有两种做法：</p>
+    <p>harness 只管本地主分支。Agent 推送主分支会被拦截，由人推送；Agent 可以推送任务分支，但不能强推。</p>
+    <p>接入后优先用 <code>harness sync</code>：它把本地主分支快进到远程主分支，核对远程带来的门禁改动（需要时由人运行 <code>harness confirm --branch origin/main</code>），刷新本机安装并执行<code>merge.postMergeCommand</code>。本地有远程没有的提交时它拒绝，不改写历史。</p>
+    <p>团队把主分支放在平台上、合并走 PR/MR 时，把 <code>delivery.mode</code> 改成 <code>remote</code>：此后不用 <code>merge</code>，改用 <code>harness submit --branch &lt;任务分支&gt;</code> 推送核对过的提交并创建或更新 PR/MR；平台合入后再 <code>harness sync</code>。开启开关的分支要先经人工确认，确认摘要会单独写明由此授予的推送与创建 PR/MR 的权限。harness 不在平台上合并，也不强推。</p>
+    <p>没有接入 <code>delivery</code> 的场景仍可用下面两种做法同步远端主分支：</p>
     <div class="code"><span class="label">做法一：走一遍本机门禁</span><pre><code>git fetch origin
 harness verify --branch origin/main
 harness review --branch origin/main
@@ -910,7 +916,9 @@ HARNESS_MAIN_BYPASS=1 git merge --ff-only origin/main</code></pre></div>
         <tr><td><code>status [--branch &lt;分支&gt;]</code></td><td>只读汇总还差哪几步才能合并</td></tr>
         <tr><td><code>confirm --branch &lt;分支&gt; [--yes]</code></td><td>查看门禁改动摘要；带 <code>--yes</code> 由人记录确认</td></tr>
         <tr><td><code>approve --branch &lt;分支&gt; [--yes --note &lt;原话&gt;]</code></td><td>查看方案与授权状态；记录实施授权</td></tr>
-        <tr><td><code>merge --branch &lt;分支&gt; [--dry-run]</code></td><td>受控合并到主分支</td></tr>
+        <tr><td><code>merge --branch &lt;分支&gt; [--dry-run]</code></td><td>受控合并到主分支（本地交付）</td></tr>
+        <tr><td><code>submit --branch &lt;分支&gt;</code></td><td>推送核对过的提交并创建或更新 PR/MR（远程交付）</td></tr>
+        <tr><td><code>sync</code></td><td>把本地主分支快进到远程主分支</td></tr>
         <tr><td><code>worktree clean [--yes]</code></td><td>预览并清理已合并的任务 Worktree</td></tr>
         <tr><td><code>doctor</code></td><td>安装与接入自检</td></tr>
         <tr><td><code>rules</code>、<code>check --kind ...</code></td><td>列出生效规则；手工判定一次调用</td></tr>

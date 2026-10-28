@@ -1,4 +1,4 @@
-import { acceptancePath, gatePaths, loadGateProject, mainBranch } from "./lib/config.mjs";
+import { acceptancePath, deliverySettings, gatePaths, loadGateProject, mainBranch } from "./lib/config.mjs";
 import { matchAny } from "./lib/glob.mjs";
 import { changedPaths, gitOk, isAncestor, mainWorktreeRoot, refExists, showBlob } from "./lib/git.mjs";
 import { readRecord } from "./lib/store.mjs";
@@ -7,6 +7,7 @@ import { REVIEW_KIND } from "./review/review.mjs";
 import { CONFIRM_KIND } from "./confirm/confirm.mjs";
 import { mainWorktreeProblems, planMergeResult, reuseDecision, reviewStaleFiles } from "./merge/merge.mjs";
 import { approvalState, planEnforced, planRequirement } from "./plan/plan.mjs";
+import { latestSubmit } from "./delivery/submit.mjs";
 
 // 确认记录绑定合并结果的 tree：快进时就是分支的 tree，三方合并时算出合并后的 tree。
 function confirmFor(project, root, branch) {
@@ -25,7 +26,8 @@ export function branchStatus({ cwd, branch }) {
   const project = loadGateProject(cwd, { branch });
   const root = project.root;
   const mainRef = mainBranch(project);
-  const result = { branch, mainRef, steps: [], ready: false, blockers: [] };
+  const delivery = deliverySettings(project.config);
+  const result = { branch, mainRef, delivery, steps: [], ready: false, blockers: [] };
   const add = (id, state, detail) => result.steps.push({ id, state, detail });
 
   if (!refExists(root, branch)) {
@@ -41,6 +43,7 @@ export function branchStatus({ cwd, branch }) {
   if (isAncestor(root, branchCommit, mainCommit)) {
     add("branch", "done", "该分支已经包含在主分支中");
     result.ready = true;
+    result.merged = true;
     return result;
   }
   add("branch", "ok", `待合入 ${branchCommit.slice(0, 10)} -> ${mainRef}`);
@@ -51,7 +54,13 @@ export function branchStatus({ cwd, branch }) {
     add("main-worktree", "fail", mainProblems.join("；"));
     result.blockers.push("主 Worktree 未就绪");
   } else {
-    add("main-worktree", "ok", `主 Worktree 停在 ${mainRef} 且洁净`);
+    add(
+      "main-worktree",
+      "ok",
+      delivery.mode === "remote"
+        ? `主 Worktree 停在 ${mainRef} 且洁净，可以接收 harness sync`
+        : `主 Worktree 停在 ${mainRef} 且洁净`,
+    );
   }
 
   const evidence = readRecord(root, EVIDENCE_KIND, branchCommit);
@@ -143,6 +152,24 @@ export function branchStatus({ cwd, branch }) {
     add("acceptance", "info", `验收清单约定位置：${rel}（存在时评审会核对需求符合度）`);
   }
 
+  // 远程交付下还要看本机有没有把核对过的提交推上去；平台是否合入不查，只看本机记录。
+  if (delivery.mode === "remote") {
+    const submitted = latestSubmit({ root, branch });
+    if (!submitted.ok) {
+      add("submit", "info", `还没有提交记录：门禁齐备后运行 harness submit --branch ${branch}`);
+    } else if (submitted.record.head !== branchCommit) {
+      add(
+        "submit",
+        "warn",
+        `提交记录已过期：记录的是 ${submitted.record.head.slice(0, 10)}${submitted.record.url ? `（${submitted.record.url}）` : ""}，当前分支顶端是 ${branchCommit.slice(0, 10)}，需要重新 submit`,
+      );
+    } else if (submitted.record.stage === "ready") {
+      add("submit", "ok", `${submitted.record.url}（提交于 ${submitted.record.createdAt}）`);
+    } else {
+      add("submit", "warn", `已推送，PR/MR 还没有就绪（${submitted.record.head.slice(0, 10)} 到 ${submitted.record.remote}），重跑 harness submit 补上`);
+    }
+  }
+
   result.ready = result.blockers.length === 0;
   return result;
 }
@@ -152,7 +179,12 @@ export function formatStatus(status) {
   const lines = [`分支 ${status.branch} -> ${status.mainRef}`, ""];
   for (const step of status.steps) lines.push(`  [${mark[step.state] ?? step.state}] ${step.id}: ${step.detail}`);
   lines.push("");
-  if (status.ready) lines.push("可以合并：harness merge --branch " + status.branch);
+  if (status.merged) {
+    lines.push("已经包含在主分支中，无需再交付");
+  } else if (status.delivery?.mode === "remote") {
+    if (status.ready) lines.push(`可以提交：harness submit --branch ${status.branch}`);
+    else lines.push(`还差 ${status.blockers.length} 步：${status.blockers.join("、")}`);
+  } else if (status.ready) lines.push("可以合并：harness merge --branch " + status.branch);
   else lines.push(`还差 ${status.blockers.length} 步：${status.blockers.join("、")}`);
   return lines.join("\n");
 }

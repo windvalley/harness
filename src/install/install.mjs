@@ -685,6 +685,24 @@ function installPinned({ root, version }) {
   return { root, published: { version }, fromTag, hooks, hooksTracked: tracked, dsh: writeDshPlugin() };
 }
 
+/**
+ * 只把指定版本装进本机版本目录，不改项目里的任何文件，也不刷新共用钩子。
+ * sync 遇到目标提交锁定的版本本机没装时用它补装；由人执行。
+ */
+export function installVersion({ version }) {
+  if (!/^\d+\.\d+\.\d+/.test(String(version ?? ""))) throw new Error(`版本号格式不对: ${version}`);
+  if (version === packageVersion()) {
+    const published = publishVersion({ version });
+    return { version, dir: published.dir, existed: published.existed, fromTag: false };
+  }
+  const existing = verifyVersion({ version });
+  if (existing.ok) return { version, dir: versionDir(version), existed: true, fromTag: false };
+  publishFromTag(version);
+  const installed = verifyVersion({ version });
+  if (!installed.ok) throw new Error(`安装版本 ${version} 后校验失败: ${installed.reason}`);
+  return { version, dir: versionDir(version), existed: false, fromTag: true };
+}
+
 function publishFromTag(version) {
   const tag = `v${version}`;
   if (git(PACKAGE_ROOT, ["rev-parse", "--verify", "--quiet", `refs/tags/${tag}`]).status !== 0) {

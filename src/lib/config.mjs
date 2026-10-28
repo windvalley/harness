@@ -200,6 +200,65 @@ export function entryPaths(project) {
   return [...ENTRY_FILES, ".harness/config.json", ...(hooks ? [`${hooks.hooksDir}/**`] : [])];
 }
 
+const DELIVERY_PROVIDERS = { github: "gh", gitlab: "glab" };
+
+/**
+ * 交付设置（config.delivery），缺省按本地交付。
+ * local：harness merge 合入本地主分支；remote：harness submit 推送任务分支并创建或更新 PR/MR，由团队在平台上合并。
+ * 两种模式都可以用 harness sync 把本地主分支快进到 remote 指向的远程主分支。
+ * 只保留影响行为的字段，本地交付下的 provider 不起作用，比较时不计入，只写出缺省值也不算改动。
+ */
+export function deliverySettings(config) {
+  const raw = config?.delivery ?? {};
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) throw new Error(".harness/config.json 的 delivery 必须是对象");
+  const mode = raw.mode ?? "local";
+  if (mode !== "local" && mode !== "remote") throw new Error(`.harness/config.json 的 delivery.mode 只能是 local 或 remote，当前是 ${JSON.stringify(mode)}`);
+  const remote = raw.remote ?? "origin";
+  if (typeof remote !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(remote)) {
+    throw new Error(`.harness/config.json 的 delivery.remote 必须是远程名，例如 origin，当前是 ${JSON.stringify(remote)}`);
+  }
+  const provider = raw.provider ?? null;
+  if (provider !== null && !(provider in DELIVERY_PROVIDERS)) {
+    throw new Error(`.harness/config.json 的 delivery.provider 只能是 ${Object.keys(DELIVERY_PROVIDERS).join(" 或 ")}，当前是 ${JSON.stringify(provider)}`);
+  }
+  if (mode === "remote" && provider === null) throw new Error(".harness/config.json 的 delivery.mode 为 remote 时必须指定 delivery.provider：github 或 gitlab");
+  return { mode, remote, provider: mode === "remote" ? provider : null };
+}
+
+export function deliveryCommand(settings) {
+  return DELIVERY_PROVIDERS[settings.provider] ?? null;
+}
+
+export function sameDelivery(a, b) {
+  return a.mode === b.mode && a.remote === b.remote && a.provider === b.provider;
+}
+
+export function describeDelivery(settings) {
+  return settings.mode === "remote" ? `远程交付（${settings.provider}，远程 ${settings.remote}）` : `本地交付（同步远程 ${settings.remote}）`;
+}
+
+/** 开启远程交付时授予的权限，写进确认摘要，由人看过再确认。 */
+export function deliveryGrant(settings) {
+  return settings.mode === "remote"
+    ? `harness submit 可以把任务分支普通推送到 ${settings.remote} 并创建或更新 PR/MR；不包括在平台上合并、推送主分支和强推`
+    : "harness merge 合入本地主分支，harness submit 不再推送任务分支";
+}
+
+/** 某个提交上的交付设置；那里没有 .harness/config.json 时返回 null。 */
+export function deliveryAt(root, ref) {
+  const blob = showBlob(root, ref, `${PROJECT_DIR}/config.json`);
+  return blob === null ? null : deliverySettings(parse(blob, `${ref}:${PROJECT_DIR}/config.json`));
+}
+
+/**
+ * 两份配置之间交付设置是否变化。改交付方式等于改变 Agent 的远程权限，不受 confirmOnGateChange 影响，一律要人确认。
+ * before 为 null 表示首次接入（主分支还没有配置），这时首次接入本身已经要求确认。
+ */
+export function deliveryChange(before, after) {
+  if (!before) return { before: null, after, changed: false };
+  return { before, after, changed: !sameDelivery(before, after) };
+}
+
 export function acceptanceDir(project) {
   return `${PROJECT_DIR}/${project.config.intent?.dir ?? "acceptance"}`;
 }

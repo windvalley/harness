@@ -12,6 +12,8 @@ import { codex } from "./adapters/codex.mjs";
 import { dsh } from "./adapters/dsh.mjs";
 import { planChecks, verify } from "./verify/verify.mjs";
 import { MergeError, mergeTask } from "./merge/merge.mjs";
+import { submitTask } from "./delivery/submit.mjs";
+import { syncTask } from "./delivery/sync.mjs";
 import { reviewBranch } from "./review/review.mjs";
 import { approveConfirm, confirmSummary, formatSummary } from "./confirm/confirm.mjs";
 import { approvePlan, formatPlanSummary, planSummary } from "./plan/plan.mjs";
@@ -22,7 +24,7 @@ import { computeMetrics, formatMetrics } from "./golden/metrics.mjs";
 import { initProject, upgradeProject } from "./install/init.mjs";
 import { uninstall } from "./install/uninstall.mjs";
 import { branchStatus, formatStatus } from "./status.mjs";
-import { installAll, installLocal, listVersions, pruneVersions, publishVersion, verifyVersion, versionDir } from "./install/install.mjs";
+import { installAll, installLocal, installVersion, listVersions, pruneVersions, publishVersion, versionDir } from "./install/install.mjs";
 import { formatSurvey } from "./install/survey.mjs";
 import { followUps } from "./install/followups.mjs";
 import { doctor, formatDoctor } from "./install/doctor.mjs";
@@ -40,7 +42,9 @@ const USAGE = `harness <命令> [参数]
   status   --branch <名称>                           只读汇总：还差哪几步才能合并
   confirm  --branch <名称> [--yes]                   查看门禁改动；--yes 记录人工确认
   approve  --branch <名称> [--yes --note <原话>]     查看任务方案；用户同意实施后加 --yes，--note 照录用户原话
-  merge    --branch <名称> [--dry-run]               受控合并到主分支
+  merge    --branch <名称> [--dry-run]               受控合并到主分支（本地交付）
+  submit   --branch <名称>                           推送核对过的提交并创建或更新 PR/MR（远程交付）
+  sync                                              把本地主分支快进到远程主分支
   worktree clean [--yes] [--with-local-files]       预览已合并的任务 Worktree；--yes 才删除，含 .env 这类本机文件的要再加 --with-local-files
 
 体检与度量
@@ -52,7 +56,7 @@ const USAGE = `harness <命令> [参数]
 
 接入与维护
   init     [--dry-run] [--take-over] [--force]       接入或升级当前项目：先调查现状，--dry-run 只预览
-  install  [--take-over] [--local]                   重新生成入口与钩子；--local 只刷新本机共用的钩子与插件目录
+  install  [--take-over] [--local] [--version <v>]   重新生成入口与钩子；--local 只刷新本机共用部分；--version 只装指定版本
   upgrade                                            升级项目到当前版本
   uninstall [--purge] [--dry-run]                    解除接入；--purge 连 .harness/ 一起删
   versions                                           列出已安装的版本
@@ -179,6 +183,49 @@ async function cmdMerge(argv) {
     if (error instanceof MergeError) {
       process.stderr.write(`合并被拒绝(${error.code}): ${error.message}\n`);
       return error.code === "post_merge_failed" ? 3 : 1;
+    }
+    throw error;
+  }
+}
+
+const DELIVERY_EXIT = { post_merge_failed: 3 };
+
+async function cmdSubmit(argv) {
+  const { values } = parseArgs({ args: argv, options: { branch: { type: "string" } } });
+  if (!values.branch) {
+    process.stderr.write("用法: harness submit --branch <名称>\n");
+    return 2;
+  }
+  try {
+    const result = await submitTask({ cwd: process.cwd(), branch: values.branch, log: (line) => process.stderr.write(`${line}\n`) });
+    print(result.url);
+    print(JSON.stringify(result, null, 2));
+    if (result.followUps?.length > 0) {
+      process.stderr.write(`\n提交完成，还需要在客户端做:\n${result.followUps.map((note) => `  - ${note}`).join("\n")}\n`);
+    }
+    return 0;
+  } catch (error) {
+    if (error.code) {
+      process.stderr.write(`提交被拒绝(${error.code}): ${error.message}\n`);
+      return DELIVERY_EXIT[error.code] ?? 1;
+    }
+    throw error;
+  }
+}
+
+function cmdSync(argv) {
+  parseArgs({ args: argv, options: {} });
+  try {
+    const result = syncTask({ cwd: process.cwd(), log: (line) => process.stderr.write(`${line}\n`) });
+    print(JSON.stringify(result, null, 2));
+    if (result.followUps?.length > 0) {
+      process.stderr.write(`\n同步完成，还需要在客户端做:\n${result.followUps.map((note) => `  - ${note}`).join("\n")}\n`);
+    }
+    return 0;
+  } catch (error) {
+    if (error.code) {
+      process.stderr.write(`同步被拒绝(${error.code}): ${error.message}\n`);
+      return DELIVERY_EXIT[error.code] ?? 1;
     }
     throw error;
   }
@@ -578,8 +625,22 @@ export async function main(argv) {
       case "install": {
         const { values } = parseArgs({
           args: rest,
-          options: { "take-over": { type: "boolean", default: false }, local: { type: "boolean", default: false } },
+          options: {
+            "take-over": { type: "boolean", default: false },
+            local: { type: "boolean", default: false },
+            version: { type: "string" },
+          },
         });
+        if (values.version) {
+          if (values.local || values["take-over"]) {
+            process.stderr.write("--version 只把指定版本装进本机版本目录，不改项目文件；不能与 --local 或 --take-over 一起用\n");
+            return 2;
+          }
+          const outcome = installVersion({ version: values.version });
+          print(`已安装版本 ${outcome.version} 到 ${outcome.dir}（项目文件未改动，本机共用钩子也未刷新）`);
+          if (outcome.fromTag) print("  代码来自 harness 仓库的标签，本机已有版本目录未受影响");
+          return 0;
+        }
         if (values.local) {
           const local = installLocal({ cwd: process.cwd() });
           if (local.fromTag) print(`项目锁定版本 ${local.published.version}，已从 harness 仓库的标签 v${local.published.version} 安装`);
@@ -695,6 +756,10 @@ export async function main(argv) {
         return cmdReview(rest);
       case "merge":
         return cmdMerge(rest);
+      case "submit":
+        return cmdSubmit(rest);
+      case "sync":
+        return cmdSync(rest);
       case "confirm":
         return cmdConfirm(rest);
       case "approve":

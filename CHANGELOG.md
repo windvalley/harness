@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+### 新增
+
+- 远程交付模式：`.harness/config.json` 新增 `delivery` 段（`mode`、`remote`、`provider`），主分支在平台上时由 `harness submit` 推送核对过的任务提交并创建或更新 PR/MR，由团队在平台上合并。
+  `harness merge` 在远程模式以 `delivery_remote` 拒绝；`harness sync` 把本地主分支快进到远程主分支，核对门禁改动、刷新本机安装并执行 `merge.postMergeCommand`。
+  交付设置的变化一律要人工确认，确认摘要单独列出改前改后与由此授予的远程权限。
+- `harness install --version <版本>` 只把指定版本装进本机版本目录，不改项目文件。
+  `sync` 遇到目标提交锁定的版本本机没装时，在更新主分支之前以 `version_missing` 拒绝并给出这条命令。
+- `harness status` 在远程模式显示提交记录与 PR/MR 链接，分支前进后提示记录已过期；`harness doctor` 检查远程与平台命令；`init` 生成带 `"delivery": { "mode": "local" }` 的配置。
+
 ### 变更
 
 - `AGENTS.md` 托管块的任务分级条目写明：方案交付后用户表达开始实施的意思才算授权，最初提出需求或回答澄清问题都不算。

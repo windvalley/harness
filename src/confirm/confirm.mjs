@@ -1,5 +1,5 @@
 import { userInfo } from "node:os";
-import { gatePaths, loadGateProject, mainBranch } from "../lib/config.mjs";
+import { deliveryAt, deliveryChange, deliveryGrant, deliverySettings, describeDelivery, gatePaths, loadGateProject, mainBranch } from "../lib/config.mjs";
 import { matchAny } from "../lib/glob.mjs";
 import { changedPaths, gitOk } from "../lib/git.mjs";
 import { appendLedger, writeRecord } from "../lib/store.mjs";
@@ -22,6 +22,7 @@ export function confirmSummary({ cwd, branch }) {
   const gateTouched = paths.filter((path) => matchAny(path, gate));
   const codeTouched = gateTouched.filter((path) => path.startsWith(".harness/"));
 
+  const delivery = describeDeliveryChange({ project, root, planned });
   const ruleDiff = describeRuleDiff({ root, mainCommit: planned.mainCommit, resultCommit: planned.resultCommit });
   const checkDiff = describeCheckDiff({ root, project, mainCommit: planned.mainCommit, resultCommit: planned.resultCommit });
 
@@ -35,10 +36,37 @@ export function confirmSummary({ cwd, branch }) {
     fastForward: planned.fastForward,
     changedCount: paths.length,
     gateTouched,
+    delivery,
     codeTouched,
     ruleDiff,
     checkDiff,
   };
+}
+
+/**
+ * 交付设置的变化单独列出来：它决定 Agent 能对远程做什么，改它就是改授权范围，
+ * 不受 confirmOnGateChange 影响，摘要里必须写清改前改后与由此授予的权限。
+ * 首次接入没有“改前”，只有提议值。
+ */
+function describeDeliveryChange({ project, root, planned }) {
+  if (project.bootstrap) {
+    let after;
+    try {
+      after = deliveryAt(root, planned.resultCommit) ?? deliverySettings(undefined);
+    } catch {
+      return null;
+    }
+    return { before: null, after, changed: false, grant: deliveryGrant(after) };
+  }
+  const before = deliverySettings(project.config);
+  let after;
+  try {
+    after = deliveryAt(root, planned.resultCommit) ?? deliverySettings(undefined);
+  } catch (error) {
+    return { before, after: null, changed: false, grant: null, error: error.message };
+  }
+  const change = deliveryChange(before, after);
+  return { before, after, changed: change.changed, grant: deliveryGrant(after) };
 }
 
 /**
@@ -163,6 +191,18 @@ export function formatSummary(summary) {
     lines.push(`  验证检查 ${p.checks} 项：${p.checkIds.join(", ")}`);
     lines.push(`  合并要求：证据 ${p.requireEvidence ? "必需" : "不要求"}，评审 ${p.requireReview ? "必需" : "不要求"}，门禁改动确认 ${p.confirmOnGateChange ? "必需" : "不要求"}`);
     if (p.postMergeCommand) lines.push(`  合并后命令：${p.postMergeCommand}`);
+  }
+  if (summary.delivery) {
+    const d = summary.delivery;
+    if (d.error) {
+      lines.push(`交付设置: 合并结果里无法解析（${d.error}）`);
+    } else if (d.changed) {
+      lines.push(`交付设置: ${describeDelivery(d.before)} -> ${describeDelivery(d.after)}`);
+      lines.push(`  由此授予: ${d.grant}`);
+    } else {
+      lines.push(`交付设置: ${describeDelivery(d.after)}${d.before ? "（本次不变）" : ""}`);
+      if (d.before) lines.push(`  当前权限: ${d.grant}`);
+    }
   }
   if (summary.ruleDiff) {
     const { before, after, added, removed, overlays = [], presetsBefore, presetsAfter } = summary.ruleDiff;

@@ -40,6 +40,8 @@ function defaultConfig({ mainBranch }) {
     env: {},
     // 清理任务 Worktree 前在里面依次运行的命令，例如停服务、删隔离数据库；见 harness worktree clean。
     worktree: { cleanup: [] },
+    // 交付方式：local 用 harness merge 合入本地主分支；remote 用 harness submit 推送任务分支并创建 PR/MR，由平台合并。
+    delivery: { mode: "local" },
   };
 }
 

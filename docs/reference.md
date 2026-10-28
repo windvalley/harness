@@ -504,9 +504,57 @@ Agent 运行 `harness confirm --branch <分支>` 并展示只读摘要：涉及�
 确认只在账本里记下这一次确认，不会合并，主分支上也不会出现新提交；告诉 Agent 已确认后，由它继续完成已获授权的本地合并。
 确认绑定合并结果的 tree：分支再提交，或者主分支前进让合并结果变了，都要重新确认。
 
-### 与远端同步
+### 交付方式：本地与远程
 
-harness 只管本地主分支，推送与拉取不经过它。
+`.harness/config.json` 的 `delivery` 决定门禁通过后怎么交付到主分支：
+
+```json
+"delivery": { "mode": "local", "remote": "origin", "provider": null }
+```
+
+- `mode` 默认 `local`：`harness merge` 合入本地主分支，就是上面“一次任务”的流程。
+- `mode` 取 `remote` 时 `provider` 必填：`github` 用本机的 `gh`，`gitlab` 用本机的 `glab`。
+  主分支在平台上，合并走 PR/MR 与平台的保护规则。
+  这时 `harness merge` 以 `delivery_remote` 拒绝，改用 `harness submit`。
+- `remote` 是远程名，默认 `origin`，`submit` 与 `sync` 都用它。
+- 本地主分支仍是唯一的信任根，配置一律从它读。
+  远程模式下本地主分支只由 `sync` 快进。
+
+交付设置的实际变化都要人工确认，不受 `governance.confirmOnGateChange` 影响：它决定 Agent 能对远程做什么。
+只把缺省值写成显式的 `local` 不算变化。
+确认摘要里单独列一行“交付设置”，写明改前改后与由此授予的权限。
+
+主分支还是本地模式时，把 `delivery.mode` 改成 `remote` 的分支经人工确认后可以 `submit`：门禁核对仍按主分支的配置，`remote` 与 `provider` 取分支提议的值。
+这是开启开关的路径，因为远程主分支通常只接受 PR/MR 合并，先本地合并会推不上去。
+关闭不需要特殊处理：把 `mode` 改回 `local` 的分支在远程模式下照常 `submit`，平台合入后 `sync` 导入。
+
+### 远程交付：提交、同步与本地模式的区别
+
+`harness submit --branch <任务分支>` 依次做这些事：
+
+1. 校验源是本地任务分支，主分支、远程跟踪引用、提交号都以 `invalid_source` 拒绝。
+2. 预检平台命令在 PATH 里，没装时在推送之前以 `platform_missing` 拒绝，给出由人安装并登录的命令。
+3. 取得远程主分支，要求本地主分支等于它，否则以 `base_stale` 拒绝并提示先 `sync`。
+4. 按与 `merge` 相同的代码核对提交信息、门禁改动确认、实施授权、验收清单、验证证据、独立评审与 `review_stale`。
+5. 把核对过的那个提交普通推送到远程同名分支，不按分支名推，不强推；核对后分支顶端移动时以 `branch_moved` 拒绝。
+6. 创建或更新指向主分支的 PR/MR，描述里 harness 只维护 `<!-- harness:submit:start -->` 与 `<!-- harness:submit:end -->` 之间的区块，标题只在创建时确定。
+7. 写签名提交记录，按提交索引，分“已推送”与“PR/MR 已就绪”两个阶段；推送之后创建 PR/MR 失败时重跑只补 PR/MR。
+
+对外保证是：某个时刻，这个提交相对目标主分支通过了本机门禁。
+不保证平台最终合入的内容，也不保证此后别人推到这个分支的提交。
+
+`harness sync` 把本地主分支快进到远程主分支：
+
+- 本地主分支有远程没有的提交时以 `not_fast_forward` 拒绝，不改写历史。
+- 远程带来门禁改动、交付设置有变化或处于首次接入时，要求有绑定目标 tree 的人工确认，命令是 `harness confirm --branch <远程>/<主分支>`；判定按同步前的配置，目标提交关掉 `confirmOnGateChange` 也不例外。
+- 目标提交锁定的 harness 版本本机没装时，在更新之前以 `version_missing` 拒绝，给出由人执行的 `install --version`。
+- 与 `merge` 共用合并锁、主 Worktree 就绪检查、令牌写入、文件同步与回退；更新后刷新本机安装并执行 `merge.postMergeCommand`，失败时退出码为 3，并说明主分支已经更新。
+- 普通代码改动按“信任平台主分支”导入，不在本机重新验证和评审。
+- 本地交付下同样可用，替代由人用绕过开关手动快进的做法。
+
+### 与远端同步（旧做法）
+
+harness 只管本地主分支，推送与拉取不经过它（远程交付下的 `submit` 与 `sync` 是唯一例外，行为见上一节）。
 可以对 Agent 说“我想把远端主分支的更新同步到本地”。
 Agent 应检查差异并说明同步方式和影响，在项目授权范围内处理，最后汇报结果。
 远程写入仍须按项目规则单独取得授权，不能把请求本地接入或本地合并理解为允许推送。
@@ -516,7 +564,9 @@ Agent 应检查差异并说明同步方式和影响，在项目授权范围内�
   快进拉取被拒时 git 已经把远端的文件检出到工作区，主 Worktree 会留下这些改动。
   拉取前主 Worktree 是洁净的，残留的就只是远端改动，由人运行 `git reset --hard HEAD` 恢复。
 
-同步远端主分支有两种做法。
+同步远端主分支优先用 `harness sync`（见上一节）：它快进、核对门禁改动、刷新本机安装并执行合并后命令。
+下面两种做法保留给没有接入 `delivery` 的场景或需要人工判断的情况。
+
 做法一是把远端主分支当作任务分支，走一遍本机门禁：
 
 ```bash
@@ -651,6 +701,9 @@ node ~/github/harness/bin/harness.mjs install --local   # 按新锁定的版本�
 | `escalate.triggers` | 四条 | 建议上报的情形，写给 Agent 看，harness 不据此自动触发 |
 | `env` | `{}` | 执行检查时附加的环境变量 |
 | `worktree.cleanup` | `[]` | `harness worktree clean` 删除 Worktree 前在里面依次运行的命令，见“清理任务 Worktree” |
+| `delivery.mode` | `local` | 交付方式：`local` 由 `harness merge` 合入本地主分支，`remote` 由 `harness submit` 推送并创建 PR/MR，见“交付方式” |
+| `delivery.provider` | `null` | `remote` 必填：`github` 用 `gh`，`gitlab` 用 `glab` |
+| `delivery.remote` | `"origin"` | `submit` 与 `sync` 使用的远程名 |
 | `git.hooksDir`、`git.projectHooks` | 不设置 | 由 harness 接管 git 钩子目录，见下文 |
 
 ### verify.json：检查映射
@@ -885,7 +938,9 @@ node ~/github/harness/bin/harness.mjs install --local   # 按新锁定的版本�
 | `status [--branch <分支>]` | 只读汇总还差哪几步才能合并，默认看当前分支 |
 | `confirm --branch <分支> [--yes] [--note <说明>]` | 查看门禁改动摘要；带 `--yes` 由人记录确认 |
 | `approve --branch <分支> [--yes --note <原话>]` | 查看任务方案与授权状态；用户同意实施后由 Agent 带 `--yes` 照录原话记录授权 |
-| `merge --branch <分支> [--dry-run]` | 受控合并到主分支 |
+| `merge --branch <分支> [--dry-run]` | 受控合并到主分支（本地交付） |
+| `submit --branch <分支>` | 推送核对过的提交并创建或更新 PR/MR（远程交付） |
+| `sync` | 把本地主分支快进到远程主分支，核对门禁改动并刷新本机安装 |
 | `worktree clean [--yes] [--with-local-files]` | 预览已合并的任务 Worktree；`--yes` 删除 Worktree 与分支 |
 | `doctor` | 安装与接入自检 |
 | `rules` | 列出解析后的生效规则 |
@@ -896,7 +951,7 @@ node ~/github/harness/bin/harness.mjs install --local   # 按新锁定的版本�
 | `key status`、`key rotate [--yes]` | 查看证据密钥；轮换由人执行 |
 | `escalate <open\|list\|show\|answer\|resume>` | 例外上报 |
 | `init [--dry-run] [--take-over] [--force]` | 接入当前项目，`--dry-run` 只预览 |
-| `install [--take-over]`、`install --local` | 重新生成入口、钩子与客户端配置；`--local` 只刷新本机，不改入库文件 |
+| `install [--take-over]`、`install --local`、`install --version <版本>` | 重新生成入口、钩子与客户端配置；`--local` 只刷新本机，不改入库文件；`--version` 只把指定版本装进版本目录 |
 | `upgrade` | 把项目升级到运行它的 harness 版本 |
 | `uninstall [--dry-run] [--purge]` | 解除接入 |
 | `versions`、`prune [--keep <v,...>] [--dry-run]` | 列出、清理本机安装的版本 |
@@ -943,7 +998,15 @@ harness 防的是 Agent 的误操作，以及被提示注入后常见的绕过�
 | 验证提示“未找到命令” | 本机没装检查用到的工具，装好后重跑 |
 | 评审报 diff 超过上限 | 按输出的目录分组，把改动拆成几个分支分别合并；确实需要一次评审时调高 `review.maxDiffChars`，属于门禁改动，合入主分支后才生效 |
 | `conflict` | 在任务分支上 `git merge main` 解决冲突，再重新验证与评审 |
-| `main_moved` | 合并过程中主分支前进了，重新运行 `harness merge`，已有证据会复用 |
+| `main_moved` | 合并或同步过程中主分支前进了，重新运行同一条命令，已有证据会复用 |
+| `delivery_remote` | 远程交付下不能用 `merge`，改用 `harness submit --branch <分支>` |
+| `delivery_local` | 主分支与分支都没有开启远程交付，`submit` 用不上；本地交付由 `harness merge` 合入 |
+| `base_stale` | 本地主分支与远程主分支不一致，先运行 `harness sync` |
+| `branch_moved` | 核对期间任务分支顶端移动了，重新运行 `harness submit` |
+| `push_rejected` | 远程同名分支已有别的提交，harness 不强推；先弄清是谁推的 |
+| `not_fast_forward` | 本地主分支有远程没有的提交，`sync` 不改写历史；先由人判断这些提交的来源 |
+| `platform_missing`、`platform_failed` | 平台命令没装或调用失败；由人安装并运行 `gh auth login` 或 `glab auth login` |
+| `version_missing` | 目标提交锁定的 harness 版本本机没装，由人运行 `install --version <版本>` |
 | `review_stale` | 主分支在评审之后改了本分支也改过的文件；在任务分支上 `git merge main` 并提交，再重新验证与评审 |
 | `bootstrap_not_fast_forward` | 首次接入的分支落后于主分支，先在分支上 `git merge main` |
 | `bootstrap_update_refused` | 原有的主分支保护拒绝了这次合并；在接入分支重新运行 `init --take-over`，提交后重新验证、确认并合并 |

@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { loadCurrentProject, mainBranch } from "../lib/config.mjs";
+import { deliverySettings, loadCurrentProject, mainBranch } from "../lib/config.mjs";
 import { git, mainWorktreeRoot, repoRoot } from "../lib/git.mjs";
 import { keyStatus } from "../lib/store.mjs";
 import { mainWorktreeProblems } from "../merge/merge.mjs";
@@ -9,6 +9,7 @@ import { commandExists, maxDiffChars, resolveBackend } from "../review/review.mj
 import { resolvePolicy } from "../policy/resolve.mjs";
 import { packageVersion, MARK_START } from "./managed.mjs";
 import { leftoverWorktrees } from "../worktree/clean.mjs";
+import { platformStatus } from "../delivery/platform.mjs";
 import { describeRegistration, dshRegistrations } from "./dsh.mjs";
 import {
   currentHooksConfig,
@@ -175,6 +176,7 @@ export function doctor({ cwd = process.cwd() } = {}) {
   });
 
   checks.push(...gitHookChecks(root));
+  checks.push(deliveryCheck(root));
 
   const claudeOk = clientHookInstalled(join(root, ".claude", "settings.json"));
   checks.push({
@@ -226,13 +228,14 @@ export function doctor({ cwd = process.cwd() } = {}) {
     });
     const mainRoot = mainWorktreeRoot(root);
     const mainProblems = mainWorktreeProblems(project, mainRoot);
+    const remote = deliverySettings(project.config).mode === "remote";
     checks.push({
       id: "main-worktree",
       ok: mainProblems.length === 0,
       detail:
         mainProblems.length === 0
-          ? `${mainRoot} 停在 ${mainBranch(project)} 且洁净，可以接收合并`
-          : `${mainProblems.join("；")}。主 Worktree 未就绪时所有任务的 harness merge 都会被拒绝`,
+          ? `${mainRoot} 停在 ${mainBranch(project)} 且洁净，可以接收${remote ? "同步(harness sync)" : "合并"}`
+          : `${mainProblems.join("；")}。主 Worktree 未就绪时 ${remote ? "harness sync" : "所有任务的 harness merge"} 都会被拒绝`,
     });
     // 合并后不自动删除任务 Worktree，这里只报告堆积的数量，不算失败。
     const leftover = leftoverWorktrees({ root, mainRef: mainBranch(project) }).length;
@@ -263,6 +266,57 @@ export function doctor({ cwd = process.cwd() } = {}) {
   }
 
   return { root, version, store, checks, ok: checks.every((check) => check.ok) };
+}
+
+/**
+ * 交付方式的检查：远程交付要确认远程存在、平台命令已装。
+ * 平台是否已登录不在 doctor 里验证，认证失败会在 submit 的 list 阶段报出来。
+ */
+export function deliveryCheck(root) {
+  let settings;
+  try {
+    settings = deliverySettings(readConfigAt(root));
+  } catch (error) {
+    return { id: "delivery", ok: false, detail: error.message };
+  }
+  if (settings.mode === "local") {
+    return { id: "delivery", ok: true, detail: `本地交付：由 harness merge 合入本地主分支，同步远程 ${settings.remote}` };
+  }
+  const url = git(root, ["remote", "get-url", settings.remote]);
+  if (url.status !== 0) {
+    return {
+      id: "delivery",
+      ok: false,
+      detail: `远程交付（${describeProvider(settings)}）：远程 ${settings.remote} 不存在，先 git remote add ${settings.remote} <地址>`,
+    };
+  }
+  const platform = platformStatus(settings.provider);
+  if (!platform.ok) {
+    return {
+      id: "delivery",
+      ok: false,
+      detail: `远程交付（${describeProvider(settings)}）：远程 ${settings.remote} 已配置，但平台命令 ${platform.bin} 不在 PATH 里，由人安装并运行 ${platform.login}`,
+    };
+  }
+  // 本地仓库不代表平台侧可用，认证与权限要到 submit 时才知道，但不能因此把“命令已就位”报成未验证。
+  return {
+    id: "delivery",
+    ok: true,
+    detail: `远程交付（${describeProvider(settings)}）：远程 ${settings.remote} 已配置，平台命令 ${platform.bin} 已安装；认证状态在 submit 时确认`,
+  };
+}
+
+function describeProvider(settings) {
+  return `${settings.provider}，远程 ${settings.remote}`;
+}
+
+/** doctor 读的是当前工作区的配置：首次接入阶段主分支还没有配置。 */
+function readConfigAt(root) {
+  try {
+    return loadCurrentProject(root).config;
+  } catch {
+    return {};
+  }
 }
 
 export function formatDoctor(report) {
