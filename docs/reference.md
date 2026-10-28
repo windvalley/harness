@@ -77,11 +77,11 @@ Agent 调用工具 ----> [1] 实时拦截：读写文件、执行命令之前按
 | `.harness/bin/harness`、`.harness/VERSION` | 入口与锁定的版本号 | 是 |
 | `.claude/settings.json`、`.codex/hooks.json` | 客户端的实时拦截配置 | 是 |
 | `AGENTS.md` 里的托管块 | Agent 每次都会加载的硬性要求：先读规范、任务分级、先红后绿、按门禁流程合并 | 是 |
-| `.harness/dsh-plugin/` | DeepSeek Harness 插件，含本机绝对路径 | 否 |
 | `.git/hooks/` 或 `core.hooksPath` 指向的目录 | `pre-commit`、`commit-msg`、`reference-transaction` 三个钩子 | 默认不入库 |
 | `.git/harness/` | 证据、评审、确认、实施授权、上报记录与账本 `ledger.jsonl`，所有 Worktree 共用；被其他工具占用时改用 `.git/harness.d/` | 否 |
 | `~/.local/share/harness/versions/<版本>/` | 按版本安装的门禁代码，本机所有项目共用 | 否 |
 | `~/.local/share/harness/evidence.key` | 签名密钥，权限 600 | 否 |
+| `~/.local/share/harness/dsh-plugin/` | DeepSeek Harness 插件，本机所有项目共用，按项目锁定的版本转发 | 否 |
 | `~/.cache/harness/checkouts/<哈希>/work` | verify 的固定检出，以分离头指针的 Linked Worktree 出现在 `git worktree list` 里 | 否 |
 
 ## 安装
@@ -145,7 +145,7 @@ node ~/github/harness/bin/harness.mjs init --dry-run
 node ~/github/harness/bin/harness.mjs init
 # 核对起始检查与项目真实命令，保留或迁移已有有效规则，再提交
 
-# 3. 提交；.harness/dsh-plugin/ 已加进 .gitignore，其余全部入库，包括入口 .harness/bin/harness
+# 3. 提交；全部入库，包括入口 .harness/bin/harness
 git add -A
 git commit -m "chore(harness): 接入门禁" -m "- 写入门禁配置、规则与入口
 - 接入 git 钩子与客户端拦截"
@@ -190,8 +190,9 @@ git commit -m "chore(harness): 接入门禁" -m "- 写入门禁配置、规则�
    配置了 `git.hooksDir` 时改为整份生成在那个目录，见“由 harness 接管 git 钩子目录”。
 6. `.claude/settings.json` 与 `.codex/hooks.json` 里的 `PreToolUse` 拦截，文件里的其他设置原样保留。
    `policy.json` 启用 `secrets`、`git-safety`、`gate-self` 与 `plan-first` 四个预设。
-7. `AGENTS.md` 里的托管块，以及 `.gitignore` 里的 `.harness/dsh-plugin/`；项目全局忽略 `bin/` 时自动放行入口。
-8. 本机的 DSH 插件目录 `.harness/dsh-plugin/`。
+7. `AGENTS.md` 里的托管块；项目的 `.gitignore` 会连带忽略入口时（例如全局忽略 `bin/`），自动放行入口。
+8. 本机共用的 DeepSeek Harness 插件 `~/.local/share/harness/dsh-plugin/`，见“客户端那一侧”。
+   已有的插件由更新的版本生成时保持不变。
 
 ### 已有其他门禁的项目
 
@@ -229,15 +230,28 @@ harness 不认识原有工具的配置格式，也不自动转换。
 - Codex：钩子要先被信任才会执行，未信任时命令不经过实时拦截，只有 git 层生效。
   在 Codex 里运行 `/hooks`，进入 `Review hooks` 后按 `t` 信任。
   信任按路径记录并绑定钩子内容的哈希：每个 Worktree 首次使用时各信任一次，钩子命令变化后要重新信任。
-- DeepSeek Harness：在自己的终端注册一次插件。
+- DeepSeek Harness：每台机器为用到的 profile 注册一次本机插件，所有项目共用；以后接入新项目、项目升级 harness 版本都不用再注册。
+
+桌面版的 profile 只能由 App 管理，独立安装的 `dsh` 会拒绝，要用 App 自带的命令行；App 把它装成 `/usr/local/bin/dsh` 后，也可以直接写 `dsh`。
+先打开一次桌面版完成初始化，再完全退出，然后在自己的终端运行：
 
 ```bash
-dsh plugin --profile <desktop|web> add <主 Worktree 路径>/.harness/dsh-plugin
+"/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh" plugin --profile desktop add ~/.local/share/harness/dsh-plugin
 ```
 
-`--profile` 必须与实际使用的 DeepSeek Harness 一致：桌面版用 `desktop`，浏览器版用 `web`。
-用别的名称会新建一个独立的 profile，桌面版和浏览器版都不会加载它。
-注册的是主 Worktree 里的插件目录，升级合并后 harness 会重写它，让它指向新版本的代码；重启 DeepSeek Harness，确保加载的是新插件。
+浏览器版：
+
+```bash
+dsh plugin --profile web add ~/.local/share/harness/dsh-plugin
+```
+
+`--profile` 只能是 `desktop` 或 `web`，用别的名称会新建一个独立的 profile，桌面版和浏览器版都不会加载它。
+注册后重启 DeepSeek Harness。
+插件只做转发：按会话所在仓库的入口锁定的版本，导入那个版本的门禁代码判定，与 Claude Code、Codex 经入口执行的版本一致。
+本机没有安装项目锁定的版本时，这个项目里的工具调用一律被拒绝，并提示运行 `install --local`。
+没有入口的仓库用本机最新的版本判定：未接入 harness 的放行，主分支已有配置的照常拦截；不是 Git 仓库的目录直接放行。
+插件本身由 `harness install` 与 `install --local` 维护，插件内容更新后重启 DeepSeek Harness 生效；项目升级 harness 版本不需要重启。
+`harness doctor` 的 `client:dsh` 报告两个 profile 是否注册了本机插件，注册的是旧版生成在项目里的插件时报 `[!!]` 并给出改注册的命令。
 
 | 客户端 | 实时拦截 | 状态 |
 | --- | --- | --- |
@@ -245,8 +259,8 @@ dsh plugin --profile <desktop|web> add <主 Worktree 路径>/.harness/dsh-plugin
 | Claude 桌面版 | 同一套钩子实现 | 仅静态确认，未端到端实测 |
 | Codex CLI | `.codex/hooks.json` 的 `PreToolUse` | 已实测；需先信任钩子 |
 | Codex 桌面版（ChatGPT.app 内置引擎） | 同上 | 已实测；需先信任钩子 |
-| DeepSeek Harness 桌面版 | Cordis 插件 `tools/pre-execute` | 需自行注册插件；已在运行中的桌面版里看到插件放行正常调用、拒绝信息送达 Agent |
-| DeepSeek Harness 浏览器版 | 同上 | 未实测 |
+| DeepSeek Harness 桌面版 | Cordis 插件 `tools/pre-execute` | 需注册一次本机插件；旧版的项目插件曾在运行中的桌面版里实测，本机插件已实测注册、配置组合与在桌面版内置 Node 中的转发，尚未在运行中的桌面版里端到端实测 |
+| DeepSeek Harness 浏览器版 | 同上 | 已实测注册与配置组合，未端到端实测 |
 
 git 层对所有客户端生效，实时拦截没接上时，提交检查与主分支保护仍然有效。
 `harness doctor` 逐项报告接入状态，`[!!]` 表示需要处理，`[?]` 表示文件已就位但客户端是否真正调用尚未实测。
@@ -540,7 +554,7 @@ node ~/github/harness/bin/harness.mjs install --local
 ```
 
 `install --local` 读取项目锁定的版本：harness 仓库当前就是这个版本时直接安装，否则从对应的标签（例如 `v0.7.2`）导出那一版安装。
-然后写入本机的 git 钩子和 DSH 插件目录，不改动任何入库文件。
+然后写入本机的 git 钩子和共用的 DeepSeek Harness 插件，不改动任何入库文件。
 找不到标签时先运行 `git -C ~/github/harness fetch --tags`。
 
 装好之前：
@@ -550,6 +564,7 @@ node ~/github/harness/bin/harness.mjs install --local
   钩子目录入库、且 `core.hooksPath` 已经指向它时（例如安装依赖时由 husky 设置），提交照常进行、只打印提示，写主分支一律被拒绝。
 
 Codex 的钩子信任按路径记录，新机器上同样要在 Codex 里信任一次。
+DeepSeek Harness 在新机器上注册一次本机插件，见“客户端那一侧”。
 
 ## 升级
 
@@ -886,7 +901,8 @@ harness 防的是 Agent 的误操作，以及被提示注入后常见的绕过�
 - 默认的 `.git/hooks` 不入库，目前没有规则阻止 Agent 直接改写或删除其中的钩子，也没有拦截 `harness uninstall`。
   钩子被删除或摘掉 harness 的块时，`harness doctor` 会报出来。
 - 路径规则只约束写文件、读文件类的工具调用，用 shell 命令读写同一个文件要靠 `shell-forbid` 一类的命令规则覆盖。
-- Codex 没有信任钩子时没有实时拦截；DeepSeek Harness 浏览器版没有实测；Claude 桌面版只做了静态确认。
+- Codex 没有信任钩子时没有实时拦截；DeepSeek Harness 的本机插件尚未在运行中的客户端里端到端实测；Claude 桌面版只做了静态确认。
+- 本机共用的 DSH 插件和版本目录都在用户目录里，目前没有规则阻止 Agent 用命令改写它们。
 - `harness worktree clean` 判断有没有会话在用某个 Worktree，只看进程的工作目录，DeepSeek Harness 这类客户端看不出来，要靠锁定保护。
   删除前只停得掉项目在 `worktree.cleanup` 里写明的服务与数据库。
 - 任务分级与先红后绿的判断仍由 Agent 做出，门禁只兜底可以机械判定的部分：
@@ -919,6 +935,10 @@ harness 防的是 Agent 的误操作，以及被提示注入后常见的绕过�
 | `拒绝直接更新 refs/heads/main` | 主分支只接受 `harness merge`；拉取远端见“与远端同步” |
 | `另一个合并正在进行` | 等那个合并结束后重试 |
 | Codex 里的命令没被拦截 | 钩子还没信任，在 Codex 里运行 `/hooks` 信任 |
+| `doctor` 报 `client:dsh` 注册的是旧版生成在项目里的插件 | 0.8.0 起插件改为本机共用一份，按输出的命令重新注册一次，同名的旧注册会被替换；桌面版先完全退出，注册后重启 |
+| 注册桌面版插件时报 `profile "desktop" is managed exclusively by the Electron application` | 独立安装的 `dsh` 不能管理桌面版的 profile，改用 App 自带的命令行，见“客户端那一侧” |
+| 注册桌面版插件时报 `Open DeepSeek Harness Desktop once to initialize its profile` | 先打开一次桌面版完成初始化，再完全退出后重试 |
+| DeepSeek Harness 里工具调用被拒绝，提示本机没有安装门禁锁定的版本 | 会话所在项目锁定的版本没装在本机，由人在项目目录运行 `node ~/github/harness/bin/harness.mjs install --local` |
 | DeepSeek Harness 桌面版里所有工具都被拒绝，提示门禁无法加载项目配置 | 已接入项目在 0.6.0 会因插件缺少工作目录服务依赖出现此问题，升级到 0.7.0 以上；0.7.1 及更早版本在非 Git 会话目录也会误拒，升级到 0.7.2 以上后重启 DeepSeek Harness |
 | `harness worktree clean --yes` 很久没有输出 | 0.7.0 删除时不输出进度，每个 Worktree 又要好几秒；升级到 0.7.1 后逐个输出，Ctrl-C 会处理完当前这个再停 |
 | 中断清理后留下 git 已不认识的目录 | 0.7.0 被 Ctrl-C 打断时可能删到一半；确认目录里已经没有文件后手工删除 |
@@ -936,5 +956,5 @@ harness prune --dry-run       # 预览清理旧版本，默认只保留当前版
 ```
 
 卸载由人在主 Worktree 里执行：共用的 git 钩子立即摘除，主分支保护随之解除，然后像普通仓库一样提交删除的文件。
-卸载不删除版本目录，其他接入的项目不受影响。
+卸载不删除版本目录和本机共用的 DSH 插件，其他接入的项目不受影响；旧版生成在项目里的 `.harness/dsh-plugin/` 会一并删除。
 版本目录被本机所有项目共用，清理前确认没有其他项目锁定着要删的版本，需要保留的用 `--keep` 列出。

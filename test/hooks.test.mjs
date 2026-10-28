@@ -117,9 +117,8 @@ describe("安装与自检", () => {
     }
     assert.match(readFileSync(join(repo.root, ".claude/settings.json"), "utf8"), /\.harness\/bin\/harness.*hook --client claude/);
     assert.match(readFileSync(join(repo.root, ".codex/hooks.json"), "utf8"), /\.harness\/bin\/harness.*hook --client codex/);
-    // 入口入库，Linked Worktree 检出后直接可用；带绝对路径的 DSH 插件目录仍在忽略里。
+    // 入口入库，Linked Worktree 检出后直接可用。
     assert.equal(git(repo.root, "ls-files", ".harness/bin/harness"), ".harness/bin/harness");
-    assert.match(readFileSync(join(repo.root, ".gitignore"), "utf8"), /\.harness\/dsh-plugin\//);
   });
 
   test("重装 Codex 钩子保留其他工具的条目，--take-over 才移除", () => {
@@ -141,18 +140,6 @@ describe("安装与自检", () => {
     const taken = JSON.parse(readFileSync(file, "utf8")).hooks;
     assert.ok(!commands(taken.PreToolUse).includes("other-guard"));
     assert.deepEqual(commands(taken.PostToolUse), ["other-log"], "接管只动拦截，不动其他事件");
-  });
-
-  test("DSH 插件被复制到项目后仍能加载", () => {
-    const repo = setup();
-    const entry = join(repo.root, ".harness/dsh-plugin/index.mjs");
-    assert.ok(existsSync(entry), "应生成插件入口");
-    const source = readFileSync(entry, "utf8");
-    // 插件从版本目录导入，不能残留源码树里的相对路径。
-    assert.doesNotMatch(source, /\.\.\/\.\.\/src\//);
-    const loaded = sh(repo.root, process.execPath, ["-e", 'import("./.harness/dsh-plugin/index.mjs").then(m=>console.log(typeof m.apply)).catch(e=>{console.error(e.message);process.exit(1)})'], repo.env);
-    assert.equal(loaded.status, 0, loaded.stderr);
-    assert.equal(loaded.stdout.trim(), "function");
   });
 
   test("init 会写出配置、规则与托管块，且可重复执行", () => {
@@ -581,6 +568,13 @@ describe("多 Worktree 与已有钩子", () => {
     // 再装一次不重复追加
     assert.equal(repo.rawCli("install").status, 0);
     assert.equal(readFileSync(join(repo.root, ".gitignore"), "utf8"), text);
+  });
+
+  test("去掉旧版要求的 .harness/bin/ 忽略规则，入口不再被忽略", () => {
+    const repo = setup({ install: false, files: { ".gitignore": "*.log\n.harness/bin/\n" } });
+    assert.equal(repo.rawCli("install").status, 0);
+    assert.equal(readFileSync(join(repo.root, ".gitignore"), "utf8"), "*.log\n");
+    assert.notEqual(sh(repo.root, "git", ["check-ignore", "-q", ".harness/bin/harness"], repo.env).status, 0);
   });
 
   test("本机没装入口锁定的版本时，提交照常进行，主分支仍受保护", () => {

@@ -1,5 +1,5 @@
 // DeepSeek Harness 的 Cordis 工具管线：exec.name + exec.arguments。
-// 插件通过 ctx.tools.guard(fn) 注册，返回字符串即拒绝，返回 undefined 放行。
+// 守卫插件在 tools/pre-execute 上拦截，按项目锁定的版本导入这里的 dsh，导出名是跨版本接口。
 // 这里的 normalize 同时供守卫插件与 `harness hook --client dsh` 复用。
 const SHELL = new Set(["bash", "pwsh", "shell"]);
 const WRITE = new Set(["write", "edit"]);

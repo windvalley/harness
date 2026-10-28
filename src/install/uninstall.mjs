@@ -12,6 +12,7 @@ const CLIENT_FILES = [".claude/settings.json", ".codex/hooks.json"];
 function plan({ root }) {
   const targets = [];
 
+  // .harness/dsh-plugin 是旧版生成在项目里的 DSH 插件；本机共用的插件服务其他项目，卸载不删。
   for (const rel of [".harness/bin", ".harness/dsh-plugin"]) {
     if (existsSync(join(root, rel))) targets.push({ kind: "path", rel });
   }

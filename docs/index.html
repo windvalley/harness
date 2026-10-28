@@ -695,9 +695,12 @@ footer { border-top: 1px solid var(--line); color: var(--muted); font-size: .88r
         <ul>
           <li><strong>Claude Code</strong>：重启正在运行的会话，钩子在会话启动时读入。</li>
           <li><strong>Codex</strong>：运行 <code>/hooks</code>，进入 <code>Review hooks</code> 后按 <code>t</code> 信任；每个 Worktree 首次使用时各信任一次。</li>
-          <li><strong>DeepSeek Harness</strong>：在自己的终端注册一次插件，<code>--profile</code> 桌面版用 <code>desktop</code>，浏览器版用 <code>web</code>：</li>
+          <li><strong>DeepSeek Harness</strong>：每台机器为用到的 profile 注册一次本机插件，所有项目共用，注册后重启。桌面版要用 App 自带的命令行，先打开一次桌面版再完全退出后运行；浏览器版用 <code>dsh</code>：</li>
         </ul>
-        <div class="code"><pre><code>dsh plugin --profile &lt;desktop|web&gt; add &lt;主 Worktree 路径&gt;/.harness/dsh-plugin</code></pre></div>
+        <div class="code"><pre><code># 桌面版
+"/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh" plugin --profile desktop add ~/.local/share/harness/dsh-plugin
+# 浏览器版
+dsh plugin --profile web add ~/.local/share/harness/dsh-plugin</code></pre></div>
         <p>完成当前客户端的操作后，告诉 Agent：“请检查接入状态，说明哪些已验证生效、哪些仍待验证。”由它运行诊断并说明结果，下面是输出示意：</p>
         <div class="code term"><span class="label">输出节选</span><pre><code>  [ok] git:reference-transaction: &lt;项目&gt;/.git/hooks/reference-transaction
   [ok] client:claude: PreToolUse 已接入（CLI 已验证；桌面版仅静态确认，未端到端实测）
@@ -869,7 +872,7 @@ HARNESS_MAIN_BYPASS=1 git merge --ff-only origin/main</code></pre></div>
       <li>签名密钥在你的用户目录里，能读到它的进程就能伪造记录。密钥损坏或怀疑泄露时，由人运行 <code>harness key rotate --yes</code>，已有记录全部作废。</li>
       <li><code>HARNESS_MAIN_BYPASS</code> 等环境变量与 <code>core.hooksPath</code> 能让门禁失效，只能由人使用，Agent 设置或读取会被拦截。</li>
       <li>路径规则只约束写文件、读文件类的工具调用；用 shell 命令读写同一个文件，要靠命令规则覆盖。</li>
-      <li>Codex 没有信任钩子时没有实时拦截；DeepSeek Harness 浏览器版未实测；Claude 桌面版只做了静态确认。git 层对它们都生效。</li>
+      <li>Codex 没有信任钩子时没有实时拦截；DeepSeek Harness 的本机插件尚未在运行中的客户端里端到端实测；Claude 桌面版只做了静态确认。git 层对它们都生效。</li>
       <li>任务分级与先红后绿仍由 Agent 判断，门禁只兜底能机械判定的部分；授权记录里的原话要靠你在合并输出或 <code>harness status</code> 里核对。</li>
     </ul>
 

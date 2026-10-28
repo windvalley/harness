@@ -518,7 +518,7 @@ function cmdInit(argv) {
     print("  再走 harness verify / review / confirm / merge，合并时会把这份配置变成主分支的信任根。");
     print("  项目规则允许、没有其他门禁且用户明确选择不走受控评审时，也可以直接在主分支提交，提交后即生效。");
   } else {
-    print(`  1. 检查并提交本次接入改动（不包含 .harness/dsh-plugin/，需要包含 .harness/bin/harness，保留用户原有改动）`);
+    print(`  1. 检查并提交本次接入改动（需要包含 .harness/bin/harness，保留用户原有改动）`);
     print(`  2. harness verify --branch ${branch}`);
     print(`  3. harness review --branch ${branch}`);
     print(`  4. Agent 展示摘要：harness confirm --branch ${branch}；看过后由人在自己的终端执行带 --yes 的确认，自然语言同意不能替代`);
@@ -538,6 +538,10 @@ function cmdInit(argv) {
     for (const note of notes) print(`  - ${note}`);
   }
   return 0;
+}
+
+function formatDshPlugin(dsh) {
+  return `DeepSeek Harness 插件（本机共用）: ${dsh.dir}${dsh.updated ? "，已更新，已注册的 DeepSeek Harness 重启后生效" : ""}`;
 }
 
 function currentBranchForStatus() {
@@ -582,6 +586,7 @@ export async function main(argv) {
           if (local.output) process.stdout.write(local.output);
           else print(`已刷新本机: 版本 ${local.published.version}${local.hooksTracked ? "；钩子目录随分支入库，无需刷新" : `；git 钩子 ${local.hooks.dir}`}`);
           if (local.hooksPath) print(`  ${formatHooksPath(local.hooksPath)}`);
+          if (local.dsh) print(`  ${formatDshPlugin(local.dsh)}`);
           return local.hooksPath?.state === "overridden" ? 1 : 0;
         }
         const result = installAll({ cwd: process.cwd(), takeOver: values["take-over"] });
@@ -590,6 +595,7 @@ export async function main(argv) {
         if (result.hooksPath) print(`  ${formatHooksPath(result.hooksPath)}`);
         print(`  Claude PreToolUse: ${result.claude}`);
         print(`  Codex hooks: ${result.codex}`);
+        print(`  ${formatDshPlugin(result.dsh)}`);
         if (result.gitignore.shimIgnored) {
           process.stderr.write(`[harness] 入口仍被 .gitignore 忽略，请手工放行 ${".harness/bin/harness"}，否则 Linked Worktree 里没有入口\n`);
           return 1;

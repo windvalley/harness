@@ -75,6 +75,8 @@ function shellLocator(root, base) {
  *   normalize(payload)   返回 { call, tool } 或 null（无法识别的工具放行）
  *   formatDeny(text)     返回 { exitCode, stderr }
  * call.kind 取 shell / write / read / search，所有客户端都归一到这四类；commit 只由 git 的 pre-commit 产生。
+ * 本机共用的 DSH 插件（assets/dsh/index.mjs）按项目锁定的版本导入这里的 guard 与 adapters/dsh.mjs 的 dsh，
+ * 两个文件的路径、导出名、参数与返回结构是跨版本接口，改动要兼容已发布的插件。
  */
 export function guard({ adapter, payload, log = () => {} }) {
   const cwd = payload?.cwd || process.cwd();

@@ -136,7 +136,7 @@ export function changedPaths(cwd, base, head) {
   return result.stdout.split("\0").filter(Boolean);
 }
 
-// harness 在本机生成、不入库的目录。首次接入时主分支还没有忽略它们，不能因此把主 Worktree 判成不洁净。
+// harness 在本机生成、不入库的目录（旧版生成在项目里的 DSH 插件）。首次接入时主分支还没有忽略它们，不能因此把主 Worktree 判成不洁净。
 export const LOCAL_ONLY_PATHS = [".harness/dsh-plugin"];
 
 export function statusShort(cwd, { exclude = LOCAL_ONLY_PATHS } = {}) {

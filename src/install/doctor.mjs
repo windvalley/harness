@@ -9,8 +9,10 @@ import { commandExists, maxDiffChars, resolveBackend } from "../review/review.mj
 import { resolvePolicy } from "../policy/resolve.mjs";
 import { packageVersion, MARK_START } from "./managed.mjs";
 import { leftoverWorktrees } from "../worktree/clean.mjs";
+import { describeRegistration, dshRegistrations } from "./dsh.mjs";
 import {
   currentHooksConfig,
+  dshPluginDir,
   gitHooksDir,
   HOOK_NAMES,
   hooksPathState,
@@ -108,6 +110,27 @@ function clientHookInstalled(file) {
 }
 
 /**
+ * DSH 插件本机只有一份，每个 profile 注册一次，所有项目共用。
+ * 没装 DSH 或还没注册不算失败，未必用它；注册的是别的目录（多半是旧版生成在项目里的插件）、
+ * 本机插件缺失或 profile 读不出来时算失败：DSH 加载不到插件会静默跳过，拦截悄悄失效。
+ */
+function dshCheck() {
+  const dir = dshPluginDir();
+  const registrations = dshRegistrations();
+  if (registrations.length === 0) {
+    return { id: "client:dsh", ok: true, detail: `未发现 DeepSeek Harness 的 desktop 或 web profile；使用时注册一次本机插件 ${dir}` };
+  }
+  const pluginOk = existsSync(join(dir, "index.mjs"));
+  const parts = [pluginOk ? `本机插件 ${dir}` : `本机插件 ${dir} 不存在，运行 harness install --local 生成`, ...registrations.map(describeRegistration)];
+  return {
+    id: "client:dsh",
+    ok: pluginOk && !registrations.some((item) => item.state === "other" || item.state === "unreadable"),
+    verified: registrations.some((item) => item.state === "registered"),
+    detail: parts.join("；"),
+  };
+}
+
+/**
  * 逐客户端检查安装状态。
  * codex 的钩子是否需要宿主信任，由宿主自己决定；这里只报“文件已就位、执行未验证”，
  * 不把没验证过的接入算成通过。
@@ -175,17 +198,7 @@ export function doctor({ cwd = process.cwd() } = {}) {
         : "钩子已接入但尚未信任：在 Codex 里运行 /hooks 批准一次，否则命令不会经过门禁",
   });
 
-  // DSH 插件目录带本机绝对路径且不入库，只在跑过 install 的 Worktree 里存在；不装 DSH 的项目也不必生成，因此不算失败。
-  const dsh = join(root, ".harness", "dsh-plugin");
-  const dshOk = existsSync(join(dsh, "index.mjs"));
-  checks.push({
-    id: "client:dsh",
-    ok: true,
-    verified: dshOk,
-    detail: dshOk
-      ? `插件目录已生成: ${dsh}；需在 DSH 中注册: dsh plugin --profile <desktop|web> add ${dsh}（桌面版用 desktop，浏览器版用 web）`
-      : "未生成 DSH 插件目录；需要用 DeepSeek Harness 时在本 Worktree 运行 harness install",
-  });
+  checks.push(dshCheck());
 
   const configOk = existsSync(join(root, ".harness", "config.json"));
   checks.push({ id: "project:config", ok: configOk, detail: configOk ? "项目配置存在" : "缺少 .harness/config.json" });

@@ -1,5 +1,5 @@
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { isAbsolute, join, relative } from "node:path";
+import { dirname, isAbsolute, join, relative } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 import { PACKAGE_ROOT } from "../policy/resolve.mjs";
@@ -538,10 +538,6 @@ export function writeCodexHooks({ root, takeOver = false }) {
   return file;
 }
 
-function versionImport(version, rel) {
-  return `${versionDir(version)}/src/${rel}`;
-}
-
 const SHIM_REL = ".harness/bin/harness";
 
 /**
@@ -554,12 +550,14 @@ export function ensureGitignore({ root }) {
   const original = existsSync(file) ? readFileSync(file, "utf8") : "";
   // 0.2 及以前要求忽略 .harness/bin/，现在入口要入库，把这一行去掉。
   const lines = original.split("\n").filter((line) => line.trim() !== ".harness/bin/");
+  const legacy = lines.length !== original.split("\n").length;
   while (lines.length > 0 && lines.at(-1) === "") lines.pop();
+  const save = () => writeFileSync(file, lines.length > 0 ? `${lines.join("\n")}\n` : "");
   const ensure = (line) => {
     if (!lines.some((item) => item.trim() === line)) lines.push(line);
-    writeFileSync(file, `${lines.join("\n")}\n`);
+    save();
   };
-  ensure(".harness/dsh-plugin/");
+  if (legacy) save();
   // 父目录被排除时单独放行文件无效，先放行目录本身，仍被忽略再放行文件。
   const ignored = () => git(root, ["check-ignore", "--quiet", "--no-index", SHIM_REL]).status === 0;
   if (ignored()) ensure("!.harness/bin/");
@@ -567,37 +565,50 @@ export function ensureGitignore({ root }) {
   return { file, shimIgnored: ignored() };
 }
 
-/** DSH 插件目录：Cordis 包，由用户在自己的终端注册到 profile。 */
-export function writeDshPlugin({ root }) {
-  const dir = join(root, ".harness", "dsh-plugin");
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(
-    join(dir, "package.json"),
-    `${JSON.stringify(
-      {
-        name: "harness-guard",
-        version: packageVersion(),
-        private: true,
-        type: "module",
-        main: "./index.mjs",
-        dsh: { bundle: { patch: "./cordis.patch.yml" } },
-      },
-      null,
-      2,
-    )}\n`,
-  );
-  writeFileSync(join(dir, "cordis.patch.yml"), "- insert:\n    - id: harness-guard\n      name: harness-guard\n");
-  copyFileSync(join(PACKAGE_ROOT, "assets", "dsh", "index.mjs"), join(dir, "index.mjs"));
-  // 插件被复制到项目里，源码里的相对路径已失效，必须改写为指向已安装版本目录的绝对路径。
-  const entry = join(dir, "index.mjs");
+/** 本机共用的 DeepSeek Harness 插件目录，与版本目录同级；每个 profile 注册一次，所有项目共用。 */
+export function dshPluginDir() {
+  return join(dirname(storeRoot()), "dsh-plugin");
+}
+
+const DSH_STORE_MARK = '"@@HARNESS_STORE@@"';
+
+/**
+ * 写本机共用的 DSH 插件（Cordis 组合包），由用户在 DSH 里注册。
+ * 插件按会话所在仓库锁定的版本导入门禁代码，与哪个项目、哪个版本生成它无关。
+ * 已有的插件由更新的版本生成时保持不变，旧版本的 install 不会把它换回旧代码。
+ */
+export function writeDshPlugin() {
+  const dir = dshPluginDir();
   const version = packageVersion();
-  const rewritten = readFileSync(entry, "utf8")
-    .split("../../src/adapters/index.mjs")
-    .join(versionImport(version, "adapters/index.mjs"))
-    .split("../../src/adapters/dsh.mjs")
-    .join(versionImport(version, "adapters/dsh.mjs"));
-  writeFileSync(entry, rewritten);
-  return dir;
+  const manifestFile = join(dir, "package.json");
+  if (existsSync(manifestFile)) {
+    let current = null;
+    try {
+      current = JSON.parse(readFileSync(manifestFile, "utf8")).version;
+    } catch {
+      // 读不出版本的插件按损坏处理，下面整份重写。
+    }
+    if (typeof current === "string" && current.localeCompare(version, undefined, { numeric: true }) > 0) {
+      return { dir, version: current, updated: false };
+    }
+  }
+  const source = readFileSync(join(PACKAGE_ROOT, "assets", "dsh", "index.mjs"), "utf8");
+  if (!source.includes(DSH_STORE_MARK)) throw new Error("DSH 插件模板缺少版本目录占位");
+  const manifest = { name: "harness-guard", version, private: true, type: "module", main: "./index.mjs", dsh: { bundle: { patch: "./cordis.patch.yml" } } };
+  const files = {
+    "package.json": `${JSON.stringify(manifest, null, 2)}\n`,
+    "cordis.patch.yml": "- insert:\n    - id: harness-guard\n      name: harness-guard\n",
+    "index.mjs": source.split(DSH_STORE_MARK).join(JSON.stringify(storeRoot())),
+  };
+  mkdirSync(dir, { recursive: true });
+  let updated = false;
+  for (const [name, body] of Object.entries(files)) {
+    const file = join(dir, name);
+    if (existsSync(file) && readFileSync(file, "utf8") === body) continue;
+    writeFileSync(file, body);
+    updated = true;
+  }
+  return { dir, version, updated };
 }
 
 export function installAll({ cwd, takeOver = false }) {
@@ -615,14 +626,14 @@ export function installAll({ cwd, takeOver = false }) {
   const hooksPath = hooksConfig ? ensureHooksPath({ root, hooks: hooksConfig }) : null;
   const claude = writeClaudeSettings({ root, takeOver });
   const codex = writeCodexHooks({ root, takeOver });
-  const dsh = writeDshPlugin({ root });
+  const dsh = writeDshPlugin();
   const gitignore = ensureGitignore({ root });
   const shimTracked = git(root, ["ls-files", "--error-unmatch", SHIM_REL]).status === 0;
   return { root, published, shim, hooks, hooksPath, claude, codex, dsh, gitignore, shimTracked };
 }
 
 /**
- * 只刷新本机这一份：安装版本、所有 Worktree 共用的钩子目录、DSH 插件目录，不碰任何入库文件。
+ * 只刷新本机这一份：安装版本、所有 Worktree 共用的钩子目录、本机共用的 DSH 插件，不碰任何入库文件。
  * 合并工具在入口或钩子改动合入后，用新入口在主 Worktree 调用它，保证共用钩子与新版本一致。
  * 项目接管了钩子目录时，钩子文件随分支入库，这里只让 core.hooksPath 指向主 Worktree 里的那份。
  */
@@ -637,7 +648,7 @@ export function installLocal({ cwd }) {
   // 入库的钩子随分支分发，合入时已经是新内容；只刷新共用目录，避免把主 Worktree 改脏。
   const hooks = tracked ? null : writeGitHooks({ root });
   const hooksPath = hooksConfig ? ensureHooksPath({ root, hooks: hooksConfig }) : null;
-  const dsh = writeDshPlugin({ root });
+  const dsh = writeDshPlugin();
   return { root, published, hooks, hooksTracked: tracked, hooksPath, dsh };
 }
 
@@ -662,15 +673,16 @@ function installPinned({ root, version }) {
     fromTag = true;
   }
   const cli = join(versionDir(version), "src", "cli.mjs");
+  // DSH 插件本机只有一份、按项目锁定的版本转发，由当前代码维护；旧版本自己的 install 不会生成它。
   // 0.3 及以前没有 --local，它的 install 会重写入库文件；这时只装版本，共用钩子由当前代码补上。
   if (existsSync(cli) && readFileSync(cli, "utf8").includes("installLocal")) {
     const delegated = run(process.execPath, [storeEntry(version), "install", "--local"], { cwd: root });
     if (delegated.status !== 0) throw new Error(`版本 ${version} 刷新本机失败: ${delegated.stderr.trim()}`);
-    return { root, published: { version }, fromTag, output: delegated.stdout };
+    return { root, published: { version }, fromTag, output: delegated.stdout, dsh: writeDshPlugin() };
   }
   const { tracked } = hooksPlacement(root);
   const hooks = tracked ? null : writeGitHooks({ root });
-  return { root, published: { version }, fromTag, hooks, hooksTracked: tracked };
+  return { root, published: { version }, fromTag, hooks, hooksTracked: tracked, dsh: writeDshPlugin() };
 }
 
 function publishFromTag(version) {

@@ -132,6 +132,8 @@ export function makeRepo({ files = {}, project = {}, install = true, trustCodex 
     HARNESS_CACHE_DIR: join(base, "cache"),
     // 夹具自带 Codex 用户目录，避免读到本机真实配置，也便于模拟“已信任钩子”。
     CODEX_HOME: join(base, "codex-home"),
+    // 同理隔离 DeepSeek Harness 的 profile 目录。
+    DSH_HOME: join(base, "dsh-home"),
   };
 
   REPO_ENV.set(root, env);
@@ -158,8 +160,7 @@ export function makeRepo({ files = {}, project = {}, install = true, trustCodex 
   if (install) {
     const published = sh(root, process.execPath, [join(PACKAGE_ROOT, "bin", "harness.mjs"), "install"], env);
     if (published.status !== 0) throw new Error(`安装失败: ${published.stderr}`);
-    // 入口 shim 入库，Linked Worktree 检出即可用；只忽略带本机绝对路径的 DSH 插件目录。
-    write(root, ".gitignore", ".harness/dsh-plugin/\n");
+    // 入口 shim 入库，Linked Worktree 检出即可用。
     const bypass = { ...env, HARNESS_MAIN_BYPASS: "1" };
     git(root, "add", "-A", bypass);
     git(root, "commit", "-q", "--no-verify", "-m", "chore: 提交门禁入口\n\n- 入口由 install 生成\n- 随仓库分发", bypass);

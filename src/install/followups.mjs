@@ -2,8 +2,8 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { entryPaths } from "../lib/config.mjs";
 import { matchAny } from "../lib/glob.mjs";
-import { commandExists } from "../review/review.mjs";
 import { codexTrustState } from "./doctor.mjs";
+import { describeRegistration, dshRegistrations } from "./dsh.mjs";
 import { worktreeHooksConfig } from "./install.mjs";
 
 /**
@@ -30,8 +30,14 @@ export function followUps({ mainRoot, changed = [], bootstrap = false, hooksDirB
       notes.push("Codex 钩子内容变了，原有信任随内容失效，在 Codex 里运行 /hooks 重新信任");
     }
   }
-  if (bootstrap && commandExists("dsh") && existsSync(join(mainRoot, ".harness", "dsh-plugin", "index.mjs"))) {
-    notes.push(`DeepSeek Harness 注册插件: dsh plugin --profile <desktop|web> add ${join(mainRoot, ".harness", "dsh-plugin")}（桌面版用 desktop，浏览器版用 web）`);
+  // DSH 插件本机只有一份、所有项目共用：首次接入或升级改了入口时，DSH 里还没有注册本机插件就提示一次。
+  if (bootstrap || touched(".harness/bin/harness")) {
+    const registrations = dshRegistrations();
+    const pending = registrations.filter((item) => item.state !== "registered");
+    const stale = pending.some((item) => item.state !== "none");
+    if (stale || (pending.length > 0 && pending.length === registrations.length)) {
+      notes.push(`DeepSeek Harness 注册本机插件（每个 profile 一次，所有项目共用，注册后重启 DeepSeek Harness）: ${pending.map(describeRegistration).join("；")}`);
+    }
   }
   return notes;
 }
