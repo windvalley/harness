@@ -149,6 +149,7 @@ td code { white-space: nowrap; }
 
 .code { position: relative; margin: 1rem 0; }
 .code pre { margin: 0; background: var(--code-bg); border: 1px solid var(--line); border-radius: 8px; padding: 34px 16px 14px; overflow-x: auto; font-size: .85rem; line-height: 1.65; }
+.code pre.prompt, .code pre.prompt code { white-space: pre-wrap; overflow-wrap: anywhere; }
 .code .c { color: var(--muted); }
 .code .label { position: absolute; top: 8px; left: 16px; font-size: .75rem; color: var(--muted); }
 .copy { position: absolute; top: 6px; right: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--muted); border-radius: 5px; font-size: .75rem; padding: 1px 8px; cursor: pointer; opacity: .85; }
@@ -671,32 +672,23 @@ footer { border-top: 1px solid var(--line); color: var(--muted); font-size: .88r
 
     <ol class="steps">
       <li>
-        <h4>获取 harness</h4>
-        <div class="code"><pre><code>git clone https://github.com/windvalley/harness.git ~/github/harness</code></pre></div>
-        <p>没有 npm 依赖，也不需要全局安装。克隆到别的目录也可以，把后面命令里的路径换掉即可。</p>
+        <h4>在项目里向 Agent 提出接入请求</h4>
+        <p>在 AI 编程客户端中打开待接入项目，把下面的话发给 Agent。它会检查环境、查找本机已有的 harness，没有时从官方仓库获取；没有 npm 依赖，也不需要全局安装。</p>
+        <div class="code"><span class="label">发给 Agent</span><pre class="prompt"><code>请阅读 https://github.com/windvalley/harness 的 README 和 docs/reference.md，帮当前项目接入 harness。
+先检查项目规则、Git 状态、已有钩子和检查命令，选择符合项目约束的接入方式，并保留已有有效检查。
+由你完成接入、验证和独立评审；需要我决定冲突或亲自操作时，说明原因并给出具体步骤。
+完成必要确认后，继续完成已获授权的本地合并，汇报结果、验证证据和待处理项。</code></pre></div>
       </li>
       <li>
-        <h4>在任务分支里接入项目</h4>
-        <p>接入本身也走一遍门禁流程。建议在 Linked Worktree 里做，让主 Worktree 一直停在主分支且洁净，<code>merge</code> 要在那里更新主分支。</p>
-        <div class="code"><pre><code>cd &lt;项目&gt;        <span class="c"># 主 Worktree，停在 main 且洁净</span>
-git worktree add -b chore/harness-onboard ../&lt;项目&gt;-onboard main
-cd ../&lt;项目&gt;-onboard
-
-node ~/github/harness/bin/harness.mjs init --dry-run   <span class="c"># 预览将写入的文件，不落盘</span>
-node ~/github/harness/bin/harness.mjs init
-git add -A
-git commit -m "chore(harness): 接入门禁" -m "- 写入门禁配置、规则与入口"</code></pre></div>
-        <p><code>init</code> 会写入 <code>.harness/</code> 配置与规则、入口脚本、三个 git 钩子、客户端拦截配置和 <code>AGENTS.md</code> 托管块，并按技术栈生成起始检查（<code>go.mod</code>、<code>frontend/package.json</code>、<code>Cargo.toml</code>、pytest 配置）。</p>
-        <p>项目里已有 husky、自定义钩子等其他门禁时，先看 <code>--dry-run</code> 列出的冲突和处理建议，详见<a href="https://github.com/windvalley/harness/blob/main/docs/reference.md#已有其他门禁的项目">参考手册</a>。</p>
+        <h4>查看接入方案与检查配置</h4>
+        <p>Agent 调查并预览接入改动，按项目规则准备任务分支和工作环境，再写入配置、提交、验证与独立评审。用户不需要先创建 Worktree，也不一律需要新建一个；同目录任务分支、已有隔离工作区或新建 Linked Worktree 都按实际约束选择。</p>
+        <p><code>init</code> 会写入配置、规则、入口、git 钩子、客户端配置和 <code>AGENTS.md</code> 托管块。起始检查需要对照项目真实命令核实，占位与未执行项应明确列出。</p>
+        <p>已有 husky、自定义钩子等其他门禁时，Agent 应说明保留或迁移方式，需要舍弃现有规则时先由你决定。详细命令见<a href="https://github.com/windvalley/harness/blob/main/docs/reference.md#首次接入">参考手册</a>。</p>
       </li>
       <li>
-        <h4>验证、评审、确认、合并</h4>
-        <div class="code"><pre><code>.harness/bin/harness verify  --branch chore/harness-onboard
-.harness/bin/harness review  --branch chore/harness-onboard
-.harness/bin/harness confirm --branch chore/harness-onboard          <span class="c"># 只读摘要</span>
-.harness/bin/harness confirm --branch chore/harness-onboard --yes    <span class="c"># 由人执行</span>
-.harness/bin/harness merge   --branch chore/harness-onboard</code></pre></div>
-        <p>首次接入一定要人确认：<code>confirm</code> 的摘要会列出涉及的门禁文件、将生效的规则数与检查项。只有带 <code>--yes</code> 的这一条必须由人执行，在 Claude Code 里可以用 <code>!</code> 前缀直接运行；其余步骤都可以交给 Agent。</p>
+        <h4>亲自确认门禁改动，再让 Agent 继续</h4>
+        <p>首次接入走受控合并时，Agent 展示涉及的门禁文件、将生效的规则与检查项，并给出包含实际路径和分支的确认命令。看过摘要后，由你在自己的终端执行带 <code>--yes</code> 的确认；在 Claude Code 中也可以用 <code>!</code> 前缀亲自执行。</p>
+        <p>对话里的同意不能代替这条人工确认。执行后告诉 Agent“已确认，请继续”，由它完成已获授权的本地合并并汇报结果。</p>
       </li>
       <li>
         <h4>让客户端用上实时拦截</h4>
@@ -706,23 +698,21 @@ git commit -m "chore(harness): 接入门禁" -m "- 写入门禁配置、规则�
           <li><strong>DeepSeek Harness</strong>：在自己的终端注册一次插件，<code>--profile</code> 桌面版用 <code>desktop</code>，浏览器版用 <code>web</code>：</li>
         </ul>
         <div class="code"><pre><code>dsh plugin --profile &lt;desktop|web&gt; add &lt;主 Worktree 路径&gt;/.harness/dsh-plugin</code></pre></div>
-        <p>最后在主 Worktree 运行 <code>.harness/bin/harness doctor</code>，逐项检查接入状态：</p>
+        <p>完成当前客户端的操作后，告诉 Agent：“请检查接入状态，说明哪些已验证生效、哪些仍待验证。”由它运行诊断并说明结果，下面是输出示意：</p>
         <div class="code term"><span class="label">输出节选</span><pre><code>  [ok] git:reference-transaction: &lt;项目&gt;/.git/hooks/reference-transaction
   [ok] client:claude: PreToolUse 已接入（CLI 已验证；桌面版仅静态确认，未端到端实测）
   [!!] client:codex: 钩子已接入但尚未信任：在 Codex 里运行 /hooks 批准一次，否则命令不会经过门禁
   [ok] project:main: 配置取自主分支 main
   [ok] main-worktree: &lt;项目&gt; 停在 main 且洁净，可以接收合并</code></pre></div>
-        <p><code>[!!]</code> 表示需要处理，<code>[?]</code> 表示文件已就位但客户端是否真正调用尚未实测。</p>
+        <p><code>[!!]</code> 表示需要处理，<code>[?]</code> 表示仍待验证。配置就位、产品曾经实测与当前客户端实际调用已验证分别说明，不能只凭初始化成功宣布全部接入完成。</p>
       </li>
       <li>
-        <h4>收尾</h4>
-        <div class="code"><pre><code>cd ../&lt;项目&gt;
-git worktree remove ../&lt;项目&gt;-onboard
-git branch -d chore/harness-onboard</code></pre></div>
+        <h4>检查结果，保留任务工作区</h4>
+        <p>确认接入已按约定合入，真实检查与验证、评审证据齐全，诊断中的待处理项有明确解释。接入分支和任务 Worktree 保留，需要清理时再按<a href="#cleanup">清理流程</a>发起请求。</p>
       </li>
     </ol>
     <div class="callout warn">
-      <p>小项目没有其他门禁、也不需要评审时，可以直接在主分支上运行 <code>init</code> 并提交；提交之后主分支立即受保护，再有改动就要走任务分支和 <code>harness merge</code>。</p>
+      <p>项目规则允许、没有其他门禁且你明确选择不走受控评审的小项目，可采用主分支直接接入的简化方式。由 Agent 先说明区别，再由你决定，见<a href="https://github.com/windvalley/harness/blob/main/docs/reference.md#小项目直接在主分支接入">参考手册</a>。</p>
     </div>
 
     <!-- ============ 日常 ============ -->
@@ -730,23 +720,24 @@ git branch -d chore/harness-onboard</code></pre></div>
     <p>规则已经写进项目（<code>AGENTS.md</code> 托管块与 <code>.harness/rules/</code>），平时只需要告诉 Agent 这次做什么、按什么节奏。下文的 <code>harness</code> 都指项目里的入口 <code>.harness/bin/harness</code>。</p>
 
     <h3 id="prompts">配合使用的提示词</h3>
-    <div class="code"><span class="label">开始任务</span><pre><code>需求：&lt;描述&gt;
-按 harness 规则先判断任务分级并说明依据。属于先方案后实施的，先探索仓库再逐个问我，方案提交后停下等我说开始。</code></pre></div>
-    <div class="code"><span class="label">澄清完毕</span><pre><code>问题问完了，写验收清单、spec 和 plan，提交到任务分支后给我看。</code></pre></div>
-    <div class="code"><span class="label">授权实施</span><pre><code>可以，开始实施。</code></pre></div>
+    <div class="code"><span class="label">开始任务</span><pre class="prompt"><code>请完成 &lt;具体需求&gt;，预期行为是 &lt;可观察结果&gt;。
+完成后给出查看效果的入口、验收结果和最终合并状态。</code></pre></div>
+    <p>Agent 自行判断任务分级，需要先方案后实施的任务，再按下面的对话继续：</p>
+    <div class="code"><span class="label">澄清完毕</span><pre class="prompt"><code>问题问完了，写验收清单、spec 和 plan，提交到任务分支后给我看。</code></pre></div>
+    <div class="code"><span class="label">授权实施</span><pre class="prompt"><code>可以，开始实施。</code></pre></div>
     <p>最后一句就是授权，Agent 会照录原话记下授权，然后按 plan 先红后绿连续做到完成。</p>
 
     <h3 id="one-task">一次任务</h3>
-    <div class="code"><pre><code>cd &lt;项目&gt;
-git worktree add -b feat/login ../&lt;项目&gt;-login main
-cd ../&lt;项目&gt;-login
-<span class="c"># 可选：写验收清单 .harness/acceptance/feat-login.md</span>
-<span class="c"># 实现并提交</span>
-harness verify --branch feat/login   <span class="c"># 选检查，在固定检出里执行，写签名证据</span>
-harness review --branch feat/login   <span class="c"># 独立评审</span>
-harness status --branch feat/login   <span class="c"># 只读：还差哪几步才能合并</span>
-harness merge  --branch feat/login   <span class="c"># 核对证据与评审，更新主分支</span></code></pre></div>
-    <p><code>status</code> 一眼看出还差什么：</p>
+    <p>首次尝试选一个范围明确的小需求，例如给现有列表页补充空状态，直接对 Agent 说：</p>
+    <div class="code"><span class="label">需求示例</span><pre class="prompt"><code>请给现有列表页增加空状态提示：没有数据时显示“暂无数据”，有数据时正常显示列表。
+完成后告诉我如何查看效果，并给出验收结果和最终合并状态。</code></pre></div>
+    <p>Agent 负责准备任务分支及需要的 Worktree，完成实现、提交、验证与独立评审，再按项目授权处理本地合并。需要方案时先交出方案等你同意，平常不必重复安排命令。</p>
+    <ul>
+      <li><strong>看效果</strong>：从约定入口查看，空列表显示“暂无数据”，有数据时列表正常。</li>
+      <li><strong>看证据</strong>：验收逐条对应需求，验证与独立评审有结果，未执行项与阻塞明确列出。</li>
+      <li><strong>看状态</strong>：说明已合并、待授权合并还是被阻塞，并给出分支、提交与工作区位置。</li>
+    </ul>
+    <p>Agent 可以通过 <code>status</code> 汇总还差什么。下面示例表示门禁条件已满足，但没有验收清单，需求符合度仍是 <code>unknown</code>，不能据此宣布用户需求已经验收通过：</p>
     <div class="code term"><pre><code>分支 feat/login -> main
 
   [ok] branch: 待合入 5685e8a474 -> main
@@ -759,10 +750,10 @@ harness merge  --branch feat/login   <span class="c"># 核对证据与评审，�
 
 可以合并：harness merge --branch feat/login</code></pre></div>
     <ul>
-      <li><code>merge</code> 在哪个 Worktree 里运行都可以，但主 Worktree 必须停在主分支、洁净、没有进行中的 merge、rebase 或 cherry-pick。</li>
-      <li>合并有冲突时，在任务分支上 <code>git merge main</code> 解决冲突并提交，再重新 verify、review。</li>
-      <li><code>merge --dry-run</code> 只做核对，不更新主分支。</li>
+      <li>合并前的工作区检查、常规冲突处理和重新验证由 Agent 按项目规则执行。</li>
+      <li>涉及用户已有改动或业务意图无法判断时，Agent 说明具体分歧，交由你决定。</li>
     </ul>
+    <p>执行命令与合并条件见<a href="https://github.com/windvalley/harness/blob/main/docs/reference.md#一次任务">一次任务参考</a>。</p>
 
     <h3 id="acceptance">验收清单</h3>
     <p>清单放在 <code>.harness/acceptance/&lt;分支名&gt;.md</code>，分支名里的 <code>/</code> 等字符换成 <code>-</code>，例如 <code>feat/login</code> 对应 <code>feat-login.md</code>。每条写成能用测试或命令验证的结果。没有清单时评审只评工程质量；<code>intent.mode</code> 设为 <code>required</code> 时没有清单不能合并。</p>
@@ -774,14 +765,14 @@ harness merge  --branch feat/login   <span class="c"># 核对证据与评审，�
     <p>每个 <code>-m</code> 是一段，多条要点要写在同一个 <code>-m</code> 里换行。只有标题的提交能通过钩子，但合并时会报 <code>bad_commit_message</code>。</p>
 
     <h3 id="cleanup">清理任务 Worktree</h3>
-    <p>合并后 harness 不会删除任务 Worktree，因为会话可能还停在里面。需要时先预览再清理：</p>
-    <div class="code"><pre><code>harness worktree clean                            <span class="c"># 预览，不删除</span>
-harness worktree clean --yes                      <span class="c"># 删除可清理的 Worktree 与分支</span>
-harness worktree clean --yes --with-local-files   <span class="c"># 含 .env 这类本机文件的也一起删</span></code></pre></div>
-    <p>只有提交已在主分支上、没有未提交文件、没有进程停在里面、没有被 <code>git worktree lock</code> 锁定的 Worktree 才会被清理。想保留某个 Worktree，锁定它即可。</p>
+    <p>合并后保留任务 Worktree 和分支，因为会话可能还停在里面。需要清理时向 Agent 发起请求：</p>
+    <div class="code"><span class="label">先看预览</span><pre class="prompt"><code>请预览可以清理的任务工作区，列出具体目录、分支、会连带删除的本机文件和跳过原因，先不要删除。</code></pre></div>
+    <p>看过预览并明确确认具体对象后，Agent 再执行清理。含本机文件的目录需要单独明确同意；主 Worktree、命令所在 Worktree 和验证检出会保留。</p>
+    <p>预览还会检查提交是否已合并、新任务保护、未提交文件、进程和锁定情况。详细条件和命令见<a href="https://github.com/windvalley/harness/blob/main/docs/reference.md#清理任务-worktree">清理参考</a>。</p>
 
     <!-- ============ 被拦截 ============ -->
     <h2 id="blocked">被拦截时怎么办</h2>
+    <div class="code"><span class="label">交给 Agent 继续处理</span><pre class="prompt"><code>请解释这次拦截的原因，并按项目规则继续；需要我决定的事项请列出具体选项。</code></pre></div>
     <p>拦截信息包含原因、对象、正确做法和规则 id，Agent 照着“正确做法”改道即可：</p>
     <div class="code term"><pre><code>[harness] 已拦截: 强制推送会覆盖远端历史
 对象: git push --force origin main
@@ -796,18 +787,19 @@ harness worktree clean --yes --with-local-files   <span class="c"># 含 .env 这
       <tbody>
         <tr><td><code>bad_commit_message</code></td><td>分支上有提交不符合合并时的格式；在任务分支改写提交信息，再重新 verify、review</td></tr>
         <tr><td><code>review_missing</code> / <code>review_blocked</code></td><td>运行 <code>harness review</code>；被拒时按发现修复，提交后重新 verify、review</td></tr>
-        <tr><td><code>gate_change_unconfirmed</code></td><td>由人运行 <code>harness confirm --branch &lt;分支&gt;</code> 看过摘要，再加 <code>--yes</code></td></tr>
+        <tr><td><code>gate_change_unconfirmed</code></td><td>Agent 展示确认摘要；由人在自己的终端执行它给出的带 <code>--yes</code> 的确认命令，再告诉 Agent 继续</td></tr>
         <tr><td><code>plan_unapproved</code></td><td>大改动没有实施授权记录；补齐方案，你同意后由 Agent 照录原话运行 <code>harness approve</code></td></tr>
         <tr><td><code>conflict</code></td><td>在任务分支上 <code>git merge main</code> 解决冲突，再重新验证与评审</td></tr>
         <tr><td><code>main_moved</code></td><td>合并过程中主分支前进了，重新运行 <code>harness merge</code>，已有证据会复用</td></tr>
         <tr><td>验证结果 <code>incomplete</code></td><td><code>requires</code> 里的依赖目录在主 Worktree 不存在，装好依赖后重跑</td></tr>
-        <tr><td>主 Worktree 不在 main 或不洁净</td><td>把主 Worktree 切回主分支并处理掉改动；<code>status</code> 与 <code>doctor</code> 会提前报出</td></tr>
+        <tr><td>主 Worktree 不在 main 或不洁净</td><td>Agent 先核对状态并保留已有改动，按项目规则准备主 Worktree；需要处置用户改动时先说明具体对象并取得授权</td></tr>
       </tbody>
     </table></div>
     <p>更多见参考手册的<a href="https://github.com/windvalley/harness/blob/main/docs/reference.md#常见问题">常见问题</a>。手工判定一条命令会不会被拦：<code>harness check --kind shell --command "&lt;命令&gt;"</code>；列出所有生效规则：<code>harness rules</code>。</p>
 
     <!-- ============ 定制 ============ -->
     <h2 id="customize">按项目定制</h2>
+    <p>可以直接对 Agent 说“请检查当前规则和检查配置，按项目实际情况提出调整方案，说明影响并按授权实施”。配置改动仍按门禁流程验证、评审和人工确认。</p>
     <p>四个文件决定门禁的行为，Agent 可以直接改，但它们都属于门禁改动，合并前要人确认，合入后才生效。</p>
     <div class="cards">
       <div class="card"><h4><code>config.json</code></h4><p>主分支名、合并要求、提交格式、评审后端、验收清单模式、任务分级阈值、Worktree 清理命令。</p></div>
@@ -840,23 +832,24 @@ harness worktree clean --yes --with-local-files   <span class="c"># 含 .env 这
     <h2 id="team">团队与多机</h2>
 
     <h3 id="new-machine">新成员或新机器</h3>
-    <p>入口与客户端配置随仓库分发，门禁代码与 git 钩子留在各自的机器上。克隆项目后运行一次：</p>
-    <div class="code"><pre><code>cd &lt;项目&gt;
+    <p>入口与客户端配置随仓库分发，门禁代码与 git 钩子留在各自的机器上。工具调用可用时，可以交给 Agent：</p>
+    <div class="code"><span class="label">本机接续安装</span><pre class="prompt"><code>请按项目锁定的 harness 版本完成本机安装，检查接入状态，并列出需要我完成的客户端操作。</code></pre></div>
+    <p>本机没有安装锁定版本时，已启用的实时拦截可能拒绝所有 Agent 工具调用。此时由人在项目目录的终端先完成安装，再让 Agent 接续诊断：</p>
+    <div class="code"><span class="label">工具调用被拦截时，由人执行</span><pre><code>cd &lt;项目&gt;
 node ~/github/harness/bin/harness.mjs install --local
-harness doctor</code></pre></div>
+.harness/bin/harness doctor</code></pre></div>
     <p><code>install --local</code> 按项目锁定的版本安装代码（必要时从对应的 <code>v&lt;版本&gt;</code> 标签导出），再写入本机的钩子与插件目录，不改任何入库文件。装好之前，Claude Code 与 Codex 的实时拦截会拒绝一切调用并提示这条命令。</p>
 
     <h3 id="upgrade">升级</h3>
-    <div class="code"><pre><code>git -C ~/github/harness pull --tags
-cd &lt;项目&gt;
-git worktree add -b chore/harness-upgrade ../&lt;项目&gt;-upgrade main
-cd ../&lt;项目&gt;-upgrade
-node ~/github/harness/bin/harness.mjs upgrade
-git add -A
-git commit -m "chore(harness): 升级到 &lt;版本&gt;" -m "- 更新入口锁定的版本与规则文档"</code></pre></div>
-    <p>然后照常 verify、review、confirm、merge。<code>upgrade</code> 会整份重写 <code>rules/</code> 与 <code>templates/</code>，项目自己的规范请写在 <code>AGENTS.md</code> 托管块之外。</p>
+    <div class="code"><span class="label">交给 Agent 升级</span><pre class="prompt"><code>请检查当前项目的 harness 版本，阅读目标版本的变更记录并说明升级影响。
+按项目规则准备升级环境，完成升级、验证和独立评审；需要我亲自确认时给出具体步骤。
+确认后继续完成已获授权的本地合并，报告升级结果、仍需手工迁移的配置和客户端操作。</code></pre></div>
+    <p>Agent 负责准备任务分支及需要的 Worktree。<code>upgrade</code> 会整份重写 <code>rules/</code> 与 <code>templates/</code>，项目自己的规范请写在 <code>AGENTS.md</code> 托管块之外；已有配置和黄金任务的迁移由 Agent 核对并说明。</p>
+    <p>具体命令与其他成员的接续操作见<a href="https://github.com/windvalley/harness/blob/main/docs/reference.md#升级">升级参考</a>。</p>
 
     <h3 id="sync">与远端同步</h3>
+    <div class="code"><span class="label">先说明方式与影响</span><pre class="prompt"><code>请检查本地与远端主分支的差异，说明同步方式和影响，经我授权后按本机门禁同步，并报告结果。</code></pre></div>
+    <p>远程写入仍须按项目规则单独取得授权，请求本地接入或合并不代表允许推送。下面是同步机制与命令参考。</p>
     <p>harness 只管本地主分支。Agent 推送主分支会被拦截，由人推送；Agent 可以推送任务分支，但不能强推。同步远端主分支有两种做法：</p>
     <div class="code"><span class="label">做法一：走一遍本机门禁</span><pre><code>git fetch origin
 harness verify --branch origin/main
@@ -882,6 +875,7 @@ HARNESS_MAIN_BYPASS=1 git merge --ff-only origin/main</code></pre></div>
 
     <!-- ============ 速查 ============ -->
     <h2 id="cheatsheet">命令速查</h2>
+    <p>以下供 Agent、维护者和手工排障时查阅，日常需求直接用自然语言提出。必须由人执行的操作按对应说明处理。</p>
     <p>运行 <code>harness help</code> 查看全部命令与参数。</p>
     <div class="table-wrap"><table>
       <thead><tr><th>命令</th><th>用途</th></tr></thead>

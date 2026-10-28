@@ -27,65 +27,61 @@ harness 是跑在本机的研发门禁，面向“Agent 写代码、人把关”
 
 ### 1. 获取 harness
 
-```bash
-git clone https://github.com/windvalley/harness.git ~/github/harness
-```
-
-不需要全局安装。
-克隆到别的目录也可以，把下文命令里的路径换掉即可。
+在 AI 编程客户端里打开待接入项目，把下一节的请求交给 Agent。
+Agent 会检查运行环境，查找本机已有的 harness，没有时从 [harness 仓库](https://github.com/windvalley/harness)获取。
+harness 没有 npm 依赖，也不需要全局安装；手工获取方式见[安装](docs/reference.md#安装)。
 
 ### 2. 接入项目
 
-接入本身也走一遍门禁流程：在任务分支里写入，验证、评审，由人确认后合并。
+直接对 Agent 说：
 
-```bash
-cd <项目>        # 主 Worktree，停在 main 且洁净
-git worktree add -b chore/harness-onboard ../<项目>-onboard main
-cd ../<项目>-onboard
-
-node ~/github/harness/bin/harness.mjs init --dry-run   # 预览将写入的文件，不落盘
-node ~/github/harness/bin/harness.mjs init
-git add -A
-git commit -m "chore(harness): 接入门禁" -m "- 写入门禁配置、规则与入口"
-
-.harness/bin/harness verify  --branch chore/harness-onboard
-.harness/bin/harness review  --branch chore/harness-onboard
-.harness/bin/harness confirm --branch chore/harness-onboard          # 查看门禁改动摘要
-.harness/bin/harness confirm --branch chore/harness-onboard --yes    # 由人执行
-.harness/bin/harness merge   --branch chore/harness-onboard
+```text
+请阅读 https://github.com/windvalley/harness 的 README 和 docs/reference.md，帮当前项目接入 harness。
+先检查项目规则、Git 状态、已有钩子和检查命令，选择符合项目约束的接入方式，并保留已有有效检查。
+由你完成接入、验证和独立评审；需要我决定冲突或亲自操作时，说明原因并给出具体步骤。
+完成必要确认后，继续完成已获授权的本地合并，汇报结果、验证证据和待处理项。
 ```
 
-只有带 `--yes` 的确认必须由人执行，其余步骤都可以交给 Agent。
-提交信息默认要求标题之后空一行，每行一条 `- ` 开头的要点，见[提交信息](docs/reference.md#提交信息)。
-项目里已有 husky、自定义钩子等其他门禁时，先看 `--dry-run` 的结果，见[已有其他门禁的项目](docs/reference.md#已有其他门禁的项目)。
+Agent 负责调查、预览和准备工作环境，再写入配置、提交、验证与评审。
+任务分支和 Worktree 由它按项目规则准备，首次接入不要求你先手动创建 Worktree，也不一律要求新建一个。
+已有 husky、自定义钩子等工具时，Agent 应说明保留或迁移方式；需要舍弃现有规则时先由你决定。
+
+首次接入走受控合并时，Agent 会展示门禁变更摘要，并给出必须由你在终端执行的确认命令。
+这一步完成后，告诉 Agent 继续；自然语言同意不能替代这条人工确认。
+详细命令见[首次接入](docs/reference.md#首次接入)。
 
 ### 3. 让客户端用上实时拦截
 
-- Claude Code：重启正在运行的会话。
-- Codex：在 Codex 里运行 `/hooks`，进入 `Review hooks` 后按 `t` 信任。
-- DeepSeek Harness：注册一次插件，命令见[客户端那一侧](docs/reference.md#客户端那一侧)。
+按 Agent 给出的提示，完成当前使用的客户端所需的人工操作：重启会话、信任钩子或注册插件。
+各客户端的具体步骤见[客户端那一侧](docs/reference.md#客户端那一侧)。
 
-然后运行 `.harness/bin/harness doctor` 检查接入状态，`[!!]` 表示还需要处理。
+然后告诉 Agent：“我已完成客户端操作，请检查接入状态，说明哪些已验证生效、哪些仍待验证。”
+你应看到：
+
+- 接入改动已按约定合入，已有有效检查得到保留，项目检查对应真实命令，占位项和未执行项有明确说明。
+- Agent 给出诊断结果；`[!!]` 项有处理方案，`[?]` 项说明仍需怎样验证。
+- 配置就位与当前客户端实际调用已验证分别说明，未实测的部分不宣称已经生效。
 
 ### 4. 完成第一个任务
 
-每个任务一个分支、一个 Linked Worktree：
+选一个范围明确、容易观察结果的小需求，例如给现有列表页补充空状态，直接对 Agent 说：
 
-```bash
-cd <项目>
-git worktree add -b feat/login ../<项目>-login main
-cd ../<项目>-login
-# 把需求交给 Agent，它按 AGENTS.md 里的规则实现并提交
-.harness/bin/harness verify --branch feat/login   # 按改动选出检查并执行，写签名证据
-.harness/bin/harness review --branch feat/login   # 独立评审
-.harness/bin/harness status --branch feat/login   # 只读：还差哪几步才能合并
-.harness/bin/harness merge  --branch feat/login   # 核对证据与评审，更新主分支
+```text
+请给现有列表页增加空状态提示：没有数据时显示“暂无数据”，有数据时正常显示列表。
+完成后告诉我如何查看效果，并给出验收结果和最终合并状态。
 ```
 
-这几步同样可以交给 Agent。
-`merge` 要求主 Worktree 停在 main 且洁净。
-在 main 上直接提交会被拒绝，这是预期行为：主分支只接受 `harness merge` 写入。
-合并后的任务 Worktree 用 `.harness/bin/harness worktree clean` 预览后清理。
+Agent 会读取项目规则、判断任务分级，准备任务分支和需要的 Worktree，完成实现、提交、验证与独立评审，再按项目授权处理本地合并。
+需要先做方案的任务，Agent 会在交出方案后等你同意实施；日常需求不必重复安排每条命令。
+
+完成时检查三个结果：
+
+- 从 Agent 给出的页面或入口查看，空列表显示“暂无数据”，有数据时列表正常。
+- 验收结果对应需求，验证与独立评审有证据，未执行项和阻塞明确列出。
+- 最终说明是已合并、待授权合并还是被阻塞，并给出分支、提交和任务工作区位置。
+
+合并后保留任务 Worktree 和分支。
+需要清理时再对 Agent 说“请预览可清理的任务工作区”，看过具体对象并确认后由它执行，见[清理任务 Worktree](docs/reference.md#清理任务-worktree)。
 
 ## 文档
 

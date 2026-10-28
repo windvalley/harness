@@ -507,18 +507,21 @@ function cmdInit(argv) {
   const onMain = report.onMain || !report.mainRef;
   print("");
   print("下一步");
+  print("  可以对 Agent 说：请继续完成接入，汇报验证、评审和最终合并状态；需要我亲自操作时给出具体步骤。");
+  print("  Agent 按项目规则准备任务分支与需要的 Worktree；下面的命令由 Agent 执行，标明由人的除外。");
+  print("  Agent 需核对项目真实检查命令，明确起始占位、未执行项和待处理项，初始化成功不等于全部接入完成。");
   if (report.harnessOnMain) {
-    print(`  1. 提交改动后按日常任务流程合入：harness verify / review / merge --branch ${branch}`);
-    print("     入口或钩子有变化时，合并前需要人确认一次（harness confirm）。");
+    print(`  1. 在任务分支提交本次改动后按日常任务流程合入：harness verify / review / merge --branch ${onMain ? "<任务分支>" : branch}`);
+    print("     涉及门禁配置、规则、入口或钩子时，Agent 展示 harness confirm 摘要，带 --yes 的确认由人在自己的终端执行。");
   } else if (onMain) {
-    print("  当前在主分支上。首次接入建议在任务分支里做：git switch -c chore/harness-onboard 后提交，");
+    print("  Agent：当前在主分支上，先核对已有改动，按项目规则准备接入分支，例如 git switch -c chore/harness-onboard 后提交，");
     print("  再走 harness verify / review / confirm / merge，合并时会把这份配置变成主分支的信任根。");
-    print("  没有其他门禁、也不需要评审时，也可以直接在主分支提交，提交后即生效。");
+    print("  项目规则允许、没有其他门禁且用户明确选择不走受控评审时，也可以直接在主分支提交，提交后即生效。");
   } else {
-    print(`  1. 检查并提交：git add -A && git commit（除 .harness/dsh-plugin/ 外全部入库，包括 .harness/bin/harness）`);
+    print(`  1. 检查并提交本次接入改动（不包含 .harness/dsh-plugin/，需要包含 .harness/bin/harness，保留用户原有改动）`);
     print(`  2. harness verify --branch ${branch}`);
     print(`  3. harness review --branch ${branch}`);
-    print(`  4. 由人确认：harness confirm --branch ${branch}，无误后加 --yes`);
+    print(`  4. Agent 展示摘要：harness confirm --branch ${branch}；看过后由人在自己的终端执行带 --yes 的确认，自然语言同意不能替代`);
     print(`  5. harness merge --branch ${branch}`);
   }
   if (report.conflicts.length > 0 && !takeOver) {
@@ -531,7 +534,7 @@ function cmdInit(argv) {
   const notes = followUps({ mainRoot: mainWorktreeRoot(result.root), changed: [".claude/settings.json"], bootstrap: true });
   if (notes.length > 0) {
     print("");
-    print("客户端（合入主分支后）");
+    print("客户端（合入主分支后，由用户按当前客户端完成；完成后让 Agent 运行 doctor 并说明已验证与待验证项）");
     for (const note of notes) print(`  - ${note}`);
   }
   return 0;

@@ -2,6 +2,8 @@
 
 这里是 harness 的完整参考，按需查阅。
 第一次使用请先看 [README 的快速开始](../README.md#快速开始) 和 [图文使用教程](https://windvalley.github.io/harness/)。
+日常协作用自然语言表达需求，Agent 按项目规则执行；下文命令供 Agent、维护者和手工排障时查阅。
+必须由人执行的命令会单独标明。
 
 - [工作原理](#工作原理)
 - [安装](#安装)
@@ -90,6 +92,10 @@ Agent 调用工具 ----> [1] 实时拦截：读写文件、执行命令之前按
 - 一个独立评审的后端：本机已登录的 `claude`（Claude Code CLI）或 `codex`。
   两者都没有时可以接入任意命令，见“独立评审的后端”。
 
+在待接入项目里对 Agent 说“请检查接入 harness 所需的环境，查找本机已有安装，没有时从官方仓库获取”，并提供 [harness 仓库地址](https://github.com/windvalley/harness)。
+Agent 可以把获取与[首次接入](#首次接入)连续完成；需要你登录评审后端等人工操作时再给出具体步骤。
+手工获取的命令是：
+
 ```bash
 git clone https://github.com/windvalley/harness.git ~/github/harness
 ```
@@ -105,8 +111,27 @@ harness 没有 npm 依赖，也不需要全局安装。
 
 ### 首次接入
 
-接入本身也走一遍日常任务的流程：在任务分支里写入，验证、评审，由人确认后合并。
-建议在 Linked Worktree 里做，让主 Worktree 一直停在主分支且洁净，`harness merge` 要在那里更新主分支。
+在待接入项目中直接对 Agent 说：
+
+```text
+请阅读 https://github.com/windvalley/harness 的 README 和 docs/reference.md，帮当前项目接入 harness。
+先调查项目规则、Git 状态、已有钩子和检查命令，再预览接入改动，保留已有有效规则和检查。
+由你准备符合项目约束的工作环境，完成接入、验证和独立评审。
+需要我决定或亲自操作时给出原因和具体步骤，之后继续完成已获授权的本地合并并汇报结果。
+```
+
+接入默认走任务分支、验证、独立评审、人工确认和受控合并。
+工作环境由 Agent 根据项目规则和现状准备，用户不需要先创建分支或 Worktree。
+任务分支不等于必须新建 Linked Worktree：可以在现有目录切到接入分支，也可以使用符合隔离要求的现有 Worktree。
+需要隔离未提交改动、多个会话并行或项目规则要求时，由 Agent 创建 Linked Worktree，让主 Worktree 保持在主分支且洁净。
+Agent 应保留用户已有改动；确实需要处理这些改动时，先说明具体对象与选择。
+
+接入后你应看到：改动和检查配置的摘要、验证证据、独立评审结果、人工确认的具体命令，以及最终合并状态。
+`init` 生成的是起始检查，Agent 还应核对项目真实命令，说明哪些已经配置、哪些是占位或尚未执行。
+合并后完成[客户端操作](#客户端那一侧)，再由 Agent 运行诊断，区分配置就位、已验证生效和仍待验证。
+
+下面以新建 Linked Worktree 为例列出完整命令，供 Agent 执行或手工排障时参考。
+使用现有目录时省略 Worktree 创建步骤，合并前切回主分支，并改用 `node ~/github/harness/bin/harness.mjs merge`，因为主分支上还没有项目入口。
 
 ```bash
 cd <项目>        # 主 Worktree，停在 main 且洁净
@@ -118,34 +143,39 @@ node ~/github/harness/bin/harness.mjs init --dry-run
 
 # 2. 写入；项目里已有其他门禁时，按预览结果决定是否加 --take-over
 node ~/github/harness/bin/harness.mjs init
+# 核对起始检查与项目真实命令，保留或迁移已有有效规则，再提交
 
 # 3. 提交；.harness/dsh-plugin/ 已加进 .gitignore，其余全部入库，包括入口 .harness/bin/harness
 git add -A
 git commit -m "chore(harness): 接入门禁" -m "- 写入门禁配置、规则与入口
 - 接入 git 钩子与客户端拦截"
 
-# 4. 验证、评审、确认、合并
+# 4. Agent 验证、评审并展示确认摘要
 .harness/bin/harness verify  --branch chore/harness-onboard
 .harness/bin/harness review  --branch chore/harness-onboard
 .harness/bin/harness confirm --branch chore/harness-onboard          # 只读摘要
-.harness/bin/harness confirm --branch chore/harness-onboard --yes    # 由人执行，只记录确认，不合并
-.harness/bin/harness merge   --branch chore/harness-onboard
-
-# 5. 收尾
-cd ../<项目>
-git worktree remove ../<项目>-onboard
-git branch -d chore/harness-onboard
 ```
 
-第 1 到第 4 步都可以交给 Agent，只有带 `--yes` 的确认必须由人执行。
-在 Claude Code 里，可以在输入框用 `!` 前缀直接执行这一条。
+看过摘要后，由人在自己的终端执行 Agent 给出的确认命令：
+
+```bash
+.harness/bin/harness confirm --branch chore/harness-onboard --yes
+```
+
+这条命令只记录确认，不合并；自然语言同意不能替代它，Agent 也不能代为执行。
+在 Claude Code 里，人可以在输入框用 `!` 前缀直接执行这一条。
+然后告诉 Agent“已确认，请继续”，由它完成已获授权的本地合并：
+
+```bash
+.harness/bin/harness merge --branch chore/harness-onboard
+```
+
+合并后保留接入分支与任务 Worktree，清理由用户另行发起，见[清理任务 Worktree](#清理任务-worktree)。
 
 提交信息要符合默认的提交规范：标题之后空一行，每行一条 `- ` 开头的要点。
 接入期间钩子还没有生效，格式不对的提交要到合并时才被拒绝，见“提交信息”。
 
 合并结束会列出客户端那一侧需要人做的事，见“客户端那一侧”。
-
-也可以在主 Worktree 里直接切到接入分支，但合并前要先切回主分支，并改用 `node ~/github/harness/bin/harness.mjs merge`，因为主分支上还没有入口。
 
 ### init 写了什么
 
@@ -187,7 +217,8 @@ harness 不认识原有工具的配置格式，也不自动转换。
 
 ### 小项目直接在主分支接入
 
-没有其他门禁、也不需要评审的小项目，可以在主分支上直接运行 `init` 并提交。
+项目规则允许、没有其他门禁，并且你明确选择不走受控评审的小项目，可以在主分支上直接运行 `init` 并提交。
+这是简化接入方式，Agent 应先说明它与默认受控流程的区别，由你决定是否采用。
 这次提交时主分支上还没有配置，钩子不做检查；提交之后主分支立即受保护，再有改动就要走任务分支和 `harness merge`。
 
 ### 客户端那一侧
@@ -219,6 +250,8 @@ dsh plugin --profile <desktop|web> add <主 Worktree 路径>/.harness/dsh-plugin
 
 git 层对所有客户端生效，实时拦截没接上时，提交检查与主分支保护仍然有效。
 `harness doctor` 逐项报告接入状态，`[!!]` 表示需要处理，`[?]` 表示文件已就位但客户端是否真正调用尚未实测。
+完成当前客户端的操作后，对 Agent 说“请检查接入状态，列出已验证生效和仍待验证的部分，并说明待处理项的影响”。
+Agent 应结合诊断和当前客户端的实际调用给出证据，不能把生成配置或产品曾经实测过当作当前会话已验证生效。
 
 ## 日常使用
 
@@ -255,9 +288,11 @@ Agent 开始任务前先判断分级，规则写在 `.harness/rules/core.md`，�
 规则已经写进项目，提示词只需要说明这次的任务和节奏，不必每次重复流程：
 
 ```text
-需求：<描述>
-按 harness 规则先判断任务分级并说明依据。属于先方案后实施的，先探索仓库再逐个问我，方案提交后停下等我说开始。
+请完成 <具体需求>，预期行为是 <可观察结果>。
+完成后给出查看效果的入口、验收结果和最终合并状态。
 ```
+
+Agent 会自行判断任务分级；先方案后实施的任务按下面的对话继续：
 
 ```text
 问题问完了，写验收清单、spec 和 plan，提交到任务分支后给我看。
@@ -270,6 +305,10 @@ Agent 开始任务前先判断分级，规则写在 `.harness/rules/core.md`，�
 最后一句就是授权，Agent 会记下原话，然后按 plan 先红后绿连续做到完成。
 
 ### 一次任务
+
+用户描述需求和预期结果后，Agent 负责准备工作环境、实现、提交、验证、独立评审和已获授权的本地合并。
+分支和 Worktree 按项目规则处理，不需要用户逐条安排命令。
+下面是 Agent 执行的命令参考，以独立任务 Worktree 为例：
 
 ```bash
 cd <项目>
@@ -292,18 +331,31 @@ harness merge  --branch feat/login   # 核对证据与评审，更新主分支
 - 合并有冲突时，在任务分支上 `git merge main` 解决冲突并提交，再重新 verify、review。
 - 合并后任务 Worktree 保留，需要时按下面的“清理任务 Worktree”清理。
 
+交付时用户检查：
+
+- 从约定入口观察到需求中的结果，正常路径与约定边界都有验收证据。
+- 验证与独立评审结果明确，缺少验收清单时不能把工程质量评审当作需求已经验收通过。
+- 已合并、待授权合并或阻塞的状态明确，并列出分支、提交、任务工作区与未完成项。
+
 ### 清理任务 Worktree
 
 合并后 harness 不删除任务 Worktree：会话常常还停在里面，也可能要回来补改。
-合并输出和 `harness doctor` 会报告已合并但还没清理的 Worktree 有几个，需要时清理：
+合并输出和 `harness doctor` 会报告已合并但还没清理的 Worktree 有几个。
+需要清理时对 Agent 说：
+
+```text
+请预览可以清理的任务工作区，列出具体目录、分支、会连带删除的本机文件和跳过原因，先不要删除。
+```
+
+看过预览后，明确确认要删除的具体对象，再由 Agent 执行清理。
+预览中含本机文件的目录，需要你明确同意删除这些文件；不同意的目录保留。
+下面是 Agent 使用的命令参考：
 
 ```bash
 harness worktree clean                            # 预览，不删除
 harness worktree clean --yes                      # 删除可清理的 Worktree 与分支
 harness worktree clean --yes --with-local-files   # 含本机文件的也一起删
 ```
-
-在对话里让 Agent 清理也可以：它先把预览给你看，你确认后再执行。
 
 预览要逐个读取每个 Worktree 的状态，上百个 Worktree 需要二三十秒，开始时会先输出正在检查多少个。
 每个 Worktree 要删掉几万个文件，还要运行清理命令，一个常常需要好几秒。
@@ -393,6 +445,8 @@ git commit -m "feat(login): 支持短信验证码登录" -m "- 新增验证码�
 
 ### 被拦截时
 
+对 Agent 说“请解释这次拦截的原因，并按项目规则继续；需要我决定的事项请列出具体选项”。
+常规改道和重跑由 Agent 处理，用户只处理确实需要授权、业务判断或亲自执行的步骤。
 拦截信息包含原因、对象、正确做法和规则 id，例如：
 
 ```text
@@ -417,14 +471,17 @@ Agent 按“正确做法”改道即可，实时拦截每次都会记进账本�
 配置、规则与用例，Agent 可以直接改。
 入口与钩子（`.harness/bin/`、客户端配置、钩子目录）Agent 不能手改，只能在任务分支运行 `harness install`、`init` 或 `upgrade` 重新生成。
 
-`harness confirm --branch <分支>` 输出只读摘要：涉及哪些门禁文件、生效规则的增删与改动（包括只改 `disabled` 关掉某条预设规则）、检查项的增删。
-人确认无误后运行带 `--yes` 的同一条命令，可以加 `--note <说明>`。
-确认只在账本里记下这一次确认，不会合并，主分支上也不会出现新提交；之后还要运行 `harness merge`，这一步可以交给 Agent。
+Agent 运行 `harness confirm --branch <分支>` 并展示只读摘要：涉及哪些门禁文件、生效规则的增删与改动（包括只改 `disabled` 关掉某条预设规则）、检查项的增删。
+人确认无误后，在自己的终端运行 Agent 给出的带 `--yes` 的同一条命令，可以加 `--note <说明>`。
+对话里的“同意”不能替代这条人工命令。
+确认只在账本里记下这一次确认，不会合并，主分支上也不会出现新提交；告诉 Agent 已确认后，由它继续完成已获授权的本地合并。
 确认绑定合并结果的 tree：分支再提交，或者主分支前进让合并结果变了，都要重新确认。
 
 ### 与远端同步
 
 harness 只管本地主分支，推送与拉取不经过它。
+可以对 Agent 说“请检查本地与远端主分支的差异，说明同步方式和影响，经我授权后按本机门禁同步，并报告结果”。
+远程写入仍须按项目规则单独取得授权，不能把请求本地接入或本地合并理解为允许推送。
 
 - 推送：Agent 推送主分支会被拦截，由人推送；Agent 可以推送任务分支，但不能强推。
 - 拉取：本地主分支受保护，在主分支上 `git pull` 会被 `reference-transaction` 拒绝。
@@ -472,12 +529,14 @@ harness escalate resume --id esc-1a2b3c4d  # 续跑前读取人的决定
 ## 新成员或新机器
 
 项目接入后，入口与客户端配置随仓库分发，门禁代码与 git 钩子留在各自的机器上。
-克隆项目后运行一次：
+工具调用可用时，对 Agent 说“请按项目锁定的 harness 版本完成本机安装，检查接入状态，并列出需要我完成的客户端操作”。
+本机尚未安装锁定版本时，已启用的实时拦截可能拒绝所有 Agent 工具调用，不能承诺此时仍由 Agent 自动安装。
+遇到这一情况，由人在项目目录的终端先完成下面的安装，再让 Agent 接续诊断：
 
 ```bash
 cd <项目>
 node ~/github/harness/bin/harness.mjs install --local
-harness doctor
+.harness/bin/harness doctor
 ```
 
 `install --local` 读取项目锁定的版本：harness 仓库当前就是这个版本时直接安装，否则从对应的标签（例如 `v0.7.2`）导出那一版安装。
@@ -493,6 +552,17 @@ harness doctor
 Codex 的钩子信任按路径记录，新机器上同样要在 Codex 里信任一次。
 
 ## 升级
+
+对 Agent 说：
+
+```text
+请检查当前项目的 harness 版本，阅读目标版本的变更记录并说明升级影响。
+按项目规则准备升级环境，完成升级、验证和独立评审；需要我亲自确认时给出具体步骤。
+确认后继续完成已获授权的本地合并，报告升级结果、仍需手工迁移的配置和客户端操作。
+```
+
+Agent 负责准备任务分支及需要的 Worktree，并核对项目自有规则与配置如何保留。
+下面以新建任务 Worktree 为例列出命令参考：
 
 ```bash
 git -C ~/github/harness pull --tags
@@ -828,11 +898,13 @@ harness 防的是 Agent 的误操作，以及被提示注入后常见的绕过�
 
 | 现象 | 原因与处理 |
 | --- | --- |
+| 接入前需要手工创建 Worktree、依次运行命令吗 | 在目标项目中用自然语言请求接入即可；Agent 按项目规则准备环境，是否新建 Worktree 取决于实际约束；必须由人执行的确认与客户端操作会单独提示 |
+| Agent 报告初始化成功，是否已经全部接入 | 还要核对真实检查、验证与评审、确认和合并、当前客户端的启用情况；配置就位不等于当前会话已验证生效 |
 | `合并被拒绝(bad_commit_message)` | 分支上有提交不符合合并时的提交格式；在任务分支改写提交信息，再重新 verify、review |
-| `主 Worktree 当前不在 main 分支` 或 `存在未提交或未跟踪文件` | 把主 Worktree 切回主分支并处理掉改动；`harness status` 与 `harness doctor` 会提前报出 |
-| `本机没有安装门禁锁定的版本` | 在项目目录运行 `node ~/github/harness/bin/harness.mjs install --local` |
-| `gate_change_unconfirmed` | 由人运行 `harness confirm --branch <分支>` 看过摘要，再加 `--yes` |
-| 运行 `confirm --yes` 后主分支没有新提交 | 确认只记录，不合并；接着运行 `harness merge --branch <分支>` |
+| `主 Worktree 当前不在 main 分支` 或 `存在未提交或未跟踪文件` | Agent 先核对状态并保留已有改动，再按项目规则准备主 Worktree；需要处置用户改动时说明具体对象并取得授权，不能直接丢弃 |
+| `本机没有安装门禁锁定的版本` | Agent 工具调用被拦截时，由人在项目目录运行 `node ~/github/harness/bin/harness.mjs install --local`，再让 Agent 继续诊断 |
+| `gate_change_unconfirmed` | Agent 展示确认摘要；由人在自己的终端执行它给出的带 `--yes` 的确认命令 |
+| 运行 `confirm --yes` 后主分支没有新提交 | 确认只记录，不合并；告诉 Agent 已确认，让它继续完成已获授权的本地合并 |
 | `plan_unapproved` | 大改动没有实施授权记录，或授权后验收清单又改了；补齐方案并提交，向用户说明，用户同意后照录原话运行 `harness approve --branch <分支> --yes --note "<原话>"` |
 | 写代码时被 `plan-before-code` 拦截 | 任务分支里有实施方案但还没有授权记录；用户还没同意就停下等，已经同意就按上一条记录；只是借用了 `docs/changes/` 下的旧方案时，把它移出这次改动 |
 | `review_missing` 或 `review_blocked` | 运行 `harness review`；被拒时按发现修复，提交后重新 verify、review |
