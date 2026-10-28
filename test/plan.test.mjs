@@ -144,7 +144,8 @@ describe("先方案后实施", () => {
     assert.match(text, /自己的规则/);
     assert.doesNotMatch(text, /旧内容/);
     assert.match(text, /先判断任务分级/);
-    assert.match(text, /用户表达开始实施的意思后，连续实施到完成/);
+    assert.match(text, /用户表达开始实施的意思才算授权/);
+    assert.match(text, /授权后连续实施到完成/);
     assert.match(text, /先红后绿/);
   });
 });

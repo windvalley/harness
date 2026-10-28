@@ -158,7 +158,7 @@ describe("安装与自检", () => {
     for (const pattern of [/日常语言/, /固定话术/, /不要求用户/, /Agent 按项目规则准备任务分支/, /验收证据、最终合并状态/]) {
       assert.doesNotMatch(block, pattern, `托管块不应包含: ${pattern}`);
     }
-    for (const pattern of [/\.harness\/rules\/core\.md/, /先判断任务分级/, /先红后绿/, /harness merge --branch/, /harness worktree clean/]) {
+    for (const pattern of [/\.harness\/rules\/core\.md/, /先判断任务分级/, /最初提出需求或回答澄清问题都不算/, /先红后绿/, /harness merge --branch/, /harness worktree clean/]) {
       assert.match(block, pattern, `托管块应保留: ${pattern}`);
     }
     const rules = readFileSync(join(repo.root, ".harness/rules/harness.md"), "utf8");
