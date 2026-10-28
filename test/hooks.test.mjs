@@ -333,7 +333,7 @@ describe("客户端钩子入口", () => {
 
   test("dsh 入口：同样载荷也能拒绝", () => {
     const repo = setup();
-    const input = JSON.stringify({ name: "bash", arguments: { command: "cat .env" } });
+    const input = JSON.stringify({ name: "bash", arguments: { command: `cat ${SECRET_FILE}` } });
     const output = sh(repo.root, join(repo.root, ".harness/bin/harness"), ["hook", "--client", "dsh"], repo.env, input);
     assert.equal(output.status, 2);
     assert.match(output.stderr, /密钥|已拦截/);
@@ -344,7 +344,7 @@ describe("客户端钩子入口", () => {
     const cases = [
       [{ name: "bash", arguments: { command: "git stash" } }, { tool_name: "Bash", tool_input: { command: "git stash" } }],
       [{ name: "bash", arguments: { command: "git status" } }, { tool_name: "Bash", tool_input: { command: "git status" } }],
-      [{ name: "write", arguments: { file_path: ".env", content: "x" } }, { tool_name: "Write", tool_input: { file_path: ".env", content: "x" } }],
+      [{ name: "write", arguments: { file_path: SECRET_FILE, content: "x" } }, { tool_name: "Write", tool_input: { file_path: SECRET_FILE, content: "x" } }],
     ];
     for (const [dshPayload, claudePayload] of cases) {
       const dshOut = sh(repo.root, join(repo.root, ".harness/bin/harness"), ["hook", "--client", "dsh"], repo.env, JSON.stringify(dshPayload));

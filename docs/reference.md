@@ -410,7 +410,8 @@ git -C <主 Worktree> worktree unlock <Worktree 路径>
 
 - 删除用不带 `--force` 的 `git worktree remove`，分支用 `git branch -d`；分离头指针的 Worktree 没有分支可删。
 - `git worktree remove` 会连带删掉被忽略的文件，例如 `node_modules` 和构建产物，预览里逐个列出。
-  其中按 `secrets` 预设的读取保护认出的本机文件（`.env`、私钥、凭据），默认整个 Worktree 跳过，加 `--with-local-files` 才删。
+  其中本机文件（`.env` 这类环境文件、私钥、凭据）默认整个 Worktree 跳过，加 `--with-local-files` 才删。
+  这份清单由固定清单与项目的读取保护规则取并集，读取限制放宽不会让清理连带删掉本机配置。
 - 目录已经被手工删掉、只剩 git 记录的，清理记录与分支。
 - Worktree 起的服务、建的数据库不会跟着删除，在 `.harness/config.json` 里配置删除前要运行的命令：
 
@@ -780,7 +781,7 @@ node ~/github/harness/bin/harness.mjs install --local   # 按新锁定的版本�
 
 | 预设 | 内容 |
 | --- | --- |
-| `secrets` | 禁止读取、写入或用命令外发 `.env`、私钥、凭据文件与证据密钥，同名 `.example` 文件放行 |
+| `secrets` | 禁止读取、写入或用命令外发私钥、凭据文件与证据密钥；`.env` 这类开发环境的环境文件不拦，同名 `.example` 文件放行 |
 | `git-safety` | 拦截递归删除、丢弃改动、强制删除 Worktree、删除分支、强推、`stash`、`--no-verify`，以及在主分支上合并、变基、重置和绕过合并工具写主分支 |
 | `gate-self` | 保护执行器入口与绕过开关，轮换密钥与人工确认只能由人执行；规则与配置本身允许修改，合并前由人确认 |
 | `plan-first` | 先方案后实施：没有实施授权记录时 Agent 只能写方案文件，大改动合并前必须有授权记录；你在对话里同意后由 Agent 照录原话记录 |
