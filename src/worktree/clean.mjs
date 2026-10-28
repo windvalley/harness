@@ -12,7 +12,8 @@ const CLEANUP_TIMEOUT_MS = 10 * 60 * 1000;
 // 建好后一直没有新提交的 Worktree，这段时间内当作刚开始的任务保留，过了就没有独有的内容，可以清理。
 const FRESH_MS = 24 * 60 * 60 * 1000;
 
-// 项目没有声明读取保护规则时用这份清单认出本机文件：它们由用户手工维护，删了就找不回来。
+// 本机文件的固定清单：它们由用户手工维护，删了就找不回来。
+// 即使读取规则放宽了（例如开发环境的环境文件），清理时仍按本机文件处理。
 const LOCAL_FILES = {
   paths: ["**/.env", "**/.env.*", "**/*.pem", "**/*.key", "**/id_rsa*", "**/credentials*.json"],
   allow: ["**/*.example"],
@@ -40,11 +41,17 @@ function listSome(items, limit = 3) {
   return `${items.slice(0, limit).join("、")}${items.length > limit ? ` 等 ${items.length} 项` : ""}`;
 }
 
-/** 本机文件沿用项目的读取保护规则（secrets 预设）来认，与 Agent 不能读写的范围一致。 */
+/**
+ * 本机文件取固定清单与项目读取保护规则的并集。
+ * 读取保护只说明 Agent 能不能看或改，不代表这些文件可以随 Worktree 一起删掉；
+ * 两个来源取并集，放宽读取的项目也不会因此在清理时丢掉本机配置。
+ */
 function localFilePatterns(project) {
   const rules = project ? resolvePolicy(project.policy).rules.filter((rule) => rule.kind === "read-protect" && !rule.when) : [];
-  if (rules.length === 0) return LOCAL_FILES;
-  return { paths: rules.flatMap((rule) => rule.paths ?? []), allow: rules.flatMap((rule) => rule.allow ?? []) };
+  return {
+    paths: [...LOCAL_FILES.paths, ...rules.flatMap((rule) => rule.paths ?? [])],
+    allow: [...LOCAL_FILES.allow, ...rules.flatMap((rule) => rule.allow ?? [])],
+  };
 }
 
 /** 删除前在 Worktree 里运行的命令，取自主分支上的配置：任务分支改不了它，也就没法借清理执行别的命令。 */

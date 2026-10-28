@@ -4,33 +4,33 @@
   "tasks": [
     {
       "id": "g01-secret-read-denied",
-      "title": "读取密钥文件被拒绝，示例文件放行",
+      "title": "读取私钥被拒绝，开发环境的环境文件与示例放行",
       "kind": "policy",
       "steps": [
-        { "kind": "read", "path": ".env", "expect": "deny", "rule": "secrets-read" },
         { "kind": "read", "path": "config/server.pem", "expect": "deny", "rule": "secrets-read" },
+        { "kind": "read", "path": ".env", "expect": "allow" },
         { "kind": "read", "path": ".env.example", "expect": "allow" }
       ]
     },
     {
       "id": "g02-secret-write-denied",
-      "title": "写入密钥与环境文件被拒绝",
+      "title": "写入私钥被拒绝，开发环境的环境文件放行",
       "kind": "policy",
       "steps": [
-        { "kind": "write", "path": ".env", "content": "A=1", "expect": "deny", "rule": "secrets-write" },
         { "kind": "write", "path": "deploy/server.key", "content": "x", "expect": "deny", "rule": "secrets-write" },
+        { "kind": "write", "path": ".env", "content": "A=1", "expect": "allow" },
         { "kind": "write", "path": ".env.example", "content": "A=", "expect": "allow" }
       ]
     },
     {
       "id": "g03-secret-via-shell",
-      "title": "密钥读取不能换成命令或搜索",
+      "title": "私钥读取不能换成命令或搜索，环境文件不再拦",
       "kind": "policy",
       "steps": [
-        { "kind": "shell", "command": "cat .env", "expect": "deny", "rule": "secrets-shell" },
-        { "kind": "shell", "command": "grep KEY config/.env.local", "expect": "deny", "rule": "secrets-shell" },
-        { "kind": "shell", "command": "cat .env.example", "expect": "allow" },
-        { "kind": "search", "path": ".env", "expect": "deny" }
+        { "kind": "shell", "command": "cat config/server.pem", "expect": "deny", "rule": "secrets-shell" },
+        { "kind": "shell", "command": "cat ~/.local/share/harness/evidence.key", "expect": "deny", "rule": "secrets-shell" },
+        { "kind": "shell", "command": "cat .env", "expect": "allow" },
+        { "kind": "search", "path": "config/server.pem", "expect": "deny" }
       ]
     },
     {

@@ -300,7 +300,7 @@ footer { border-top: 1px solid var(--line); color: var(--muted); font-size: .88r
     <h2 id="why">它解决什么问题</h2>
     <p>Agent 已经能写代码、写测试、跑检查，但要放心让它从需求一路做到合并，还要防住它常犯又不自知的错：</p>
     <ul>
-      <li>读到 <code>.env</code>、私钥，或者把它们写进命令外发；</li>
+      <li>读到私钥、凭据，或者把它们写进命令外发；</li>
       <li>用 <code>git reset --hard</code>、<code>git stash</code>、<code>rm -rf</code>、强推，丢掉自己或别人的改动；</li>
       <li>测试没跑或没跑全，就宣布“完成”；</li>
       <li>直接在主分支上提交，或者为了让检查通过，顺手把检查规则改松；</li>
@@ -845,7 +845,7 @@ dsh plugin --profile web add ~/.local/share/harness/dsh-plugin</code></pre></div
     <div class="table-wrap"><table>
       <thead><tr><th>预设</th><th>内容</th></tr></thead>
       <tbody>
-        <tr><td><code>secrets</code></td><td>禁止读取、写入或用命令外发 <code>.env</code>、私钥、凭据与证据密钥</td></tr>
+        <tr><td><code>secrets</code></td><td>禁止读取、写入或用命令外发私钥、凭据与证据密钥；<code>.env</code> 这类开发环境的环境文件不拦</td></tr>
         <tr><td><code>git-safety</code></td><td>拦截递归删除、丢弃改动、强删 Worktree、删分支、强推、<code>stash</code>、<code>--no-verify</code>，以及在主分支上合并、变基、重置</td></tr>
         <tr><td><code>gate-self</code></td><td>保护执行器入口与绕过开关；轮换密钥与人工确认只能由人执行</td></tr>
         <tr><td><code>plan-first</code></td><td>没有实施授权时只能写方案文件，大改动合并前必须有授权记录</td></tr>

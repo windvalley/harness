@@ -91,12 +91,15 @@ describe("路径与内容判定", () => {
     assert.equal(evaluatePath({ policy: resolved, root, relPath: "free.go", access: "write" }).decision, "allow");
   });
 
-  test("密钥文件读出与写入都拦，示例文件放行", () => {
-    for (const rel of [".env", "frontend/.env.local", ".env.test-infra", "keys/server.pem", "id_rsa"]) {
+  test("私钥与凭据读出写入都拦，开发环境的环境文件与示例放行", () => {
+    for (const rel of ["keys/server.pem", "deploy/server.key", "id_rsa", "credentials-prod.json"]) {
       assert.equal(evaluatePath({ policy: resolved, root: tmpRoot(), relPath: rel, access: "read" }).decision, "deny", rel);
+      assert.equal(evaluatePath({ policy: resolved, root: tmpRoot(), relPath: rel, access: "write" }).decision, "deny", rel);
     }
-    assert.equal(evaluatePath({ policy: resolved, root: tmpRoot(), relPath: ".env.example", access: "read" }).decision, "allow");
-    assert.equal(evaluatePath({ policy: resolved, root: tmpRoot(), relPath: ".env.local", access: "write" }).decision, "deny");
+    for (const rel of [".env", ".env.local", "frontend/.env.test-infra", ".env.example"]) {
+      assert.equal(evaluatePath({ policy: resolved, root: tmpRoot(), relPath: rel, access: "read" }).decision, "allow", rel);
+      assert.equal(evaluatePath({ policy: resolved, root: tmpRoot(), relPath: rel, access: "write" }).decision, "allow", rel);
+    }
   });
 
   test("仓库外的证据密钥与轮换下来的旧密钥都不能读", () => {
@@ -115,7 +118,7 @@ describe("路径与内容判定", () => {
   });
 
   test("拒绝信息带正确做法", () => {
-    const result = evaluatePath({ policy: resolved, root: tmpRoot(), relPath: ".env", access: "read" });
+    const result = evaluatePath({ policy: resolved, root: tmpRoot(), relPath: "keys/server.pem", access: "read" });
     assert.match(formatDenial(result), /正确做法/);
   });
 });
@@ -162,16 +165,21 @@ describe("命令判定", () => {
     assert.ok(denies({ kind: "shell", command: "HARNESS_MERGE_TOKEN=1 git commit -m x" }));
   });
 
-  test("密钥读取不能换成命令", () => {
-    for (const command of ["cat .env", "grep X frontend/.env.local", "cat ~/.local/share/harness/evidence.key"]) {
+  test("私钥读取不能换成命令，开发环境的环境文件可以用命令处理", () => {
+    for (const command of ["cat keys/server.pem", "grep X ~/.ssh/id_rsa", "cat ~/.local/share/harness/evidence.key", "base64 credentials-prod.json"]) {
       assert.ok(denies({ kind: "shell", command }), command);
+    }
+    for (const command of ["cat .env", "grep KEY frontend/.env.local", "echo A=1 >> .env"]) {
+      assert.equal(denies({ kind: "shell", command }), false, command);
     }
     assert.equal(denies({ kind: "shell", command: "cat .env.example" }), false);
     assert.equal(denies({ kind: "shell", command: "git add .env.example" }), false);
   });
 
-  test("搜索无法绕过密钥保护", () => {
-    assert.ok(denies({ kind: "search", path: ".env" }));
+  test("搜索无法绕过私钥保护，环境文件不再拦", () => {
+    assert.ok(denies({ kind: "search", path: "config/server.pem" }));
+    assert.ok(denies({ kind: "search", glob: "**/*.pem" }));
+    assert.equal(denies({ kind: "search", path: ".env" }), false);
     assert.equal(denies({ kind: "search", path: "src" }), false);
   });
 

@@ -29,6 +29,10 @@
 - `AGENTS.md` 托管块的任务分级条目写明：方案交付后用户表达开始实施的意思才算授权，最初提出需求或回答澄清问题都不算。
   0.8.1 删掉的协作说明里含有这条，它仍写在 `core.md` 与 `harness.md`，但托管块是 Agent 每次必读的部分，补回这半句，避免把提需求的原话当作授权记录。
 - `core.md` 的“协作分工”去掉描述用户可以怎样提需求的半句，保留 Agent 主动补齐验收标准、确认业务歧义的要求。
+- `secrets` 预设不再限制开发环境的环境文件：`.env`、`.env.local`、`.env.dev-infra`、`.env.test-infra` 的读取与写入放行，命令里出现这些文件名也不再拦。
+  预设现在只保护私钥、凭据与门禁证据密钥：`**/*.pem`、`**/*.key`、`**/id_rsa*`、`**/credentials*.json` 与 `~/.local/share/harness/evidence.key`。
+  这样 Agent 可以按需求更新本机环境配置，不必每次由人代改；代价是这些文件的内容会进入 Agent 上下文，只适合确实不值得保护的开发环境凭据。
+- `harness worktree clean` 的本机文件清单改为固定清单与项目读取保护规则的并集：`.env` 与私钥、凭据始终算本机文件，读取规则放宽不会让清理 Worktree 时连带删掉未提交的配置。
 
 ### 修复
 
@@ -42,6 +46,9 @@
 
 - `upgrade` 会刷新 `.harness/rules/core.md`、`.harness/rules/harness.md` 与 `AGENTS.md` 托管块。
 - 升级前生成的证据没有检查配置指纹，合并时会按当前配置重新验证一次，没变的检查结果按定义指纹判断，同样需要重跑一次；评审不受影响。
+- 升级到该版本后 `secrets` 预设按新口径执行，项目不需要改 `.harness/policy.json`；仍要保留严格保护的，在 `rules` 里写同 id 规则覆盖。
+- 项目里的 `.harness/golden/tasks.json` 若还是起始内容，`g01` 到 `g03` 对 `.env` 的期望会失败。
+  把这几步换成私钥路径（例如 `config/server.pem`）后再运行 `harness golden`，否则改动 `.harness/**` 的任务会被 `harness-golden` 检查拦住。
 
 ## [0.8.1] - 2026-10-28
 

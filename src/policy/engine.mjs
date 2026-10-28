@@ -354,8 +354,9 @@ function evaluateSearch({ policy, root, call, context }) {
     const byPath = evaluatePath({ policy, root, relPath: toRelative(root, call.path), access: "read", context });
     if (byPath.decision === "deny") return byPath;
   }
+  // 搜索工具没给具体路径时按文件名特征认：只有私钥与凭据算密钥，开发环境的环境文件不拦。
   const glob = String(call.glob ?? "");
-  if (glob && /(^|[/*])\.env(?![\w.-]*example)|\.pem\b|\.key\b|id_rsa|credentials/.test(glob)) {
+  if (glob && /\.pem\b|\.key\b|id_rsa|credentials/.test(glob)) {
     const rule = rulesOfKind(policy, "read-protect")[0];
     if (rule) return deny(rule, `glob=${glob}`);
   }
