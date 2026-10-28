@@ -153,6 +153,14 @@ describe("安装与自检", () => {
     assert.match(agents, /harness:start/);
     assert.match(agents, /合并后保留任务 Worktree，不要自行删除/, "托管块写明合并后不自动删除任务 Worktree");
     assert.doesNotMatch(agents, /合并成功后清理任务 Worktree/);
+    // 托管块只放每次任务都要遵守的硬性要求；产品使用方式与协作职责写在 core.md，不重复进每个项目的 AGENTS.md。
+    const block = agents.slice(agents.indexOf("<!-- harness:start -->"), agents.indexOf("<!-- harness:end -->"));
+    for (const pattern of [/日常语言/, /固定话术/, /不要求用户/, /Agent 按项目规则准备任务分支/, /验收证据、最终合并状态/]) {
+      assert.doesNotMatch(block, pattern, `托管块不应包含: ${pattern}`);
+    }
+    for (const pattern of [/\.harness\/rules\/core\.md/, /先判断任务分级/, /先红后绿/, /harness merge --branch/, /harness worktree clean/]) {
+      assert.match(block, pattern, `托管块应保留: ${pattern}`);
+    }
     const rules = readFileSync(join(repo.root, ".harness/rules/harness.md"), "utf8");
     assert.match(rules, /## 收尾：任务 Worktree 由用户发起清理/);
     assert.match(rules, /harness worktree clean/);
