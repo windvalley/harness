@@ -12,12 +12,17 @@
 - R6 远程模式下 `harness status` 的最后一行提示 `harness submit`；分支已提交且顶端没变时显示 MR/PR 链接与提交时间；顶端变了时提示提交记录已过期、需要重新提交。
 - R7 `harness sync` 取得远程主分支后把本地主分支快进过去，主 Worktree 的文件同步更新；改动涉及入口或钩子时刷新本机安装；随后执行 `merge.postMergeCommand`。
 - R8 `sync` 按同步前本地主分支上的配置判断门禁改动；有门禁改动时，要求先有绑定目标 tree 的人工确认，确认命令是 `harness confirm --branch <远程>/<主分支>`。
-- R9 新增或修改 `delivery` 段的改动，即使 `governance.confirmOnGateChange` 为 `false`，`merge`、`submit`、`sync` 也要求人工确认。
+- R9 规范化后的交付设置（`mode`、`remote`、`provider`，缺省按 `local` 计）有变化时，即使 `governance.confirmOnGateChange` 为 `false`，`merge`、`submit`、`sync` 也要求人工确认；只把缺省值写成显式的 `local` 不算变化。
 - R10 首次接入时，接入分支可以 `submit`，前提是已有首次接入的人工确认；平台合入后 `sync` 导入配置同样要求确认，目标 tree 不变时沿用同一条确认。
 - R11 `sync` 在本地模式下同样可用，替代手册里由人用绕过开关快进的做法。
 - R12 `harness install --version <版本>` 只把指定版本装进本机版本目录，不改项目里的任何文件。
 - R13 远程模式下 `harness doctor` 检查远程是否存在、平台命令是否在 PATH，主 Worktree 一项改为说明能否接收同步。
 - R14 `AGENTS.md` 托管块、`core.md`、`harness.md` 与 `git-safety` 的提示按两种模式说明交付方式；参考手册、教程、README 与变更记录同步。
+- R15 `init` 生成的 `.harness/config.json` 带 `"delivery": { "mode": "local" }`；已有 `config.json` 的项目，`init`（不加 `--force`）与 `upgrade` 都不添加这一段，行为仍是本地合并。
+- R16 主分支是本地模式时，把 `delivery.mode` 改为 `remote` 的分支在人工确认之后可以 `submit`：门禁核对仍按本地主分支的配置，`remote` 与 `provider` 取分支提议的值。
+  确认摘要单独写明开启远程交付，以及由此授予的推送任务分支与创建 MR/PR 的权限。
+  平台合入后 `sync` 导入，目标 tree 与确认时一致就沿用这条确认；此后 `merge` 拒绝，`submit` 可用。
+- R17 关闭远程交付走普通流程：把 `delivery.mode` 改回 `local` 的分支在远程模式下照常 `submit`，平台合入后 `sync` 导入并确认，此后 `merge` 恢复可用。
 
 ## 绝对不能发生
 
@@ -30,6 +35,7 @@
 - X7 主 Worktree 不洁净、有进行中的 git 操作，或者另一个合并或同步正在进行时，`sync` 更新本地主分支。
 - X8 harness 读取、保存或打印平台令牌，或者把令牌放进平台命令的参数。
 - X9 harness 在平台上合并 MR/PR。
+- X10 主分支是本地模式、分支也没有开启远程交付时，`submit` 以 `delivery_local` 拒绝，不推送；开启远程交付的分支在人工确认之前以 `gate_change_unconfirmed` 拒绝，不推送。
 
 ## 失败时
 
