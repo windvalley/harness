@@ -507,7 +507,7 @@ function cmdInit(argv) {
   const onMain = report.onMain || !report.mainRef;
   print("");
   print("下一步");
-  print("  可以对 Agent 说：请继续完成接入，汇报验证、评审和最终合并状态；需要我亲自操作时给出具体步骤。");
+  print("  接入流程由 Agent 按项目规则接续处理，用户只需在需要时做决定或亲自操作，不必重复提醒验证、评审和交付要求。");
   print("  Agent 按项目规则准备任务分支与需要的 Worktree；下面的命令由 Agent 执行，标明由人的除外。");
   print("  Agent 需核对项目真实检查命令，明确起始占位、未执行项和待处理项，初始化成功不等于全部接入完成。");
   if (report.harnessOnMain) {

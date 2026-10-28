@@ -673,11 +673,8 @@ footer { border-top: 1px solid var(--line); color: var(--muted); font-size: .88r
     <ol class="steps">
       <li>
         <h4>在项目里向 Agent 提出接入请求</h4>
-        <p>在 AI 编程客户端中打开待接入项目，把下面的话发给 Agent。它会检查环境、查找本机已有的 harness，没有时从官方仓库获取；没有 npm 依赖，也不需要全局安装。</p>
-        <div class="code"><span class="label">发给 Agent</span><pre class="prompt"><code>请阅读 https://github.com/windvalley/harness 的 README 和 docs/reference.md，帮当前项目接入 harness。
-先检查项目规则、Git 状态、已有钩子和检查命令，选择符合项目约束的接入方式，并保留已有有效检查。
-由你完成接入、验证和独立评审；需要我决定冲突或亲自操作时，说明原因并给出具体步骤。
-完成必要确认后，继续完成已获授权的本地合并，汇报结果、验证证据和待处理项。</code></pre></div>
+        <p>在 AI 编程客户端中打开待接入项目，说出接入目标并提供仓库地址即可。Agent 应先阅读来源仓库的 README 和接入说明，检查环境、查找本机已有的 harness，没有时从官方仓库获取；没有 npm 依赖，也不需要全局安装。</p>
+        <div class="code"><span class="label">接入需求示例</span><pre class="prompt"><code>我想给当前项目接入 harness：https://github.com/windvalley/harness</code></pre></div>
       </li>
       <li>
         <h4>查看接入方案与检查配置</h4>
@@ -698,7 +695,7 @@ footer { border-top: 1px solid var(--line); color: var(--muted); font-size: .88r
           <li><strong>DeepSeek Harness</strong>：在自己的终端注册一次插件，<code>--profile</code> 桌面版用 <code>desktop</code>，浏览器版用 <code>web</code>：</li>
         </ul>
         <div class="code"><pre><code>dsh plugin --profile &lt;desktop|web&gt; add &lt;主 Worktree 路径&gt;/.harness/dsh-plugin</code></pre></div>
-        <p>完成当前客户端的操作后，告诉 Agent：“请检查接入状态，说明哪些已验证生效、哪些仍待验证。”由它运行诊断并说明结果，下面是输出示意：</p>
+        <p>完成当前客户端的操作后，告知 Agent 已完成即可，由它接续诊断并解释已验证与仍待验证的部分，下面是输出示意：</p>
         <div class="code term"><span class="label">输出节选</span><pre><code>  [ok] git:reference-transaction: &lt;项目&gt;/.git/hooks/reference-transaction
   [ok] client:claude: PreToolUse 已接入（CLI 已验证；桌面版仅静态确认，未端到端实测）
   [!!] client:codex: 钩子已接入但尚未信任：在 Codex 里运行 /hooks 批准一次，否则命令不会经过门禁
@@ -717,23 +714,27 @@ footer { border-top: 1px solid var(--line); color: var(--muted); font-size: .88r
 
     <!-- ============ 日常 ============ -->
     <h2 id="daily">日常工作流</h2>
-    <p>规则已经写进项目（<code>AGENTS.md</code> 托管块与 <code>.harness/rules/</code>），平时只需要告诉 Agent 这次做什么、按什么节奏。下文的 <code>harness</code> 都指项目里的入口 <code>.harness/bin/harness</code>。</p>
+    <p>规则已经写进项目（<code>AGENTS.md</code> 托管块与 <code>.harness/rules/</code>），用平常的话描述想法、问题或希望的变化即可。理解需求、澄清关键问题、整理验收标准和交付结果由 Agent 主动负责。下文的 <code>harness</code> 都指项目里的入口 <code>.harness/bin/harness</code>。</p>
 
-    <h3 id="prompts">配合使用的提示词</h3>
-    <div class="code"><span class="label">开始任务</span><pre class="prompt"><code>请完成 &lt;具体需求&gt;，预期行为是 &lt;可观察结果&gt;。
-完成后给出查看效果的入口、验收结果和最终合并状态。</code></pre></div>
-    <p>Agent 自行判断任务分级，需要先方案后实施的任务，再按下面的对话继续：</p>
-    <div class="code"><span class="label">澄清完毕</span><pre class="prompt"><code>问题问完了，写验收清单、spec 和 plan，提交到任务分支后给我看。</code></pre></div>
-    <div class="code"><span class="label">授权实施</span><pre class="prompt"><code>可以，开始实施。</code></pre></div>
-    <p>最后一句就是授权，Agent 会照录原话记下授权，然后按 plan 先红后绿连续做到完成。</p>
+    <h3 id="prompts">如何表达需求与后续协作</h3>
+    <p>下面是两个普通需求示例，不是必须照抄的提示词模板。用户不需要预先填齐验收标准、安排工作流程或重复交付要求，实际分级由 Agent 核对仓库后判断。</p>
+
+    <h4>大需求：先讨论，再授权实施</h4>
+    <div class="code"><span class="label">描述想法即可</span><pre class="prompt"><code>我想让系统支持多个企业使用，企业之间看不到彼此的数据，每个企业还能管理自己的成员和权限。</code></pre></div>
+    <p>这类需求涉及数据隔离与权限。Agent 应先了解现状，再与你讨论企业边界、角色权限和已有数据兼容等关键问题，主动整理验收清单、行为说明与实施方案。</p>
+    <p>关键问题已明确或由你标为待定后，Agent 应保留未决问题并说明影响，主动进入方案，不需要你宣布问题问完或指挥写文档。方案交付后它应停下，等待你明确同意实施该方案。</p>
+    <p>最初表达需求不替代方案交付后的实施授权，对某个澄清答案或方案细节的认可也不等于同意实施。授权不要求固定措辞。</p>
+
+    <h4>小需求：核实范围后可以直接实施</h4>
+    <div class="code"><span class="label">描述希望的变化即可</span><pre class="prompt"><code>列表没有数据时，我希望显示“暂无数据”。</code></pre></div>
+    <p>Agent 核实这只是已有列表页的局部调整，不改接口、数据或权限且满足小任务条件后，可以直接实施，并验证空列表和正常列表的表现。发现影响超出小任务范围时，应转入讨论、方案和授权流程。</p>
+    <p>用户当前只要求分析、评估或讨论时仍保持只读，不能因为需求看起来小就动手。用户也可以补充约束或调整节奏。</p>
 
     <h3 id="one-task">一次任务</h3>
-    <p>首次尝试选一个范围明确的小需求，例如给现有列表页补充空状态，直接对 Agent 说：</p>
-    <div class="code"><span class="label">需求示例</span><pre class="prompt"><code>请给现有列表页增加空状态提示：没有数据时显示“暂无数据”，有数据时正常显示列表。
-完成后告诉我如何查看效果，并给出验收结果和最终合并状态。</code></pre></div>
-    <p>Agent 负责准备任务分支及需要的 Worktree，完成实现、提交、验证与独立评审，再按项目授权处理本地合并。需要方案时先交出方案等你同意，平常不必重复安排命令。</p>
+    <p>两类任务都由 Agent 整理验收标准，关键业务含义有歧义时再与你确认，按相应流程准备任务分支及需要的 Worktree，执行验证和独立评审，再按项目授权处理本地合并。用户不需要额外提醒它汇报效果入口、验收结果和最终合并状态。</p>
     <ul>
-      <li><strong>看效果</strong>：从约定入口查看，空列表显示“暂无数据”，有数据时列表正常。</li>
+      <li><strong>看阶段</strong>：大需求先讨论并交付方案，明确授权后才实施；小需求核实范围后可以直接实施。</li>
+      <li><strong>看效果</strong>：从约定入口查看已经实施的结果；例如小需求中空列表显示“暂无数据”，有数据时列表正常。</li>
       <li><strong>看证据</strong>：验收逐条对应需求，验证与独立评审有结果，未执行项与阻塞明确列出。</li>
       <li><strong>看状态</strong>：说明已合并、待授权合并还是被阻塞，并给出分支、提交与工作区位置。</li>
     </ul>
@@ -766,13 +767,13 @@ footer { border-top: 1px solid var(--line); color: var(--muted); font-size: .88r
 
     <h3 id="cleanup">清理任务 Worktree</h3>
     <p>合并后保留任务 Worktree 和分支，因为会话可能还停在里面。需要清理时向 Agent 发起请求：</p>
-    <div class="code"><span class="label">先看预览</span><pre class="prompt"><code>请预览可以清理的任务工作区，列出具体目录、分支、会连带删除的本机文件和跳过原因，先不要删除。</code></pre></div>
-    <p>看过预览并明确确认具体对象后，Agent 再执行清理。含本机文件的目录需要单独明确同意；主 Worktree、命令所在 Worktree 和验证检出会保留。</p>
+    <div class="code"><span class="label">清理需求示例</span><pre class="prompt"><code>我想清理已经完成的任务工作区。</code></pre></div>
+    <p>Agent 应先给出预览，列出具体目录、分支、会连带删除的本机文件和跳过原因，不立即删除。看过预览并明确确认具体对象后再清理；含本机文件的目录需要单独明确同意，主 Worktree、命令所在 Worktree 和验证检出会保留。</p>
     <p>预览还会检查提交是否已合并、新任务保护、未提交文件、进程和锁定情况。详细条件和命令见<a href="https://github.com/windvalley/harness/blob/main/docs/reference.md#清理任务-worktree">清理参考</a>。</p>
 
     <!-- ============ 被拦截 ============ -->
     <h2 id="blocked">被拦截时怎么办</h2>
-    <div class="code"><span class="label">交给 Agent 继续处理</span><pre class="prompt"><code>请解释这次拦截的原因，并按项目规则继续；需要我决定的事项请列出具体选项。</code></pre></div>
+    <p>在已授权的任务中，Agent 应主动解释拦截原因并按规则处理常规改道和重跑，不需要用户另发调度指令。需要业务判断、授权或亲自执行时，由它说明具体事项；如果想了解原因，直接问“刚才为什么被拦住了？”即可。</p>
     <p>拦截信息包含原因、对象、正确做法和规则 id，Agent 照着“正确做法”改道即可：</p>
     <div class="code term"><pre><code>[harness] 已拦截: 强制推送会覆盖远端历史
 对象: git push --force origin main
@@ -833,7 +834,8 @@ footer { border-top: 1px solid var(--line); color: var(--muted); font-size: .88r
 
     <h3 id="new-machine">新成员或新机器</h3>
     <p>入口与客户端配置随仓库分发，门禁代码与 git 钩子留在各自的机器上。工具调用可用时，可以交给 Agent：</p>
-    <div class="code"><span class="label">本机接续安装</span><pre class="prompt"><code>请按项目锁定的 harness 版本完成本机安装，检查接入状态，并列出需要我完成的客户端操作。</code></pre></div>
+    <div class="code"><span class="label">说明当前目标</span><pre class="prompt"><code>我想在这台新电脑上继续开发这个项目。</code></pre></div>
+    <p>Agent 应检查项目锁定的版本，完成本机安装与诊断，并说明需要用户完成的客户端操作。</p>
     <p>本机没有安装锁定版本时，已启用的实时拦截可能拒绝所有 Agent 工具调用。此时由人在项目目录的终端先完成安装，再让 Agent 接续诊断：</p>
     <div class="code"><span class="label">工具调用被拦截时，由人执行</span><pre><code>cd &lt;项目&gt;
 node ~/github/harness/bin/harness.mjs install --local
@@ -841,14 +843,14 @@ node ~/github/harness/bin/harness.mjs install --local
     <p><code>install --local</code> 按项目锁定的版本安装代码（必要时从对应的 <code>v&lt;版本&gt;</code> 标签导出），再写入本机的钩子与插件目录，不改任何入库文件。装好之前，Claude Code 与 Codex 的实时拦截会拒绝一切调用并提示这条命令。</p>
 
     <h3 id="upgrade">升级</h3>
-    <div class="code"><span class="label">交给 Agent 升级</span><pre class="prompt"><code>请检查当前项目的 harness 版本，阅读目标版本的变更记录并说明升级影响。
-按项目规则准备升级环境，完成升级、验证和独立评审；需要我亲自确认时给出具体步骤。
-确认后继续完成已获授权的本地合并，报告升级结果、仍需手工迁移的配置和客户端操作。</code></pre></div>
-    <p>Agent 负责准备任务分支及需要的 Worktree。<code>upgrade</code> 会整份重写 <code>rules/</code> 与 <code>templates/</code>，项目自己的规范请写在 <code>AGENTS.md</code> 托管块之外；已有配置和黄金任务的迁移由 Agent 核对并说明。</p>
+    <div class="code"><span class="label">升级需求示例</span><pre class="prompt"><code>我想升级当前项目使用的 harness。</code></pre></div>
+    <p>Agent 应检查当前版本，与你明确目标版本并说明升级影响，准备任务分支及需要的 Worktree，完成验证、评审和必要确认后的已授权本地合并，主动报告结果与待处理项。</p>
+    <p><code>upgrade</code> 会整份重写 <code>rules/</code> 与 <code>templates/</code>，项目自己的规范请写在 <code>AGENTS.md</code> 托管块之外；已有配置和黄金任务的迁移由 Agent 核对并说明。</p>
     <p>具体命令与其他成员的接续操作见<a href="https://github.com/windvalley/harness/blob/main/docs/reference.md#升级">升级参考</a>。</p>
 
     <h3 id="sync">与远端同步</h3>
-    <div class="code"><span class="label">先说明方式与影响</span><pre class="prompt"><code>请检查本地与远端主分支的差异，说明同步方式和影响，经我授权后按本机门禁同步，并报告结果。</code></pre></div>
+    <div class="code"><span class="label">同步需求示例</span><pre class="prompt"><code>我想把远端主分支的更新同步到本地。</code></pre></div>
+    <p>Agent 应检查差异并说明同步方式和影响，在项目授权范围内处理，最后汇报结果。</p>
     <p>远程写入仍须按项目规则单独取得授权，请求本地接入或合并不代表允许推送。下面是同步机制与命令参考。</p>
     <p>harness 只管本地主分支。Agent 推送主分支会被拦截，由人推送；Agent 可以推送任务分支，但不能强推。同步远端主分支有两种做法：</p>
     <div class="code"><span class="label">做法一：走一遍本机门禁</span><pre><code>git fetch origin
