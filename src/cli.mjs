@@ -44,7 +44,7 @@ const USAGE = `harness <命令> [参数]
   approve  --branch <名称> [--yes --note <原话>]     查看任务方案；用户同意实施后加 --yes，--note 照录用户原话
   merge    --branch <名称> [--dry-run]               受控合并到主分支（本地交付）
   submit   --branch <名称>                           推送核对过的提交并创建或更新 PR/MR（远程交付）
-  sync                                              把本地主分支快进到远程主分支
+  sync     [--remote <远程>]                         把本地主分支快进到远程主分支；--remote 只在首次接入时使用
   worktree clean [--yes] [--with-local-files]       预览已合并的任务 Worktree；--yes 才删除，含 .env 这类本机文件的要再加 --with-local-files
 
 体检与度量
@@ -214,9 +214,9 @@ async function cmdSubmit(argv) {
 }
 
 function cmdSync(argv) {
-  parseArgs({ args: argv, options: {} });
+  const { values } = parseArgs({ args: argv, options: { remote: { type: "string" } } });
   try {
-    const result = syncTask({ cwd: process.cwd(), log: (line) => process.stderr.write(`${line}\n`) });
+    const result = syncTask({ cwd: process.cwd(), remote: values.remote ?? null, log: (line) => process.stderr.write(`${line}\n`) });
     print(JSON.stringify(result, null, 2));
     if (result.followUps?.length > 0) {
       process.stderr.write(`\n同步完成，还需要在客户端做:\n${result.followUps.map((note) => `  - ${note}`).join("\n")}\n`);

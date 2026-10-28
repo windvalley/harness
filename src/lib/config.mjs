@@ -88,9 +88,10 @@ export function loadGuardProject(cwd) {
   return null;
 }
 
-export function loadTrustedProject(cwd) {
+/** at 给定时从主分支的那个提交读配置，调用方据此把“配置”与“基线”固定在同一个提交上。 */
+export function loadTrustedProject(cwd, { at } = {}) {
   const root = repoRoot(cwd);
-  const project = loadProject(root, { fromRef: trustedMainRef(root), root });
+  const project = loadProject(root, { fromRef: at ?? trustedMainRef(root), root });
   checkMainBranchName(root, project);
   return project;
 }
@@ -115,9 +116,9 @@ export function harnessOnMain(root) {
  * 主分支还没有配置时处于首次接入阶段，没有信任根可用，只能按接入分支提议的配置执行，
  * 由合并前的人工确认来认可这份配置，因此返回结果带 bootstrap 标记，合并时强制要求确认。
  */
-export function loadGateProject(cwd, { branch } = {}) {
+export function loadGateProject(cwd, { branch, at } = {}) {
   const root = repoRoot(cwd);
-  if (harnessOnMain(root)) return loadTrustedProject(root);
+  if (harnessOnMain(root)) return loadTrustedProject(root, { at });
   const mainRef = trustedMainRef(root);
   if (!branch) {
     throw new Error(`${mainRef} 上还没有 .harness/config.json：首次接入阶段请用 --branch <接入分支> 指定配置来源`);
@@ -152,6 +153,8 @@ export const GATE_FILES = [
   ".harness/config.json",
   ".harness/policy.json",
   ".harness/verify.json",
+  // 版本锁决定本机跑哪份门禁代码，远程改它和改门禁本身是一回事。
+  ".harness/VERSION",
   ".harness/golden/**",
   ".harness/rules/**",
   ".harness/bin/**",
@@ -197,7 +200,7 @@ export const ENTRY_FILES = [".harness/bin/**", ".claude/settings.json", ".codex/
 /** 合入后要在主 Worktree 刷新本机钩子的文件：执行器入口、项目配置的钩子目录，以及决定钩子目录的配置本身。 */
 export function entryPaths(project) {
   const hooks = project ? gitHooksConfig(project.config) : null;
-  return [...ENTRY_FILES, ".harness/config.json", ...(hooks ? [`${hooks.hooksDir}/**`] : [])];
+  return [...ENTRY_FILES, ".harness/config.json", ".harness/VERSION", ...(hooks ? [`${hooks.hooksDir}/**`] : [])];
 }
 
 const DELIVERY_PROVIDERS = { github: "gh", gitlab: "glab" };
@@ -223,10 +226,6 @@ export function deliverySettings(config) {
   }
   if (mode === "remote" && provider === null) throw new Error(".harness/config.json 的 delivery.mode 为 remote 时必须指定 delivery.provider：github 或 gitlab");
   return { mode, remote, provider: mode === "remote" ? provider : null };
-}
-
-export function deliveryCommand(settings) {
-  return DELIVERY_PROVIDERS[settings.provider] ?? null;
 }
 
 export function sameDelivery(a, b) {

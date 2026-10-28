@@ -548,6 +548,8 @@ Agent 运行 `harness confirm --branch <分支>` 并展示只读摘要：涉及�
 - 本地主分支有远程没有的提交时以 `not_fast_forward` 拒绝，不改写历史。
 - 远程带来门禁改动、交付设置有变化或处于首次接入时，要求有绑定目标 tree 的人工确认，命令是 `harness confirm --branch <远程>/<主分支>`；判定按同步前的配置，目标提交关掉 `confirmOnGateChange` 也不例外。
 - 目标提交锁定的 harness 版本本机没装时，在更新之前以 `version_missing` 拒绝，给出由人执行的 `install --version`。
+  `.harness/VERSION` 与入口 shim 锁定的版本不一致时以 `version_mismatch` 拒绝；`.harness/VERSION` 本身也是门禁文件，改它要人确认。
+- 配置与基线取自同一个本地主分支提交：读配置之后主分支被别的合并推进时以 `main_moved` 拒绝，不按旧配置判断新基线。
 - 与 `merge` 共用合并锁、主 Worktree 就绪检查、令牌写入、文件同步与回退；更新后刷新本机安装并执行 `merge.postMergeCommand`，失败时退出码为 3，并说明主分支已经更新。
 - 普通代码改动按“信任平台主分支”导入，不在本机重新验证和评审。
 - 本地交付下同样可用，替代由人用绕过开关手动快进的做法。
@@ -940,7 +942,7 @@ node ~/github/harness/bin/harness.mjs install --local   # 按新锁定的版本�
 | `approve --branch <分支> [--yes --note <原话>]` | 查看任务方案与授权状态；用户同意实施后由 Agent 带 `--yes` 照录原话记录授权 |
 | `merge --branch <分支> [--dry-run]` | 受控合并到主分支（本地交付） |
 | `submit --branch <分支>` | 推送核对过的提交并创建或更新 PR/MR（远程交付） |
-| `sync` | 把本地主分支快进到远程主分支，核对门禁改动并刷新本机安装 |
+| `sync [--remote <远程>]` | 把本地主分支快进到远程主分支，核对门禁改动并刷新本机安装；`--remote` 只在首次接入时使用 |
 | `worktree clean [--yes] [--with-local-files]` | 预览已合并的任务 Worktree；`--yes` 删除 Worktree 与分支 |
 | `doctor` | 安装与接入自检 |
 | `rules` | 列出解析后的生效规则 |
@@ -1007,6 +1009,9 @@ harness 防的是 Agent 的误操作，以及被提示注入后常见的绕过�
 | `not_fast_forward` | 本地主分支有远程没有的提交，`sync` 不改写历史；先由人判断这些提交的来源 |
 | `platform_missing`、`platform_failed` | 平台命令没装或调用失败；由人安装并运行 `gh auth login` 或 `glab auth login` |
 | `version_missing` | 目标提交锁定的 harness 版本本机没装，由人运行 `install --version <版本>` |
+| `version_mismatch` | 目标提交里 `.harness/VERSION` 与入口 shim 锁定的版本不一致，先在任务分支 `upgrade` 后合入 |
+| `platform_repo_unknown` | 远程地址识别不出平台仓库（例如本地路径），`submit` 无法确定要操作哪个仓库 |
+| `bootstrap_mismatch` | 首次接入时取到的配置写的远程或主分支与本次同步来源不一致，按提示加 `--remote` 重试 |
 | `review_stale` | 主分支在评审之后改了本分支也改过的文件；在任务分支上 `git merge main` 并提交，再重新验证与评审 |
 | `bootstrap_not_fast_forward` | 首次接入的分支落后于主分支，先在分支上 `git merge main` |
 | `bootstrap_update_refused` | 原有的主分支保护拒绝了这次合并；在接入分支重新运行 `init --take-over`，提交后重新验证、确认并合并 |
@@ -1031,6 +1036,7 @@ harness uninstall --dry-run   # 先看会删什么
 harness uninstall             # 删除生成物，保留 .harness/ 下的配置、规则、用例与验收清单
 harness uninstall --purge     # 连 .harness/ 一起删
 harness versions              # 列出本机已安装的版本
+harness install --version 0.9.0   # 只装这个版本，不改项目文件（sync 遇到版本没装时用它）
 harness prune --dry-run       # 预览清理旧版本，默认只保留当前版本
 ```
 

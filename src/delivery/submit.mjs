@@ -1,11 +1,12 @@
-import { deliveryAt, deliverySettings, describeDelivery, loadGateProject, mainBranch } from "../lib/config.mjs";
-import { changedPaths, git, gitOk, isAncestor, refExists, resolveCommit, run } from "../lib/git.mjs";
+import { deliveryAt, deliverySettings, describeDelivery, loadGateProject, mainBranch, trustedMainRef } from "../lib/config.mjs";
+import { changedPaths, gitOk, isAncestor, refExists, repoRoot, resolveCommit, run } from "../lib/git.mjs";
+import { tail } from "../lib/redact.mjs";
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { appendLedger, dataDir, readRecord, writeRecord } from "../lib/store.mjs";
 import { MergeError, checkGates } from "../merge/merge.mjs";
-import { fetchRemoteMain, pushCommit } from "./remote.mjs";
-import { createRequest, findOpen, managedSection, platformStatus, replaceManagedSection, updateRequest } from "./platform.mjs";
+import { fetchRemoteMain, pushCommit, remoteBranchTip } from "./remote.mjs";
+import { createRequest, findOpen, managedSection, platformRepo, platformStatus, replaceManagedSection, updateRequest } from "./platform.mjs";
 
 /** 提交记录：按任务提交索引，分“已推送”与“MR 已就绪”两个阶段，重试时据此跳过已完成的步骤。 */
 export const SUBMIT_KIND = "submit";
@@ -124,8 +125,13 @@ function titleFor({ root, branchCommit }) {
  * 任何一步失败都不改本地主分支；推送之后的失败停在“已推送”，重跑只补 PR/MR。
  */
 export async function submitTask({ cwd, branch, log = console.error }) {
+  // 配置与基线固定在同一个主分支提交上：先取提交，再从这个提交读配置。
+  // 否则读配置之后主分支被别的合并推进，就会按旧配置核对新基线。
   // 首次接入时主分支还没有配置，只能按分支提议的配置核对；loadGateProject 已经处理这种情况。
-  const project = loadGateProject(cwd, { branch });
+  const repo0 = repoRoot(cwd);
+  const sourceRef = trustedMainRef(repo0);
+  const pinnedMain = resolveCommit(repo0, sourceRef);
+  const project = loadGateProject(cwd, { branch, at: pinnedMain });
   const root = project.root;
   const mainRef = mainBranch(project);
   validSource({ root, branch, mainRef });
@@ -146,9 +152,24 @@ export async function submitTask({ cwd, branch, log = console.error }) {
     );
   }
 
+  // 平台调用一律绑定获授权的那个远程仓库：gh 与 glab 默认按本地 remote 或 GH_REPO 推断，
+  // 配置成 upstream 时可能推送到 A、却改到 B 的同名 PR，把 A 的门禁结果写到别的代码上。
+  const repo = platformRepo({ root, remote: settings.remote });
+  if (settings.mode === "remote" && !repo) {
+    throw new MergeError(
+      [
+        `无法从远程 ${settings.remote} 的地址识别平台仓库，不能创建 ${platform.label}。`,
+        `远程地址: ${tail(gitOk(root, ["remote", "get-url", settings.remote]), 1)}`,
+        "确认这个远程指向 GitHub 或 GitLab 的仓库地址（例如 git@host:group/repo.git 或 https://host/group/repo.git），",
+        "平台命令只接受能识别出 HOST/OWNER/REPO 的地址；本地路径形式的远程只适合测试。",
+      ].join("\n"),
+      "platform_repo_unknown",
+    );
+  }
+
   const relay = fetchRemoteMain({ root, remote: settings.remote, mainRef, run });
   const remoteBase = resolveCommit(root, relay);
-  const localMain = resolveCommit(root, mainRef);
+  const localMain = mainRef === sourceRef ? pinnedMain : resolveCommit(root, mainRef);
   if (remoteBase !== localMain) {
     throw new MergeError(
       [
@@ -165,9 +186,15 @@ export async function submitTask({ cwd, branch, log = console.error }) {
   // 门禁核对与 merge 共用：本地主分支此刻等于远程主分支，核对结果对两者都成立。
   const gates = await checkGates({ project, root, branch, log });
   const { resultTree, newHead } = gates;
+  if (gates.mainCommit !== localMain || resolveCommit(root, sourceRef) !== pinnedMain) {
+    throw new MergeError(
+      `${mainRef} 在核对过程中前进了，核对用的配置与基线不再是同一个提交；先 harness sync，再重新运行 harness submit --branch ${branch}`,
+      "main_moved",
+    );
+  }
 
   // 先查有没有已存在的 PR/MR：查询失败时还没推送，远程保持原样；推送之后再查会把失败留在半路。
-  const open = findOpen({ provider: settings.provider, branch, base: mainRef, cwd: root, env: process.env });
+  const open = findOpen({ provider: settings.provider, branch, base: mainRef, repo, cwd: root, env: process.env });
 
   if (resolveCommit(root, branch) !== branchCommit) {
     throw new MergeError(`核对期间任务分支顶端移动了，重新运行 harness submit --branch ${branch}`, "branch_moved");
@@ -175,7 +202,8 @@ export async function submitTask({ cwd, branch, log = console.error }) {
 
   // 已有提交记录且停在“已推送”、顶端没变、远程仍是那个提交时，跳过推送只补 PR/MR。
   const prior = readSubmit({ root, branch, commit: branchCommit });
-  const remoteBranch = remoteTip({ root, remote: settings.remote, branch });
+  // 只在有“已推送”记录时才去问远程：没记录时一定要推，不必多一次网络往返。
+  const remoteBranch = prior.ok && prior.record.stage === "pushed" ? remoteBranchTip({ root, remote: settings.remote, branch, run }) : null;
   let pushed = false;
   if (prior.ok && prior.record.stage === "pushed" && remoteBranch === branchCommit) {
     log(`[submit] ${branch} 已经在远程，跳过推送，只补 ${platform.label}`);
@@ -192,6 +220,7 @@ export async function submitTask({ cwd, branch, log = console.error }) {
       mergedHead: newHead,
       provider: settings.provider,
       remote: settings.remote,
+      repo,
       createdAt: new Date().toISOString(),
     });
     appendLedger(root, { event: "submit.push", branch, head: branchCommit, remote: settings.remote });
@@ -214,8 +243,8 @@ export async function submitTask({ cwd, branch, log = console.error }) {
   let request;
   try {
     request = open
-      ? updateRequest({ provider: settings.provider, id: open.id, body: replaceManagedSection(open.body, section), cwd: root, env: process.env })
-      : createRequest({ provider: settings.provider, branch, base: mainRef, title: titleFor({ root, branchCommit }), body: section, cwd: root, env: process.env });
+      ? updateRequest({ provider: settings.provider, id: open.id, body: replaceManagedSection(open.body, section), repo, cwd: root, env: process.env })
+      : createRequest({ provider: settings.provider, branch, base: mainRef, title: titleFor({ root, branchCommit }), body: section, repo, cwd: root, env: process.env });
   } catch (error) {
     if (error.code !== "platform_failed") throw error;
     throw new MergeError(
@@ -238,6 +267,7 @@ export async function submitTask({ cwd, branch, log = console.error }) {
     mergedHead: newHead,
     provider: settings.provider,
     remote: settings.remote,
+    repo,
     url: request.url,
     requestId: request.id,
     createdAt: new Date().toISOString(),
@@ -256,11 +286,7 @@ export async function submitTask({ cwd, branch, log = console.error }) {
     provider: settings.provider,
     remote: settings.remote,
     delivery: settings,
+    repo,
     record: { stage: record.stage, createdAt: record.createdAt },
   };
-}
-
-function remoteTip({ root, remote, branch }) {
-  const result = git(root, ["rev-parse", "--verify", "--quiet", `refs/remotes/${remote}/${branch}`]);
-  return result.status === 0 ? result.stdout.trim() : null;
 }

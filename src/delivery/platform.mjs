@@ -1,5 +1,6 @@
 import { commandExists } from "../review/review.mjs";
-import { run } from "../lib/git.mjs";
+import { run, git } from "../lib/git.mjs";
+import { tail } from "../lib/redact.mjs";
 
 /**
  * harness 在 PR/MR 描述里维护的区块。区块外的文字由团队自己写，重跑 submit 时原样保留。
@@ -59,6 +60,25 @@ function normalizeHost(host, path) {
   return { host, path: parts.join("/") };
 }
 
+/**
+ * 获授权远程对应的平台仓库，形如 HOST/OWNER/REPO。
+ * 平台命令默认按本地仓库的 remote 或 GH_REPO 推断要操作哪个仓库，配置成 upstream 时
+ * 可能推送到仓库 A、却改到仓库 B 的同名 PR，因此所有平台调用都显式带上这个标识。
+ * 取配置原值而不是 git remote get-url：后者会应用 url.insteadOf 重写，映射到镜像或本地目录后就不是获授权的仓库了。
+ * 识别不出（本地路径等）时返回 null。
+ */
+export function platformRepo({ root, remote }) {
+  const url = git(root, ["config", "--get", `remote.${remote}.url`]);
+  if (url.status !== 0) return null;
+  const parsed = parseRemoteUrl(url.stdout.trim());
+  return parsed ? `${parsed.host}/${parsed.path}` : null;
+}
+
+/** gh 与 glab 都接受 --repo HOST/OWNER/REPO。 */
+function repoFlag(repo) {
+  return repo ? ["--repo", repo] : [];
+}
+
 /** 平台命令与子命令，按 provider 分派。参数形状按 gh 2.94 与 glab 的 mr 子命令写。 */
 const PLATFORMS = {
   github: {
@@ -94,47 +114,90 @@ export function platformStatus(provider) {
  * 查找已打开、以任务分支为源、以主分支为目标的 PR/MR。
  * 返回 { id, url, body } 或 null；调用方用 id 决定创建还是更新。
  */
-export function findOpen({ provider, branch, base, cwd, env = process.env }) {
+export function findOpen({ provider, branch, base, repo = null, cwd, env = process.env }) {
   const platform = platformOf(provider);
   const args =
     provider === "github"
-      ? [platform.group, "list", "--head", branch, "--base", base, "--state", "open", "--json", "number,url,body"]
-      : [platform.group, "list", "--source-branch", branch, "--target-branch", base];
+      ? [
+          platform.group,
+          "list",
+          // --head 只按分支名匹配，fork 里同名分支的 PR 也会命中，靠 isCrossRepository 排除。
+          "--head",
+          branch,
+          "--base",
+          base,
+          "--state",
+          "open",
+          "--json",
+          "number,url,body,state,headRefName,isCrossRepository",
+          ...repoFlag(repo),
+        ]
+      : [
+          platform.group,
+          "list",
+          "--source-branch",
+          branch,
+          "--target-branch",
+          base,
+          "--output",
+          "json",
+          ...repoFlag(repo),
+        ];
   const result = run(platform.bin, args, { cwd, env });
   if (result.status !== 0) throw platformFailure(provider, "list", result);
   let parsed;
   try {
     parsed = JSON.parse(result.stdout.trim() || "[]");
   } catch {
-    throw new Error(`无法解析 ${platform.bin} ${platform.group} list 的输出: ${result.stdout.trim().slice(0, 200)}`);
+    throw new Error(
+      `无法解析 ${platform.bin} ${platform.group} list 的输出: ${tail(result.stdout, 4).slice(0, 300)}\n` +
+        `可能需要更新 ${platform.bin}，或者该子命令不支持 JSON 输出。`,
+    );
   }
   const list = Array.isArray(parsed) ? parsed : [];
-  const first = list.find((item) => (item.state ?? "open") === "open");
+  const first = list.find((item) => isOwnOpen(provider, item, { branch }));
   if (!first) return null;
   return provider === "github"
     ? { id: first.number, url: first.url, body: first.body ?? "" }
     : { id: first.iid, url: first.web_url, body: first.description ?? "" };
 }
 
+/**
+ * 是不是本仓库自己的、以任务分支为源的打开请求。
+ * GitHub 用 isCrossRepository 排除 fork 里同名分支的 PR；GitLab 要求 source_project_id 与 target_project_id 相同。
+ * 识别字段缺失时按“不是自己的”处理：宁可新建一个，也不把门禁结果写到别的仓库的代码上。
+ */
+function isOwnOpen(provider, item, { branch }) {
+  if (provider === "github") {
+    if ((item.state ?? "").toUpperCase() !== "OPEN") return false;
+    if (item.headRefName !== branch) return false;
+    return item.isCrossRepository === false;
+  }
+  // GitLab 的打开状态是 opened。
+  if (item.state !== "opened") return false;
+  if (item.source_branch !== undefined && item.source_branch !== branch) return false;
+  return item.source_project_id !== undefined && item.source_project_id === item.target_project_id;
+}
+
 /** 创建指向主分支的 PR/MR。标题只在创建时确定，之后不覆盖，避免冲掉团队改过的标题。 */
-export function createRequest({ provider, branch, base, title, body, cwd, env = process.env }) {
+export function createRequest({ provider, branch, base, title, body, repo = null, cwd, env = process.env }) {
   const platform = platformOf(provider);
   const args =
     provider === "github"
-      ? [platform.group, "create", "--head", branch, "--base", base, "--title", title, "--body-file", "-"]
-      : [platform.group, "create", "--source-branch", branch, "--target-branch", base, "--title", title, "--description", body];
+      ? [platform.group, "create", "--head", branch, "--base", base, "--title", title, "--body-file", "-", ...repoFlag(repo)]
+      : [platform.group, "create", "--source-branch", branch, "--target-branch", base, "--title", title, "--description", body, ...repoFlag(repo)];
   const result = run(platform.bin, args, { cwd, env, input: provider === "github" ? body : undefined });
   if (result.status !== 0) throw platformFailure(provider, "create", result);
   return { id: null, url: result.stdout.trim().split("\n").filter(Boolean).at(-1) ?? "" };
 }
 
 /** 只替换描述里的托管区块，标题与区块外的内容都不动。 */
-export function updateRequest({ provider, id, body, cwd, env = process.env }) {
+export function updateRequest({ provider, id, body, repo = null, cwd, env = process.env }) {
   const platform = platformOf(provider);
   const args =
     provider === "github"
-      ? [platform.group, "edit", String(id), "--body-file", "-"]
-      : [platform.group, "update", String(id), "--description", body];
+      ? [platform.group, "edit", String(id), "--body-file", "-", ...repoFlag(repo)]
+      : [platform.group, "update", String(id), "--description", body, ...repoFlag(repo)];
   const result = run(platform.bin, args, { cwd, env, input: provider === "github" ? body : undefined });
   if (result.status !== 0) throw platformFailure(provider, "update", result);
   return { id, url: result.stdout.trim().split("\n").filter(Boolean).at(-1) ?? "" };
@@ -142,7 +205,7 @@ export function updateRequest({ provider, id, body, cwd, env = process.env }) {
 
 function platformFailure(provider, action, result) {
   const platform = platformOf(provider);
-  const detail = (result.stderr || result.stdout).trim().split("\n").slice(-6).join("\n");
+  const detail = tail(result.stderr || result.stdout);
   const error = new Error(
     [
       `${platform.bin} ${platform.group} ${action} 失败(exit ${result.status})`,

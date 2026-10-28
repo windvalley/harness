@@ -23,12 +23,17 @@ function setup({ delivery, config = {}, ...opts } = {}) {
   return repo;
 }
 
+// 远程地址写成平台地址，由 url.insteadOf 把 git 的读写重定向到本地裸仓库：
+// harness 从配置原值识别平台仓库，git 推送与取得仍走真实的本地仓库，不联网。
+const PLATFORM_URL = "https://code.example.com/acme/demo.git";
+
 /** 本地裸仓库充当远程，推送与取得都走真实的 git。 */
 function withRemote(repo) {
   const remote = join(repo.root, "..", "remote.git");
   const created = sh(join(repo.root, ".."), "git", ["init", "-q", "--bare", "-b", "main", remote], repo.env);
   assert.equal(created.status, 0, created.stderr);
-  git(repo.root, "remote", "add", "origin", remote);
+  git(repo.root, "remote", "add", "origin", PLATFORM_URL);
+  git(repo.root, "config", `url.${remote}.insteadOf`, PLATFORM_URL);
   git(repo.root, "push", "-q", "origin", "main");
   return remote;
 }
@@ -77,11 +82,11 @@ if ((process.env.FAKE_PLATFORM_FAIL || "").split(",").includes(action)) {
 if (bin === "gh" && args[0] === "pr") {
   if (action === "list") {
     const items = state.items.filter((i) => i.state === "open" && i.head === opt("--head") && i.base === opt("--base"));
-    process.stdout.write(JSON.stringify(items.map((i) => ({ number: i.id, url: i.url, body: i.body }))));
+    process.stdout.write(JSON.stringify(items.map((i) => ({ number: i.id, url: i.url, body: i.body, state: "OPEN", headRefName: i.head, isCrossRepository: Boolean(i.fork) }))));
   } else if (action === "create") {
     const id = state.next++;
     const url = "https://github.example/acme/demo/pull/" + id;
-    state.items.push({ id, url, head: opt("--head"), base: opt("--base"), title: opt("--title"), body: opt("--body-file") === "-" ? stdin() : "", state: "open" });
+    state.items.push({ id, url, repo: opt("--repo"), head: opt("--head"), base: opt("--base"), title: opt("--title"), body: opt("--body-file") === "-" ? stdin() : "", state: "open" });
     save();
     process.stdout.write(url + "\\n");
   } else if (action === "edit") {
@@ -92,12 +97,17 @@ if (bin === "gh" && args[0] === "pr") {
   } else process.exit(2);
 } else if (bin === "glab" && args[0] === "mr") {
   if (action === "list") {
+    // 真实 glab 默认输出文本，只有 --output json 才是 JSON。
+    if (opt("--output") !== "json") {
+      process.stdout.write("Showing 1 open merge request on acme/demo\\n\\n!1  task/a  (main) <- (task/a)\\n");
+      process.exit(0);
+    }
     const items = state.items.filter((i) => i.state === "open" && i.head === opt("--source-branch") && i.base === opt("--target-branch"));
-    process.stdout.write(JSON.stringify(items.map((i) => ({ iid: i.id, web_url: i.url, description: i.body }))));
+    process.stdout.write(JSON.stringify(items.map((i) => ({ iid: i.id, web_url: i.url, description: i.body, state: "opened", source_branch: i.head, source_project_id: i.fork ? 99 : 7, target_project_id: 7 }))));
   } else if (action === "create") {
     const id = state.next++;
     const url = "https://gitlab.example/acme/demo/-/merge_requests/" + id;
-    state.items.push({ id, url, head: opt("--source-branch"), base: opt("--target-branch"), title: opt("--title"), body: opt("--description"), state: "open" });
+    state.items.push({ id, url, repo: opt("--repo"), head: opt("--source-branch"), base: opt("--target-branch"), title: opt("--title"), body: opt("--description"), state: "open" });
     save();
     process.stdout.write(url + "\\n");
   } else if (action === "update") {
@@ -125,7 +135,7 @@ function fakePlatform(repo) {
     items: () => (existsSync(stateFile) ? JSON.parse(readFileSync(stateFile, "utf8")).items : []),
     calls: () => (existsSync(logFile) ? readFileSync(logFile, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line)) : []),
     edit(fn) {
-      const state = JSON.parse(readFileSync(stateFile, "utf8"));
+      const state = existsSync(stateFile) ? JSON.parse(readFileSync(stateFile, "utf8")) : { next: 1, items: [] };
       fn(state);
       writeFileSync(stateFile, JSON.stringify(state, null, 2));
     },
@@ -476,7 +486,8 @@ describe("harness submit", () => {
     withRemote(repo);
     fakePlatform(repo);
     task(repo);
-    git(repo.root, "remote", "set-url", "origin", join(repo.root, "..", "missing.git"));
+    git(repo.root, "config", `url.${join(repo.root, "..", "missing.git")}.insteadOf`, PLATFORM_URL);
+    git(repo.root, "config", "--unset", `url.${join(repo.root, "..", "remote.git")}.insteadOf`);
     const result = repo.cli("submit", "--branch", "task/a");
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /fetch_failed/);
@@ -506,6 +517,42 @@ describe("harness submit", () => {
 describe("harness sync", () => {
   const marker = (repo) => join(repo.root, "..", "post-sync.marker");
   const postSync = { merge: { ...CONFIG.merge, postMergeCommand: ["node", "-e", "require('fs').writeFileSync(process.env.SYNC_MARKER, 'ok')"] } };
+
+  test("P1 同步过程中主分支被推进时拒绝，不按旧配置判断新基线", () => {
+    // C0 关闭门禁确认；C1 在 C0 之上重新打开确认；远程 B 在 C1 之上改了规则。
+    const repo = setup({ delivery: GITHUB, config: { governance: { confirmOnGateChange: false, gatePaths: [] } } });
+    const remote = withRemote(repo);
+    const c0 = git(repo.root, "rev-parse", "main");
+    const config = JSON.parse(readFileSync(join(repo.root, ".harness/config.json"), "utf8"));
+    git(repo.root, "checkout", "-q", "-b", "next");
+    const c1 = commit(repo.root, "chore(harness): 打开门禁确认\n\n- 门禁改动需要人确认\n- 由另一个合并带入", {
+      ".harness/config.json": `${JSON.stringify({ ...config, governance: { confirmOnGateChange: true, gatePaths: [] } }, null, 2)}\n`,
+    });
+    const b = commit(repo.root, "chore(harness): 放宽规则\n\n- 关掉 git-stash\n- 平台上合入", {
+      ".harness/policy.json": readFileSync(join(repo.root, ".harness/policy.json"), "utf8").replace('"disabled": []', '"disabled": ["git-stash"]'),
+    });
+    git(repo.root, "checkout", "-q", "main");
+    git(repo.root, "push", "-q", "origin", `${b}:refs/heads/main`);
+
+    // fetch 期间调用的 upload-pack 包装模拟“另一个合并把本地主分支从 C0 推进到 C1”，并同步主 Worktree 的文件。
+    const mover = join(repo.root, "..", "mover.sh");
+    writeFileSync(
+      mover,
+      [
+        "#!/bin/sh",
+        `HARNESS_MAIN_BYPASS=1 git -C ${JSON.stringify(repo.root)} update-ref refs/heads/main ${c1} ${c0} && git -C ${JSON.stringify(repo.root)} read-tree -m -u ${c0} ${c1}`,
+        'exec git-upload-pack "$@"',
+        "",
+      ].join("\n"),
+    );
+    chmodSync(mover, 0o755);
+    git(repo.root, "config", "remote.origin.uploadpack", mover);
+
+    const result = repo.cli("sync");
+    assert.notEqual(result.status, 0, output(result));
+    assert.match(result.stderr, /main_moved/);
+    assert.equal(git(repo.root, "rev-parse", "main"), c1, "没有导入远程 B 的规则改动");
+  });
 
   test("R7 把本地主分支快进到远程主分支，同步主 Worktree 的文件并执行合并后命令", () => {
     const repo = setup({ delivery: GITHUB, config: postSync });
@@ -598,7 +645,8 @@ describe("harness sync", () => {
   test("F2 远程不可达时拒绝同步，本地主分支不变", () => {
     const repo = setup({ delivery: GITHUB });
     withRemote(repo);
-    git(repo.root, "remote", "set-url", "origin", join(repo.root, "..", "missing.git"));
+    git(repo.root, "config", `url.${join(repo.root, "..", "missing.git")}.insteadOf`, PLATFORM_URL);
+    git(repo.root, "config", "--unset", `url.${join(repo.root, "..", "remote.git")}.insteadOf`);
     const before = git(repo.root, "rev-parse", "main");
     const result = repo.cli("sync");
     assert.notEqual(result.status, 0);
@@ -630,6 +678,136 @@ describe("harness sync", () => {
     assert.match(result.stderr, /post_merge_failed/);
     assert.match(result.stderr, /已经更新/);
     assert.equal(git(repo.root, "rev-parse", "main"), target);
+  });
+});
+
+describe("独立评审发现的问题", () => {
+  test("P1 平台调用绑定获授权远程的仓库标识，不依赖本地 remote 或 GH_REPO 的推断", () => {
+    const repo = setup({ delivery: GITHUB });
+    withRemote(repo);
+    const platform = fakePlatform(repo);
+    task(repo);
+    const result = repo.cli("submit", "--branch", "task/a");
+    assert.equal(result.status, 0, output(result));
+    const calls = platform.calls();
+    assert.ok(calls.length >= 2, "至少调用一次 list 与一次 create");
+    for (const call of calls) {
+      const at = call.args.indexOf("--repo");
+      assert.ok(at >= 0, `缺少 --repo: ${JSON.stringify(call)}`);
+      assert.equal(call.args[at + 1], "code.example.com/acme/demo");
+    }
+  });
+
+  test("P1 识别不出平台仓库时在推送之前拒绝", () => {
+    const repo = setup({ delivery: GITHUB });
+    const remote = withRemote(repo);
+    fakePlatform(repo);
+    // 远程改成本地路径：git 仍可用，但没有平台仓库标识。
+    git(repo.root, "remote", "set-url", "origin", remote);
+    task(repo);
+    const result = repo.cli("submit", "--branch", "task/a");
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /platform_repo_unknown/);
+    assert.equal(remoteRef(remote, "refs/heads/task/a"), null);
+  });
+
+  test("P1 别人从 fork 提交的同名分支 PR 不会被当成自己的，不写入门禁结论", () => {
+    const repo = setup({ delivery: GITHUB });
+    const remote = withRemote(repo);
+    const platform = fakePlatform(repo);
+    const head = task(repo);
+    // 先造一个来自 fork 的同名 PR，内容和本次提交无关。
+    platform.edit((state) => {
+      state.next = 2;
+      state.items.push({
+        id: 1,
+        url: "https://github.example/other/demo/pull/1",
+        head: "task/a",
+        base: "main",
+        body: "别人的 PR",
+        state: "open",
+        fork: true,
+      });
+    });
+    const result = repo.cli("submit", "--branch", "task/a");
+    assert.equal(result.status, 0, output(result));
+    const items = platform.items();
+    assert.equal(items.length, 2, "为自己新建一个，不改别人的");
+    const mine = items.find((item) => item.id !== 1);
+    assert.ok(mine.body.includes(head), "门禁结论写在自己新建的 PR 上");
+    assert.equal(items[0].body, "别人的 PR", "别人的 PR 不被改写");
+    assert.equal(remoteRef(remote, "refs/heads/task/a"), head);
+  });
+
+  test("P1 GitLab 的查询显式要求 JSON，并按 opened 识别已有 MR", () => {
+    const repo = setup({ delivery: GITLAB });
+    withRemote(repo);
+    const platform = fakePlatform(repo);
+    task(repo);
+    assert.equal(repo.cli("submit", "--branch", "task/a").status, 0);
+    const next = extend(repo, "task/a", { "src/b.js": "b\n" });
+    writeReview(repo, next, "approve");
+    const again = repo.cli("submit", "--branch", "task/a");
+    assert.equal(again.status, 0, output(again));
+    const lists = platform.calls().filter((call) => call.args[1] === "list");
+    assert.ok(lists.length >= 2);
+    for (const call of lists) {
+      const at = call.args.indexOf("--output");
+      assert.ok(at >= 0, `list 没有要求 JSON: ${JSON.stringify(call)}`);
+      assert.equal(call.args[at + 1], "json");
+    }
+    assert.equal(platform.items().length, 1, "已有 MR 时只更新，不新建");
+  });
+
+  test("P1 失败诊断不回显远程地址里的令牌", () => {
+    const repo = setup({ delivery: GITHUB });
+    withRemote(repo);
+    fakePlatform(repo);
+    task(repo);
+    // 换成一个立刻拒绝连接的地址，并在查询参数里放一个哨兵；git 会把地址原样写进报错。
+    git(repo.root, "remote", "set-url", "origin", "http://127.0.0.1:1/acme/demo.git?access_token=REVIEW_SENTINEL");
+    git(repo.root, "config", "--unset", `url.${join(repo.root, "..", "remote.git")}.insteadOf`);
+    const result = repo.cli("submit", "--branch", "task/a");
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /fetch_failed/);
+    assert.equal(output(result).includes("REVIEW_SENTINEL"), false, output(result));
+  });
+
+  test("P2 远程只改 .harness/VERSION 也算门禁改动，需要确认；与入口锁定的版本不一致时拒绝导入", () => {
+    const repo = setup({ delivery: GITHUB });
+    const remote = withRemote(repo);
+    // 本机装着另一个版本：版本检查本身放行，只剩门禁确认与一致性检查能拦住。
+    const other = join(repo.env.HARNESS_STORE, "8.8.8");
+    mkdirSync(other, { recursive: true });
+    writeFileSync(join(other, "MANIFEST.json"), `${JSON.stringify({ version: "8.8.8", files: {} })}\n`);
+    remoteCommit(repo, remote, { ".harness/VERSION": "8.8.8\n" });
+    const before = git(repo.root, "rev-parse", "main");
+    const refused = repo.cli("sync");
+    assert.notEqual(refused.status, 0);
+    assert.match(refused.stderr, /gate_change_unconfirmed/);
+    assert.match(refused.stderr, /\.harness\/VERSION/);
+    assert.equal(git(repo.root, "rev-parse", "main"), before);
+
+    assert.equal(repo.cli("confirm", "--branch", "origin/main", "--yes").status, 0);
+    const mismatch = repo.cli("sync");
+    assert.notEqual(mismatch.status, 0);
+    assert.match(mismatch.stderr, /version_mismatch/);
+    assert.equal(git(repo.root, "rev-parse", "main"), before);
+  });
+
+  test("P2 目标锁定的版本等于当前运行版本但本机没装时同样拒绝", () => {
+    const repo = setup({ delivery: GITHUB });
+    const remote = withRemote(repo);
+    remoteCommit(repo, remote, { "docs/y.md": "y\n" });
+    const before = git(repo.root, "rev-parse", "main");
+    const emptyStore = join(repo.root, "..", "empty-store");
+    mkdirSync(emptyStore, { recursive: true });
+    // 直接用源码运行：进程版本号等于目标锁定的版本，但版本目录里没有它。
+    const result = sh(repo.root, process.execPath, [join(PACKAGE_ROOT, "bin", "harness.mjs"), "sync"], { ...repo.env, HARNESS_STORE: emptyStore });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /version_missing/);
+    assert.ok(result.stderr.includes(`install --version ${packageVersion()}`), result.stderr);
+    assert.equal(git(repo.root, "rev-parse", "main"), before);
   });
 });
 
