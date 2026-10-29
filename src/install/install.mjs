@@ -173,6 +173,11 @@ if [ ! -f "$entry" ]; then
   msg="[harness] 本机没有安装门禁锁定的版本 $HARNESS_VERSION。请用户在自己的终端（Claude Code 里可在输入框用 ! 前缀）于项目目录运行 node <harness 仓库>/bin/harness.mjs install --local"
   # 实时拦截在未安装时一律拒绝：放行等于门禁不存在。Claude 以退出码 2 拒绝，Codex 读 permissionDecision。
   if [ "$1" = "hook" ]; then
+    # 收尾检查只提示不拦：拦下会让会话停不下来。
+    if [ "$4" = "--event" ] && [ "$5" = "stop" ]; then
+      printf '%s\\n' "$msg" >&2
+      exit 0
+    fi
     if [ "$3" = "codex" ]; then
       printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"%s"}}\\n' "$msg"
       exit 0
@@ -509,9 +514,19 @@ function keepEntries(entries, takeOver) {
 
 const CLAUDE_HOOK_COMMAND = '"$CLAUDE_PROJECT_DIR/.harness/bin/harness" hook --client claude';
 const CODEX_HOOK_COMMAND = '"$(git rev-parse --show-toplevel)/.harness/bin/harness" hook --client codex';
+// 收尾检查挂在 Stop 事件上；入口 shim 按第 4、5 个参数识别它，参数顺序不能改。
+const STOP_SUFFIX = " --event stop";
 
 /**
- * Claude Code 的 PreToolUse 钩子配置；保留文件里其他设置。
+ * Stop 事件里的 harness 条目换成最新的一份。其他工具的 Stop 钩子（例如结束提醒）一律保留，
+ * 接管只针对拦截类的 PreToolUse，不能顺带删掉用户自己的提醒。
+ */
+function withStopHook(hooks, command) {
+  return { ...hooks, Stop: [...keepEntries(hooks.Stop, false), { hooks: [{ type: "command", command }] }] };
+}
+
+/**
+ * Claude Code 的 PreToolUse 与 Stop 钩子配置；保留文件里其他设置。
  * 其他工具的 PreToolUse 钩子默认保留，takeOver 时移除。
  */
 export function writeClaudeSettings({ root, takeOver = false }) {
@@ -521,7 +536,7 @@ export function writeClaudeSettings({ root, takeOver = false }) {
   const hook = { type: "command", command: CLAUDE_HOOK_COMMAND };
   const matcher = "Bash|Write|Edit|MultiEdit|NotebookEdit|Read|Grep";
   const kept = keepEntries(current.hooks?.PreToolUse, takeOver);
-  current.hooks = { ...(current.hooks ?? {}), PreToolUse: [...kept, { matcher, hooks: [hook] }] };
+  current.hooks = withStopHook({ ...(current.hooks ?? {}), PreToolUse: [...kept, { matcher, hooks: [hook] }] }, CLAUDE_HOOK_COMMAND + STOP_SUFFIX);
   writeFileSync(file, `${JSON.stringify(current, null, 2)}\n`);
   return file;
 }
@@ -533,7 +548,7 @@ export function writeCodexHooks({ root, takeOver = false }) {
   const current = existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : {};
   const kept = keepEntries(current.hooks?.PreToolUse, takeOver);
   const ours = { matcher: "*", hooks: [{ type: "command", command: CODEX_HOOK_COMMAND }] };
-  current.hooks = { ...(current.hooks ?? {}), PreToolUse: [...kept, ours] };
+  current.hooks = withStopHook({ ...(current.hooks ?? {}), PreToolUse: [...kept, ours] }, CODEX_HOOK_COMMAND + STOP_SUFFIX);
   writeFileSync(file, `${JSON.stringify(current, null, 2)}\n`);
   return file;
 }

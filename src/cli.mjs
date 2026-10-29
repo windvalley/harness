@@ -24,6 +24,7 @@ import { computeMetrics, formatMetrics } from "./golden/metrics.mjs";
 import { initProject, upgradeProject } from "./install/init.mjs";
 import { uninstall } from "./install/uninstall.mjs";
 import { branchStatus, formatStatus } from "./status.mjs";
+import { stopCheck } from "./stop/stop.mjs";
 import { installAll, installLocal, installVersion, listVersions, pruneVersions, publishVersion, versionDir } from "./install/install.mjs";
 import { formatSurvey } from "./install/survey.mjs";
 import { followUps } from "./install/followups.mjs";
@@ -67,7 +68,7 @@ const USAGE = `harness <命令> [参数]
 
 客户端与钩子入口
   githook  <pre-commit|commit-msg|reference-transaction>   由 git 钩子调用
-  hook     --client <claude|codex|dsh>               由客户端钩子调用，读 stdin
+  hook     --client <claude|codex|dsh> [--event <pre-tool-use|stop>]   由客户端钩子调用，读 stdin；stop 是收尾检查
   check    --kind <shell|write|read|search|commit> ... [--on-main] [--linked-worktree] [--ignored]   手工判定一次调用
 
 人用
@@ -378,10 +379,15 @@ function formatDenialText(result) {
 }
 
 function cmdHook(argv) {
-  const { values } = parseArgs({ args: argv, options: { client: { type: "string" } } });
+  const { values } = parseArgs({ args: argv, options: { client: { type: "string" }, event: { type: "string", default: "pre-tool-use" } } });
   const adapter = ADAPTERS[values.client];
   if (!adapter) {
     process.stderr.write(`未知客户端: ${values.client ?? "(缺失)"}\n`);
+    return 2;
+  }
+  if (values.event === "stop") return cmdStopHook(adapter);
+  if (values.event !== "pre-tool-use") {
+    process.stderr.write(`未知钩子事件: ${values.event}，可选 pre-tool-use 或 stop\n`);
     return 2;
   }
   let payload;
@@ -401,6 +407,28 @@ function cmdHook(argv) {
     if (rendered.stdout) process.stdout.write(rendered.stdout);
     process.stderr.write(rendered.stderr);
     return rendered.exitCode;
+  }
+  return 0;
+}
+
+/**
+ * Claude Code 与 Codex 的 Stop 事件：输出 {"decision":"block","reason":...} 让 Agent 接着做，什么都不输出则放行。
+ * 收尾检查出错时放行并提示，不能因为门禁自己的问题把会话困住。
+ */
+function cmdStopHook(adapter) {
+  const notice = (text) => process.stdout.write(`${JSON.stringify({ systemMessage: `[harness] ${text}` })}\n`);
+  let payload;
+  try {
+    payload = JSON.parse(readFileSync(0, "utf8"));
+  } catch {
+    notice("收尾检查的输入不是有效 JSON，本次放行");
+    return 0;
+  }
+  try {
+    const outcome = stopCheck({ cwd: payload?.cwd || process.cwd(), client: adapter.name, session: payload?.session_id });
+    if (outcome.decision === "block") process.stdout.write(`${JSON.stringify({ decision: "block", reason: outcome.reason })}\n`);
+  } catch (error) {
+    notice(`收尾检查出错，本次放行: ${error.message}`);
   }
   return 0;
 }

@@ -158,7 +158,7 @@ describe("安装与自检", () => {
     for (const pattern of [/日常语言/, /固定话术/, /不要求用户/, /Agent 按项目规则准备任务分支/, /验收证据、最终合并状态/]) {
       assert.doesNotMatch(block, pattern, `托管块不应包含: ${pattern}`);
     }
-    for (const pattern of [/\.harness\/rules\/core\.md/, /先判断任务分级/, /最初提出需求或回答澄清问题都不算/, /先红后绿/, /harness merge --branch/, /harness worktree clean/]) {
+    for (const pattern of [/\.harness\/rules\/core\.md/, /先判断任务分级/, /最初提出需求或回答澄清问题都不算/, /先红后绿/, /harness merge --branch/, /harness worktree clean/, /轮次长短、耗时与上下文大小都不是停下的理由/, /收尾检查/]) {
       assert.match(block, pattern, `托管块应保留: ${pattern}`);
     }
     const rules = readFileSync(join(repo.root, ".harness/rules/harness.md"), "utf8");
@@ -380,6 +380,20 @@ describe("status 与 uninstall", () => {
     const ready = repo.cli("status", "--branch", "task/a");
     assert.equal(ready.status, 0, ready.stdout);
     assert.match(ready.stdout, /可以合并/);
+  });
+
+  test("status 给出验收清单的真实位置与有无，intent.mode 为 required 时缺清单算阻塞", () => {
+    const repo = setup();
+    repo.branch("task/a", { "src/a.js": "x\n" });
+    assert.match(repo.cli("status", "--branch", "task/a").stdout, /\[!!\] acceptance: 没有验收清单 \.harness\/acceptance\/task-a\.md：评审只评工程质量/);
+    repo.branch("task/b", { "src/b.js": "x\n", ".harness/acceptance/task-b.md": "- 验收\n" });
+    assert.match(repo.cli("status", "--branch", "task/b").stdout, /\[ok\] acceptance: 验收清单 \.harness\/acceptance\/task-b\.md 已随任务分支提交/);
+
+    const strict = setup({ project: { ".harness/config.json": { ...CONFIG, intent: { mode: "required", dir: "acceptance" } } } });
+    strict.branch("task/c", { "src/c.js": "x\n" });
+    const status = strict.cli("status", "--branch", "task/c");
+    assert.match(status.stdout, /\[FAIL\] acceptance: 缺少验收清单 \.harness\/acceptance\/task-c\.md：intent\.mode 为 required，没有清单不能合并/);
+    assert.match(status.stdout, /缺验收清单/);
   });
 
   test("status 提示门禁改动待确认", () => {

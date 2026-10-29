@@ -28,6 +28,7 @@ import {
 } from "../lib/git.mjs";
 import { appendLedger, dataDir, readRecord, writeRecord } from "../lib/store.mjs";
 import { EVIDENCE_KIND, verify, verifyConfigDigest } from "../verify/verify.mjs";
+import { unresolvedStop } from "../stop/session.mjs";
 import { entryTouched, followUps } from "../install/followups.mjs";
 import { ensureHooksPath } from "../install/install.mjs";
 import { REVIEW_KIND } from "../review/review.mjs";
@@ -268,6 +269,8 @@ export async function checkGates({ project, root, branch, log = console.error, d
       log(`[${label}] 已有实施授权(依据: ${state.record.note})`);
     }
   }
+  const unresolved = unresolvedStop(root, branch, branchCommit);
+  if (unresolved) log(`[${label}] 注意: 有会话在 ${unresolved.at} 没有上报阻塞就结束了（当时${unresolved.missing}），汇报时说明`);
 
   // 意图：行为变更应有验收清单。清单可来自分支本身，会标记来源。
   const intent = project.config.intent ?? {};

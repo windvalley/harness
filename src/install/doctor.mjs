@@ -23,9 +23,9 @@ import {
   versionDir,
 } from "./install.mjs";
 
-// 读取 Codex 用户配置里是否已有本项目钩子的 trusted_hash 记录。
+// 读取 Codex 用户配置里是否已有本项目钩子的 trusted_hash 记录；event 是 Codex 记录信任时用的事件名，每个事件各信任一次。
 // 路径要按真实路径比较：git 常返回 /private/var/...，用户配置里可能写成 /var/...，两者是同一目录。
-export function codexTrustState(root) {
+export function codexTrustState(root, event = "pre_tool_use") {
   const file = join(process.env.CODEX_HOME || join(homedir(), ".codex"), "config.toml");
   if (!existsSync(file)) return false;
   const text = readFileSync(file, "utf8");
@@ -39,7 +39,7 @@ export function codexTrustState(root) {
     // 软链接解析失败时只比对原始路径。
   }
   for (const candidate of candidates) {
-    const marker = `[hooks.state."${candidate}/.codex/hooks.json`;
+    const marker = `[hooks.state."${candidate}/.codex/hooks.json:${event}:`;
     const index = text.indexOf(marker);
     if (index < 0) continue;
     const section = text.slice(index, index + 800);
@@ -100,15 +100,19 @@ function gitHookChecks(root) {
   return checks;
 }
 
+/** 客户端配置里 harness 的实时拦截（PreToolUse）与收尾检查（Stop）各自是否接入。 */
 function clientHookInstalled(file) {
-  if (!existsSync(file)) return false;
+  const has = (list) => (list ?? []).some((entry) => (entry.hooks ?? []).some((item) => isHarnessClientHook(item.command)));
+  if (!existsSync(file)) return { guard: false, stop: false };
   try {
-    const list = JSON.parse(readFileSync(file, "utf8"))?.hooks?.PreToolUse ?? [];
-    return list.some((entry) => (entry.hooks ?? []).some((item) => isHarnessClientHook(item.command)));
+    const hooks = JSON.parse(readFileSync(file, "utf8"))?.hooks ?? {};
+    return { guard: has(hooks.PreToolUse), stop: has(hooks.Stop) };
   } catch {
-    return false;
+    return { guard: false, stop: false };
   }
 }
+
+const STOP_MISSING = "收尾检查（Stop）未接入，在任务分支运行 harness install 重新生成后由人确认合入";
 
 /**
  * DSH 插件本机只有一份，每个 profile 注册一次，所有项目共用。
@@ -178,26 +182,34 @@ export function doctor({ cwd = process.cwd() } = {}) {
   checks.push(...gitHookChecks(root));
   checks.push(deliveryCheck(root));
 
-  const claudeOk = clientHookInstalled(join(root, ".claude", "settings.json"));
+  const claude = clientHookInstalled(join(root, ".claude", "settings.json"));
   checks.push({
     id: "client:claude",
-    ok: claudeOk,
-    detail: claudeOk ? "PreToolUse 已接入（CLI 已验证；桌面版仅静态确认，未端到端实测）" : "未接入 Claude Code 的项目设置文件",
+    ok: claude.guard && claude.stop,
+    detail: !claude.guard
+      ? "未接入 Claude Code 的项目设置文件"
+      : claude.stop
+        ? "PreToolUse 与收尾检查 Stop 已接入（CLI 已验证；桌面版仅静态确认，未端到端实测）"
+        : `PreToolUse 已接入；${STOP_MISSING}`,
   });
 
-  const codex = join(root, ".codex", "hooks.json");
-  const codexOk = clientHookInstalled(codex);
-  // Codex 要求钩子先被信任一次；信任记录写在工作目录的 config.toml 的 [hooks.state] 下。
+  const codex = clientHookInstalled(join(root, ".codex", "hooks.json"));
+  // Codex 要求每个钩子先被信任一次；信任记录写在工作目录的 config.toml 的 [hooks.state] 下。
   const codexTrusted = codexTrustState(root);
+  const stopTrusted = codexTrustState(root, "stop");
   checks.push({
     id: "client:codex",
-    ok: codexOk && codexTrusted,
+    ok: codex.guard && codex.stop && codexTrusted && stopTrusted,
     verified: codexTrusted,
-    detail: !codexOk
+    detail: !codex.guard
       ? "未接入 .codex/hooks.json"
-      : codexTrusted
-        ? "钩子已接入且已信任，拦截生效（CLI 与桌面版内置引擎均已实测）"
-        : "钩子已接入但尚未信任：在 Codex 里运行 /hooks 批准一次，否则命令不会经过门禁",
+      : !codexTrusted
+        ? "钩子已接入但尚未信任：在 Codex 里运行 /hooks 批准一次，否则命令不会经过门禁"
+        : !codex.stop
+          ? `拦截钩子已接入且已信任；${STOP_MISSING}`
+          : stopTrusted
+            ? "钩子已接入且已信任：拦截在 CLI 与桌面版内置引擎均已实测，收尾检查（Stop）只做了静态确认"
+            : "拦截钩子已信任，收尾检查（Stop）尚未信任：在 Codex 里运行 /hooks 批准它",
   });
 
   checks.push(dshCheck());

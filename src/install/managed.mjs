@@ -99,6 +99,7 @@ export function managedBlockBody() {
   小优化、小迭代，不改库表与接口契约，代码改动少于 500 行（以 \`.harness/config.json\` 的 \`intent.plan.maxLines\` 为准）的直接实施；其余先探索、逐个澄清、写方案，交出方案后停下；方案交付后用户表达开始实施的意思才算授权，最初提出需求或回答澄清问题都不算；授权后连续实施到完成，不再等用户逐步安排。
 - 改变行为的实施默认先红后绿：先把验收标准写成测试并确认失败，再实现到全部通过；不删测试、不弱化断言、不跳过检查。
 - 改动放在任务分支里；交付到主分支只有两条路：本地交付用 \`harness merge --branch <任务分支>\`，远程交付用 \`harness submit --branch <任务分支>\`，两者都要求验证证据与独立评审，门禁改动还需要人工确认。\n  两条路只能选一种，看 \`.harness/config.json\` 的 \`delivery.mode\`，未配置时为 \`local\`；\`remote\` 时本地不合并，由平台在人工评审后合并，之后用 \`harness sync\` 把本地主分支快进到远程主分支。
+- 已授权的任务连续推进到交付，轮次长短、耗时与上下文大小都不是停下的理由；需要停下时先 \`harness escalate open\` 上报（\`context.branch\` 填任务分支），结束回复前的收尾检查会拦下没有交付也没有上报的结束。
 - 合并后保留任务 Worktree，不要自行删除；用户要求清理时先运行 \`harness worktree clean\` 给出预览，用户确认后再加 \`--yes\`，细则见 \`harness.md\` 的“收尾”。
 
 细则见 \`.harness/rules/harness.md\`。`;

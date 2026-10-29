@@ -6,6 +6,7 @@ import { appendLedger } from "../lib/store.mjs";
 import { evaluateCall, formatDenial } from "../policy/engine.mjs";
 import { resolvePolicy } from "../policy/resolve.mjs";
 import { worktreePlanPending } from "../plan/plan.mjs";
+import { callBranches, noteSession } from "../stop/session.mjs";
 
 export function contextFor(root) {
   let linkedWorktree = false;
@@ -69,6 +70,14 @@ function shellLocator(root, base) {
   };
 }
 
+function noteBranches(touched, options) {
+  try {
+    for (const branch of callBranches(options)) touched.add(branch);
+  } catch {
+    // 推算不出分支时不记，拦截判定照常进行。
+  }
+}
+
 /**
  * 适配器契约：
  *   name                 客户端标识
@@ -103,14 +112,25 @@ export function guard({ adapter, payload, log = () => {} }) {
   const locate = kinds.has("shell") ? shellLocator(project.root, context) : undefined;
   // 方案待授权只约束写入：按落点所在 Worktree 的分支与工作区判断，只有启用了相应规则才多花这几次 git 调用。
   const planRule = resolved.rules.some((rule) => rule.when === "plan-pending");
+  // 带会话标识的客户端顺带记下这次调用涉及的任务分支，供收尾检查使用；Claude Code 与 Codex 的载荷都有 session_id。
+  const session = typeof payload?.session_id === "string" && payload.session_id ? payload.session_id : null;
+  const touched = new Set();
   let result = { decision: "allow" };
   for (const call of calls) {
     const located = locatePathCall(call, project.root, context, kinds);
     if (planRule && located.call.kind === "write" && !located.context.outsideRepo) {
       located.context = { ...located.context, planPending: worktreePlanPending({ root: located.root, branch: located.context.branch, project }) };
     }
+    if (session) noteBranches(touched, { root: project.root, call: located.call, context: located.context, cwd: resolve(cwd) });
     result = evaluateCall({ policy: resolved, root: located.root, call: located.call, context: located.context, cwd: resolve(cwd), locate });
     if (result.decision === "deny") break;
+  }
+  if (session && touched.size > 0) {
+    try {
+      noteSession(project.root, { client: adapter.name, session, branches: [...touched] });
+    } catch {
+      // 关联只服务收尾检查，写入失败不能影响这次拦截判定。
+    }
   }
 
   if (result.decision === "deny") {

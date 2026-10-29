@@ -48,8 +48,8 @@ function runPlugin(repo, calls, { cwd = repo.root, entry = join(pluginDir(repo),
     // 模拟 Cordis 的依赖访问约束，门禁与 Git 配置读取使用真实实现。
     const ctx = new Proxy({
       on(event, handler) {
-        if (event !== "tools/pre-execute") throw new Error("注册了错误的工具事件");
-        preExecute = handler;
+        if (event === "tools/pre-execute") preExecute = handler;
+        else if (event !== "agent/turn-stopping") throw new Error("注册了未知的事件: " + event);
       },
     }, {
       get(target, key) {

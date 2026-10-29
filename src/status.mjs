@@ -8,6 +8,7 @@ import { CONFIRM_KIND } from "./confirm/confirm.mjs";
 import { mainWorktreeProblems, planMergeResult, reuseDecision, reviewStaleFiles } from "./merge/merge.mjs";
 import { approvalState, planEnforced, planRequirement } from "./plan/plan.mjs";
 import { latestSubmit } from "./delivery/submit.mjs";
+import { unresolvedStop } from "./stop/session.mjs";
 
 // 确认记录绑定合并结果的 tree：快进时就是分支的 tree，三方合并时算出合并后的 tree。
 function confirmFor(project, root, branch) {
@@ -29,12 +30,17 @@ export function branchStatus({ cwd, branch }) {
   const delivery = deliverySettings(project.config);
   // 远程交付下门禁在 submit 时核对，提示里说“提交前”；本地交付说“合并前”。
   const when = delivery.mode === "remote" ? "提交前" : "合并前";
-  const result = { branch, mainRef, delivery, steps: [], ready: false, blockers: [] };
+  // blockers 给人看，codes 给程序判断（例如收尾检查区分 Agent 能接着做的与要等人的）。
+  const result = { branch, mainRef, delivery, steps: [], ready: false, blockers: [], codes: [] };
   const add = (id, state, detail) => result.steps.push({ id, state, detail });
+  const block = (code, label) => {
+    result.codes.push(code);
+    result.blockers.push(label);
+  };
 
   if (!refExists(root, branch)) {
     add("branch", "fail", `分支不存在: ${branch}`);
-    result.blockers.push("分支不存在");
+    block("branch_missing", "分支不存在");
     return result;
   }
   const branchCommit = gitOk(root, ["rev-parse", "--verify", `${branch}^{commit}`]);
@@ -54,7 +60,7 @@ export function branchStatus({ cwd, branch }) {
   const mainProblems = mainWorktreeProblems(project, mainWorktreeRoot(root));
   if (mainProblems.length > 0) {
     add("main-worktree", "fail", mainProblems.join("；"));
-    result.blockers.push("主 Worktree 未就绪");
+    block("main_worktree", "主 Worktree 未就绪");
   } else {
     add(
       "main-worktree",
@@ -68,10 +74,10 @@ export function branchStatus({ cwd, branch }) {
   const evidence = readRecord(root, EVIDENCE_KIND, branchCommit);
   if (!evidence.ok) {
     add("evidence", "fail", `缺少验证证据：${evidence.reason}。运行 harness verify --branch ${branch}`);
-    result.blockers.push("缺验证证据");
+    block("evidence_missing", "缺验证证据");
   } else if (evidence.record.status !== "passed") {
     add("evidence", "fail", `证据状态是 ${evidence.record.status}，需要修好后重跑 verify`);
-    result.blockers.push("验证未通过");
+    block("evidence_failed", "验证未通过");
   } else {
     const reuse = reuseDecision({ project, root, evidence: evidence.record, mainCommit });
     const pending = evidence.record.notExecuted?.length ?? 0;
@@ -92,13 +98,13 @@ export function branchStatus({ cwd, branch }) {
   const stale = review.ok ? reviewStaleFiles({ root, review: review.record, mainCommit, branchCommit }) : [];
   if (!review.ok) {
     add("review", "fail", `缺少独立评审：${review.reason}。运行 harness review --branch ${branch}`);
-    result.blockers.push("缺独立评审");
+    block("review_missing", "缺独立评审");
   } else if (review.record.verdict !== "approve" || blocking.length > 0) {
     add("review", "fail", `评审结论 ${review.record.verdict}${blocking.length ? `，${blocking.length} 条阻断级发现` : ""}`);
-    result.blockers.push("评审未通过");
+    block("review_rejected", "评审未通过");
   } else if (stale.length > 0) {
     add("review", "fail", `主分支在评审之后改了本分支也改过的文件（${stale.slice(0, 5).join("、")}${stale.length > 5 ? " 等" : ""}），在任务分支上 git merge ${mainRef} 后重新 verify、review`);
-    result.blockers.push("评审之后主分支改了同一批文件");
+    block("review_stale", "评审之后主分支改了同一批文件");
   } else {
     add("review", "ok", `评审通过（需求符合度 ${review.record.requirementFit?.rating ?? "?"}，工程质量 ${review.record.engineeringQuality?.rating ?? "?"}，清单来源 ${review.record.acceptanceSource ?? "无"}）`);
   }
@@ -113,7 +119,7 @@ export function branchStatus({ cwd, branch }) {
       if (state.approved) add("plan", "ok", `已有实施授权（${need.reasons.join("；")}；依据：${state.record.note}）`);
       else {
         add("plan", "fail", `${need.reasons.join("；")}，${state.reason}：用户同意实施后运行 harness approve --branch ${branch} --yes --note "<用户原话>"`);
-        result.blockers.push("待实施授权");
+        block("plan_unapproved", "待实施授权");
       }
     }
   }
@@ -124,7 +130,7 @@ export function branchStatus({ cwd, branch }) {
     if (confirms.ok) add("gate", "ok", "首次接入的门禁配置已确认");
     else {
       add("gate", "fail", `首次接入，${when}需要人确认这份门禁配置：harness confirm --branch ${branch}`);
-      result.blockers.push("首次接入待确认");
+      block("bootstrap_unconfirmed", "首次接入待确认");
     }
     if (delivery.mode === "remote") submitStep({ result, add, root, branch, branchCommit });
     result.ready = result.blockers.length === 0;
@@ -143,17 +149,28 @@ export function branchStatus({ cwd, branch }) {
     if (anyConfirm) add("gate", "ok", `门禁改动已确认（${gateTouched.length} 个文件）`);
     else {
       add("gate", "fail", `改动涉及门禁 ${gateTouched.length} 个文件，${when}需要人工确认：harness confirm --branch ${branch}`);
-      result.blockers.push("门禁改动待确认");
+      block("gate_unconfirmed", "门禁改动待确认");
     }
   }
 
-  const acceptance = project.config.intent?.mode ?? "checklist";
-  if (acceptance === "off") {
+  const acceptanceMode = project.config.intent?.mode ?? "checklist";
+  const acceptanceRel = acceptancePath(project, branch);
+  if (acceptanceMode === "off") {
     add("acceptance", "skip", "未启用验收清单要求");
+  } else if (showBlob(root, branchCommit, acceptanceRel) !== null) {
+    add("acceptance", "ok", `验收清单 ${acceptanceRel} 已随任务分支提交，评审逐条核对需求符合度`);
+  } else if (showBlob(root, mainCommit, acceptanceRel) !== null) {
+    add("acceptance", "ok", `验收清单 ${acceptanceRel} 在主分支上，评审逐条核对需求符合度`);
+  } else if (acceptanceMode === "required") {
+    add("acceptance", "fail", `缺少验收清单 ${acceptanceRel}：intent.mode 为 required，没有清单${delivery.mode === "remote" ? "不能提交" : "不能合并"}`);
+    block("acceptance_missing", "缺验收清单");
   } else {
-    const rel = `${project.config.intent?.dir ?? "acceptance"}/${branch.replace(/[^0-9A-Za-z._-]+/g, "-")}.md`;
-    add("acceptance", "info", `验收清单约定位置：${rel}（存在时评审会核对需求符合度）`);
+    add("acceptance", "warn", `没有验收清单 ${acceptanceRel}：评审只评工程质量，需求符合度记为 unknown`);
   }
+
+  // 收尾检查放行过一次“没有进展又要结束”的会话，记在账本里，这里提醒人核对。
+  const unresolved = unresolvedStop(root, branch, branchCommit);
+  if (unresolved) add("stop", "warn", `有会话在 ${unresolved.at} 没有上报阻塞就结束了（当时${unresolved.missing}），核对它是否向你说明了原因`);
 
   if (delivery.mode === "remote") submitStep({ result, add, root, branch, branchCommit });
 

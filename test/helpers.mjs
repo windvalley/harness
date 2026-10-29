@@ -167,7 +167,8 @@ export function makeRepo({ files = {}, project = {}, install = true, trustCodex 
     if (trustCodex !== false) {
       writeFileSync(
         join(codexHome, "config.toml"),
-        `[hooks.state."${root}/.codex/hooks.json:pre_tool_use:0:0"]\ntrusted_hash = "sha256:${"a".repeat(64)}"\n`,
+        `[hooks.state."${root}/.codex/hooks.json:pre_tool_use:0:0"]\ntrusted_hash = "sha256:${"a".repeat(64)}"\n\n` +
+          `[hooks.state."${root}/.codex/hooks.json:stop:0:0"]\ntrusted_hash = "sha256:${"b".repeat(64)}"\n`,
       );
     }
   }

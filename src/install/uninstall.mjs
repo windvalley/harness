@@ -7,6 +7,11 @@ import { removeManagedBlock } from "./managed.mjs";
 
 const HOOK_MARK = "# harness:hook";
 const CLIENT_FILES = [".claude/settings.json", ".codex/hooks.json"];
+const CLIENT_EVENTS = ["PreToolUse", "Stop"];
+
+function harnessEntries(list) {
+  return Array.isArray(list) ? list.filter((entry) => (entry.hooks ?? []).some((item) => isHarnessClientHook(item.command))) : [];
+}
 
 /** 纯函数式地算出要删的内容，dry-run 与真实执行共用同一份判断。 */
 function plan({ root }) {
@@ -41,9 +46,7 @@ function plan({ root }) {
     } catch {
       continue;
     }
-    const list = config?.hooks?.PreToolUse;
-    if (!Array.isArray(list)) continue;
-    if (list.some((entry) => (entry.hooks ?? []).some((item) => isHarnessClientHook(item.command)))) {
+    if (CLIENT_EVENTS.some((event) => harnessEntries(config?.hooks?.[event]).length > 0)) {
       targets.push({ kind: "client", rel: `${rel} 的 harness 钩子`, file, config });
     }
   }
@@ -78,21 +81,28 @@ function applyOne(target, root) {
     }
     case "client": {
       const config = target.config;
-      const kept = config.hooks.PreToolUse.filter((entry) => !(entry.hooks ?? []).some((item) => isHarnessClientHook(item.command)));
-      if (kept.length === 0) delete config.hooks.PreToolUse;
-      else config.hooks.PreToolUse = kept;
+      for (const event of CLIENT_EVENTS) {
+        const list = config.hooks[event];
+        if (!Array.isArray(list)) continue;
+        const kept = list.filter((entry) => !harnessEntries([entry]).length);
+        if (kept.length === 0) delete config.hooks[event];
+        else config.hooks[event] = kept;
+      }
       if (Object.keys(config.hooks).length === 0) delete config.hooks;
       if (Object.keys(config).length === 0) rmSync(target.file, { force: true });
       else writeFileSync(target.file, `${JSON.stringify(config, null, 2)}\n`);
       return;
     }
     case "codex-trust": {
-      const text = readFileSync(target.file, "utf8");
-      const index = text.indexOf(`[hooks.state."${target.root}/.codex/hooks.json`);
-      const rest = text.slice(index);
-      const nextHeader = rest.slice(1).search(/\n\[/);
-      const end = nextHeader < 0 ? text.length : index + 1 + nextHeader;
-      writeFileSync(target.file, `${text.slice(0, index).replace(/\n+$/, "")}\n${text.slice(end).replace(/^\n+/, "")}`);
+      // 每个钩子各有一段信任记录（PreToolUse 与 Stop 各一段），逐段删掉。
+      const marker = `[hooks.state."${target.root}/.codex/hooks.json`;
+      let text = readFileSync(target.file, "utf8");
+      for (let index = text.indexOf(marker); index >= 0; index = text.indexOf(marker)) {
+        const nextHeader = text.slice(index + 1).search(/\n\[/);
+        const end = nextHeader < 0 ? text.length : index + 1 + nextHeader;
+        text = `${text.slice(0, index).replace(/\n+$/, "")}\n${text.slice(end).replace(/^\n+/, "")}`;
+      }
+      writeFileSync(target.file, text);
       return;
     }
     case "agents":
