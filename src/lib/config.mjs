@@ -240,7 +240,7 @@ export function describeDelivery(settings) {
 export function deliveryGrant(settings) {
   return settings.mode === "remote"
     ? `harness submit 可以把任务分支普通推送到 ${settings.remote} 并创建或更新 PR/MR；不包括在平台上合并、推送主分支和强推`
-    : "harness merge 合入本地主分支，harness submit 不再推送任务分支";
+    : "harness merge 合入本地主分支；harness submit 不推送任务分支，也不创建 PR/MR";
 }
 
 /** 某个提交上的交付设置；那里没有 .harness/config.json 时返回 null。 */

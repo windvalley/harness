@@ -124,6 +124,7 @@ export function branchStatus({ cwd, branch }) {
       add("gate", "fail", `首次接入，合并前需要人确认这份门禁配置：harness confirm --branch ${branch}`);
       result.blockers.push("首次接入待确认");
     }
+    if (delivery.mode === "remote") submitStep({ result, add, root, branch, branchCommit });
     result.ready = result.blockers.length === 0;
     return result;
   }
@@ -152,26 +153,31 @@ export function branchStatus({ cwd, branch }) {
     add("acceptance", "info", `验收清单约定位置：${rel}（存在时评审会核对需求符合度）`);
   }
 
-  // 远程交付下还要看本机有没有把核对过的提交推上去；平台是否合入不查，只看本机记录。
-  if (delivery.mode === "remote") {
-    const submitted = latestSubmit({ root, branch });
-    if (!submitted.ok) {
-      add("submit", "info", `还没有提交记录：门禁齐备后运行 harness submit --branch ${branch}`);
-    } else if (submitted.record.head !== branchCommit) {
-      add(
-        "submit",
-        "warn",
-        `提交记录已过期：记录的是 ${submitted.record.head.slice(0, 10)}${submitted.record.url ? `（${submitted.record.url}）` : ""}，当前分支顶端是 ${branchCommit.slice(0, 10)}，需要重新 submit`,
-      );
-    } else if (submitted.record.stage === "ready") {
-      add("submit", "ok", `${submitted.record.url}（提交于 ${submitted.record.createdAt}）`);
-    } else {
-      add("submit", "warn", `已推送，PR/MR 还没有就绪（${submitted.record.head.slice(0, 10)} 到 ${submitted.record.remote}），重跑 harness submit 补上`);
-    }
-  }
+  if (delivery.mode === "remote") submitStep({ result, add, root, branch, branchCommit });
 
   result.ready = result.blockers.length === 0;
   return result;
+}
+
+/**
+ * 远程交付下还要看本机有没有把核对过的提交推上去；平台是否合入不查，只看本机记录。
+ * current 表示记录的就是当前分支顶端，formatStatus 据此决定最后一行提示提交、补 PR/MR 还是等平台合并。
+ */
+function submitStep({ result, add, root, branch, branchCommit }) {
+  const submitted = latestSubmit({ root, branch });
+  if (!submitted.ok) {
+    add("submit", "info", `还没有提交记录：门禁齐备后运行 harness submit --branch ${branch}`);
+    return;
+  }
+  const { head, stage, url, remote, createdAt } = submitted.record;
+  result.submitted = { stage, url, current: head === branchCommit };
+  if (head !== branchCommit) {
+    add("submit", "warn", `提交记录已过期：记录的是 ${head.slice(0, 10)}${url ? `（${url}）` : ""}，当前分支顶端是 ${branchCommit.slice(0, 10)}，需要重新 submit`);
+  } else if (stage === "ready") {
+    add("submit", "ok", `${url}（提交于 ${createdAt}）`);
+  } else {
+    add("submit", "warn", `已推送，PR/MR 还没有就绪（${head.slice(0, 10)} 到 ${remote}），重跑 harness submit 补上`);
+  }
 }
 
 export function formatStatus(status) {
@@ -182,8 +188,11 @@ export function formatStatus(status) {
   if (status.merged) {
     lines.push("已经包含在主分支中，无需再交付");
   } else if (status.delivery?.mode === "remote") {
-    if (status.ready) lines.push(`可以提交：harness submit --branch ${status.branch}`);
-    else lines.push(`还差 ${status.blockers.length} 步：${status.blockers.join("、")}`);
+    const submitted = status.submitted?.current ? status.submitted : null;
+    if (!status.ready) lines.push(`还差 ${status.blockers.length} 步：${status.blockers.join("、")}`);
+    else if (submitted?.stage === "ready") lines.push(`已提交：${submitted.url}，等平台合并；合入后运行 harness sync 更新本地主分支`);
+    else if (submitted) lines.push(`已推送，PR/MR 还没有就绪：重跑 harness submit --branch ${status.branch} 补上`);
+    else lines.push(`可以提交：harness submit --branch ${status.branch}`);
   } else if (status.ready) lines.push("可以合并：harness merge --branch " + status.branch);
   else lines.push(`还差 ${status.blockers.length} 步：${status.blockers.join("、")}`);
   return lines.join("\n");

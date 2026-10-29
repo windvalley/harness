@@ -301,6 +301,8 @@ describe("harness submit", () => {
     assert.match(body, /approve/);
     assert.match(result.stdout, /https:\/\/github\.example\/acme\/demo\/pull\/1/);
     for (const call of platform.calls()) assert.equal(call.args.includes("merge"), false, JSON.stringify(call));
+    assert.match(result.stderr, /\[submit\]/);
+    assert.equal(result.stderr.includes("[merge]"), false, "submit 的日志不用 merge 的前缀");
   });
 
   test("R5 已有 MR 时只替换 harness 管理的区块，保留团队写的说明，不新建", () => {
@@ -357,6 +359,9 @@ describe("harness submit", () => {
     assert.equal(repo.cli("submit", "--branch", "task/a").status, 0);
     const after = repo.cli("status", "--branch", "task/a");
     assert.match(after.stdout, /https:\/\/github\.example\/acme\/demo\/pull\/1/);
+    const last = after.stdout.trim().split("\n").at(-1);
+    assert.match(last, /已提交/, last);
+    assert.match(last, /harness sync/, last);
 
     extend(repo, "task/a", { "src/b.js": "b\n" });
     const moved = repo.cli("status", "--branch", "task/a");
@@ -885,10 +890,18 @@ describe("开启、关闭与首次接入", () => {
     assert.notEqual(unconfirmed.status, 0);
     assert.match(unconfirmed.stderr, /gate_change_unconfirmed/);
     assert.equal(repo.rawCli("confirm", "--branch", "chore/harness-onboard", "--yes").status, 0);
+    const summary = repo.rawCli("confirm", "--branch", "chore/harness-onboard");
+    assert.match(summary.stdout, /由此授予: harness submit 可以把任务分支普通推送到 origin/, "首次接入同样写明授予的远程权限");
     const submitted = repo.rawCli("submit", "--branch", "chore/harness-onboard");
     assert.equal(submitted.status, 0, output(submitted));
     assert.equal(remoteRef(remote, "refs/heads/chore/harness-onboard"), head);
     assert.equal(platform.items().length, 1);
+    const body = platform.items()[0].body;
+    const gateList = body.slice(body.indexOf("门禁文件改动"));
+    assert.ok(gateList.includes("`.claude/settings.json`"), "门禁文件按门禁路径列出，包括客户端钩子配置");
+    assert.equal(gateList.includes(".harness/templates/"), false, "模板不是门禁文件");
+    const status = repo.rawCli("status", "--branch", "chore/harness-onboard");
+    assert.match(status.stdout, /https:\/\/github\.example\/acme\/demo\/pull\/1/, "首次接入的分支也显示 PR 链接");
 
     platformFastForward(remote, head);
     const synced = repo.rawCli("sync");

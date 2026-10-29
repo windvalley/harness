@@ -177,7 +177,7 @@ export function reviewStaleFiles({ root, review, mainCommit, branchCommit }) {
  * 合并与提交共用的门禁核对。返回固定下来的三个对象：主分支提交、任务提交与预期合并结果的 tree。
  * 任何一项不满足都抛 MergeError，调用方不需要重复判断。
  */
-export async function checkGates({ project, root, branch, log = console.error, dryRun = false }) {
+export async function checkGates({ project, root, branch, log = console.error, dryRun = false, label = "merge" }) {
   const bootstrap = Boolean(project.bootstrap);
   const mainRef = mainBranch(project);
   const policy = project.config.merge ?? {};
@@ -199,11 +199,11 @@ export async function checkGates({ project, root, branch, log = console.error, d
       "bootstrap_not_fast_forward",
     );
   }
-  if (bootstrap) log(`[merge] 首次接入：${mainRef} 上还没有门禁配置，按 ${branch} 提议的配置验证，合并前必须由人确认`);
+  if (bootstrap) log(`[${label}] 首次接入：${mainRef} 上还没有门禁配置，按 ${branch} 提议的配置验证，交付前必须由人确认`);
   log(
     fastForward
-      ? `[merge] 可 fast-forward: ${mainCommit.slice(0, 10)} -> ${branchCommit.slice(0, 10)}`
-      : `[merge] 三方合并成功，结果 tree=${resultTree.slice(0, 12)}`,
+      ? `[${label}] 可 fast-forward: ${mainCommit.slice(0, 10)} -> ${branchCommit.slice(0, 10)}`
+      : `[${label}] 三方合并成功，结果 tree=${resultTree.slice(0, 12)}`,
   );
 
   const resultPaths = changedPaths(root, mainCommit, newHead);
@@ -240,7 +240,7 @@ export async function checkGates({ project, root, branch, log = console.error, d
         "gate_change_unconfirmed",
       );
     }
-    log(`[merge] 门禁改动已确认(确认人: ${confirm.record.by ?? "user"})`);
+    log(`[${label}] 门禁改动已确认(确认人: ${confirm.record.by ?? "user"})`);
   }
 
   // 方案：写了实施方案、改了库表或改动超过阈值的任务，必须有用户的实施授权记录，且授权后验收清单没有再改。
@@ -263,7 +263,7 @@ export async function checkGates({ project, root, branch, log = console.error, d
         );
       }
       approval = state.record.note;
-      log(`[merge] 已有实施授权(依据: ${state.record.note})`);
+      log(`[${label}] 已有实施授权(依据: ${state.record.note})`);
     }
   }
 
@@ -281,7 +281,7 @@ export async function checkGates({ project, root, branch, log = console.error, d
     );
   }
   if (enforcing !== "off" && !hasAcceptance) {
-    log(`[merge] 注意: 没有验收清单，独立评审只能评工程质量，需求符合度会记为 unknown`);
+    log(`[${label}] 注意: 没有验收清单，独立评审只能评工程质量，需求符合度会记为 unknown`);
   }
 
   // 证据：优先复用，只重跑被 main 前进波及的检查。合并与提交都要有绑定任务提交的证据。
@@ -296,13 +296,13 @@ export async function checkGates({ project, root, branch, log = console.error, d
 
     if (evidence.ok && reuse.evidenceReusable) {
       log(
-        `[merge] 复用已验证证据: 主分支新增改动未触及任何已执行的检查` +
+        `[${label}] 复用已验证证据: 主分支新增改动未触及任何已执行的检查` +
           (evidence.record.reusedChecks?.length ? `(其中 ${evidence.record.reusedChecks.length} 项为再复用)` : ""),
       );
     } else {
-      if (evidence.ok && reuse.configChanged) log("[merge] 检查配置在验证之后有变化，按当前配置重新验证");
-      else if (evidence.ok) log(`[merge] 主分支改动波及 ${reuse.rerunChecks.join(", ") || "多项检查"}，重新验证`);
-      else log(`[merge] 没有针对该分支的验证证据(${evidence.reason})，先验证`);
+      if (evidence.ok && reuse.configChanged) log(`[${label}] 检查配置在验证之后有变化，按当前配置重新验证`);
+      else if (evidence.ok) log(`[${label}] 主分支改动波及 ${reuse.rerunChecks.join(", ") || "多项检查"}，重新验证`);
+      else log(`[${label}] 没有针对该分支的验证证据(${evidence.reason})，先验证`);
       const outcome = await verify({ cwd: root, head: newHead, recordKey: branchCommit, base: mainRef, gateBranch: branch, log });
       if (outcome.status !== "passed") {
         throw new MergeError(`验证未通过(${outcome.status})，已拒绝`, "verify_failed");
@@ -336,7 +336,7 @@ export async function checkGates({ project, root, branch, log = console.error, d
             "review_stale",
           );
         }
-        log("[merge] 复用该分支已通过的独立评审");
+        log(`[${label}] 复用该分支已通过的独立评审`);
       } else {
         throw new MergeError(
           review.ok
@@ -349,7 +349,7 @@ export async function checkGates({ project, root, branch, log = console.error, d
     }
   }
 
-  if (dryRun) log("[merge] dry-run: 全部门禁通过，未更新主分支");
+  if (dryRun) log(`[${label}] dry-run: 全部门禁通过，未更新主分支`);
   return {
     bootstrap,
     mainRef,

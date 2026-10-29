@@ -201,7 +201,8 @@ export function formatSummary(summary) {
       lines.push(`  由此授予: ${d.grant}`);
     } else {
       lines.push(`交付设置: ${describeDelivery(d.after)}${d.before ? "（本次不变）" : ""}`);
-      if (d.before) lines.push(`  当前权限: ${d.grant}`);
+      // 首次接入没有“改前”，确认的就是这份授权本身，同样要写明。
+      lines.push(`  ${d.before ? "当前权限" : "由此授予"}: ${d.grant}`);
     }
   }
   if (summary.ruleDiff) {

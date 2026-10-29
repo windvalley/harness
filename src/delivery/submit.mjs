@@ -1,5 +1,5 @@
 import { deliveryAt, deliverySettings, describeDelivery, loadGateProject, mainBranch, trustedMainRef } from "../lib/config.mjs";
-import { changedPaths, gitOk, isAncestor, refExists, repoRoot, resolveCommit, run } from "../lib/git.mjs";
+import { gitOk, isAncestor, refExists, repoRoot, resolveCommit, run } from "../lib/git.mjs";
 import { tail } from "../lib/redact.mjs";
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
@@ -93,7 +93,7 @@ function describeGates({ evidence, review, approval }) {
   return lines;
 }
 
-function sectionBody({ project, root, branch, branchCommit, baseCommit, baseRef, resultTree, evidence, review, approval, previous }) {
+function sectionBody({ branch, branchCommit, baseCommit, baseRef, resultTree, gateTouched, evidence, review, approval, previous }) {
   const lines = [
     "## harness 门禁结果",
     "",
@@ -108,9 +108,11 @@ function sectionBody({ project, root, branch, branchCommit, baseCommit, baseRef,
     "不保证平台最终合入的内容，也不保证此后别人推到这个分支的提交。",
   ];
   if (previous?.createdAt) lines.push("", `上次提交时间: ${previous.createdAt}`);
-  // 门禁改动与实施授权的说明留在区块里，评审人不必去翻本机记录。
-  const configPaths = changedPaths(root, baseCommit, branchCommit).filter((path) => path.startsWith(".harness/"));
-  if (configPaths.length > 0) lines.push("", `门禁文件改动 ${configPaths.length} 个:`, ...configPaths.slice(0, 20).map((path) => `- \`${path}\``));
+  // 门禁文件按门禁路径列出（与确认摘要同一份清单），评审人能看出这次是否动了门禁本身，不必去翻本机记录。
+  if (gateTouched.length > 0) {
+    lines.push("", `门禁文件改动 ${gateTouched.length} 个:`, ...gateTouched.slice(0, 20).map((path) => `- \`${path}\``));
+    if (gateTouched.length > 20) lines.push(`- 另有 ${gateTouched.length - 20} 个`);
+  }
   return managedSection(lines.join("\n"));
 }
 
@@ -184,7 +186,7 @@ export async function submitTask({ cwd, branch, log = console.error }) {
   }
 
   // 门禁核对与 merge 共用：本地主分支此刻等于远程主分支，核对结果对两者都成立。
-  const gates = await checkGates({ project, root, branch, log });
+  const gates = await checkGates({ project, root, branch, log, label: "submit" });
   const { resultTree, newHead } = gates;
   if (gates.mainCommit !== localMain || resolveCommit(root, sourceRef) !== pinnedMain) {
     throw new MergeError(
@@ -227,13 +229,12 @@ export async function submitTask({ cwd, branch, log = console.error }) {
   }
 
   const section = sectionBody({
-    project,
-    root,
     branch,
     branchCommit,
     baseCommit: remoteBase,
     baseRef: `${settings.remote}/${mainRef}`,
     resultTree,
+    gateTouched: gates.gateTouched,
     evidence: gates.evidence,
     review: gates.review,
     approval: gates.approval,
