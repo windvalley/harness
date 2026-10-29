@@ -42,6 +42,9 @@ Agent 调用工具 ----> [1] 实时拦截：读写文件、执行命令之前按
 第三层负责结果把关：即使某个客户端没有接上实时拦截，没有证据和评审的改动也合不进本地主分支，也提交不了 PR/MR。
 门禁拒绝后由 Agent 按原因修复并重新验证、评审，需要人的拒绝才停下，见“一次任务”里的“门禁拒绝时”。
 
+三层都只管“不该进去的进不去”，管不了 Agent 做到一半自己结束回复。
+为此实时拦截所在的客户端钩子还挂了一个收尾检查：Agent 每次结束回复前核对本会话推进过的任务是否已经交付，没有交付又没有上报阻塞时让它接着做，见“收尾检查”。
+
 ### 交付前要满足什么
 
 1. `verify`：在固定的独立检出里，按改动路径选出要跑的检查并执行，结果写成绑定分支提交的签名证据。
@@ -253,7 +256,7 @@ harness 不认识原有工具的配置格式，也不自动转换。
 
 - Claude Code：钩子在会话启动时读入，接入后或客户端配置改动后，重启正在运行的会话。
 - Codex：钩子要先被信任才会执行，未信任时命令不经过实时拦截，只有 git 层生效。
-  在 Codex 里运行 `/hooks`，进入 `Review hooks` 后按 `t` 信任。
+  在 Codex 里运行 `/hooks`，进入 `Review hooks` 后按 `t` 信任；拦截（`PreToolUse`）与收尾检查（`Stop`）各信任一次。
   信任按路径记录并绑定钩子内容的哈希：每个 Worktree 首次使用时各信任一次，钩子命令变化后要重新信任。
 - DeepSeek Harness：每台机器为用到的 profile 注册一次本机插件，所有项目共用；以后接入新项目、项目升级 harness 版本都不用再注册。
 
@@ -280,11 +283,11 @@ dsh plugin --profile web add ~/.local/share/harness/dsh-plugin
 
 | 客户端 | 实时拦截 | 状态 |
 | --- | --- | --- |
-| Claude Code（CLI） | `PreToolUse`，拒绝时退出码 2 | 已实测 |
+| Claude Code（CLI） | `PreToolUse`，拒绝时退出码 2；收尾检查走 `Stop` | 拦截已实测；收尾检查见下 |
 | Claude 桌面版 | 同一套钩子实现 | 仅静态确认，未端到端实测 |
-| Codex CLI | `.codex/hooks.json` 的 `PreToolUse` | 已实测；需先信任钩子 |
+| Codex CLI | `.codex/hooks.json` 的 `PreToolUse`；收尾检查走 `Stop` | 拦截已实测，收尾检查按 Codex 0.162 的钩子协议实现，未端到端实测；两个钩子都要先信任 |
 | Codex 桌面版（ChatGPT.app 内置引擎） | 同上 | 已实测；需先信任钩子 |
-| DeepSeek Harness 桌面版 | Cordis 插件 `tools/pre-execute` | 需注册一次本机插件；旧版的项目插件曾在运行中的桌面版里实测，本机插件已实测注册、配置组合与在桌面版内置 Node 中的转发，尚未在运行中的桌面版里端到端实测 |
+| DeepSeek Harness 桌面版 | Cordis 插件 `tools/pre-execute`；收尾检查走 `agent/turn-stopping` | 需注册一次本机插件；旧版的项目插件曾在运行中的桌面版里实测，本机插件已实测注册、配置组合与在桌面版内置 Node 中的转发，尚未在运行中的桌面版里端到端实测 |
 | DeepSeek Harness 浏览器版 | 同上 | 已实测注册与配置组合，未端到端实测 |
 
 git 层对所有客户端生效，实时拦截没接上时，提交检查与主分支保护仍然有效。
@@ -475,10 +478,14 @@ git -C <主 Worktree> worktree unlock <Worktree 路径>
 清单放在 `.harness/acceptance/<分支名>.md`，分支名里字母、数字、`.`、`_`、`-` 以外的字符换成 `-`，例如 `feat/login` 对应 `.harness/acceptance/feat-login.md`。
 每条写成能用测试或命令验证的结果。
 清单可以随任务分支提交，评审会标注它“尚未经人工确认”；也可以先合入主分支。
+从主分支继承、在任务分支上没有改过的清单，仍按主分支上确认过的清单对待。
 
 - 有清单时评审必须逐条核对，需求符合度评成 `unknown` 或 `unmet` 都会被拒绝。
+- 清单经人确认过（在主分支上，或者是记录了实施授权的方案清单）时，需求符合度评成 `partial` 也会被拒绝：清单就是约定的交付范围，要缩小范围先向用户说明并重新取得同意。
+  任务分支自带、未经确认的清单评成 `partial` 不阻断。
 - 没有清单时需求符合度记为 `unknown`，评审只评工程质量，合并时打印提示。
 - `config.json` 的 `intent.mode` 设为 `required` 时，没有清单不能合并；设为 `off` 时不再提示。
+- `harness status` 的 `acceptance` 一项给出清单的实际路径和有没有：有清单标 `ok`，没有清单标 `!!`，`required` 下没有清单标 `FAIL` 并算作阻塞。
 
 ### 评审结论
 
@@ -486,6 +493,8 @@ git -C <主 Worktree> worktree unlock <Worktree 路径>
 - 评审前必须有通过的验证证据。
 - diff 上限默认 300000 字符，由 `review.maxDiffChars` 调整：超出时整文件删除改为只列路径和行数，仍然超出就拒绝评审，并按顶层目录给出拆分建议。
 - 评审还会拿到合并基线之后的提交说明（不含合并提交）和每个文件的增删行数；提交说明标明是实现方自述，只用来理解意图，说法与 diff 不符时评审会报出来。
+- 评审进程失败时报出真实原因：花费超出 `review.maxBudgetUsd` 时说明已花多少，并建议拆小分支或调高预算；其他失败同时列出评审进程的 stdout 与 stderr。
+  `claude` 在 stderr 打印的认证来源警告（例如 `claude.ai connectors are disabled ...`）只是提示，不是失败原因。
 
 ### 提交信息
 
@@ -654,6 +663,35 @@ harness escalate resume --id esc-1a2b3c4d  # 续跑前读取人的决定
 
 `esc.json` 必须包含 `situation`、`attempted`、`blocker`、`defaultAction` 和至少两个 `options`（每个有 `id` 与 `summary`），可选 `trigger`、`resumeHint`、`context`。
 `defaultAction` 必须是某个选项的 `id`。
+阻塞的是某个任务分支时，`context.branch` 填这个分支名，收尾检查据此放行。
+
+### 收尾检查
+
+Agent 做到一半、门禁没有拒绝也没有遇到阻塞，自己结束了回复，前面三层都拦不住：它们只管不合格的改动进不了主分支。
+收尾检查补上这一环：Claude Code 与 Codex 的 `Stop` 钩子、DeepSeek Harness 插件的 `agent/turn-stopping`，在 Agent 每次结束回复前运行一次。
+
+核对哪些分支：
+
+- 实时拦截在每次工具调用时记下这个会话经手的任务分支：写文件落在哪个任务分支的 Worktree、在哪个任务分支上 `git commit`、运行了哪个分支的 `approve`、`verify`、`review`、`merge`、`submit`。
+- 会话常停在主 Worktree、用 `cd` 去任务 Worktree 干活，所以按每次调用实际落在哪个分支记录，不按会话所在目录。
+- `status`、`verify --plan`、`merge --dry-run`、读文件、引号里提到的命令都不算；别的会话经手的分支、没人动过的分支都不核对。
+
+怎样判定：
+
+| 分支现状 | 结果 |
+| --- | --- |
+| 已合入主分支（远程交付已提交 PR/MR 且记录对应分支顶端） | 放行 |
+| 只写了方案与验收清单、还没有实施授权；或报 `plan_unapproved` | 放行：等用户同意实施 |
+| 只差人工确认门禁改动、首次接入确认，或主 Worktree 未就绪 | 放行：要人来做，汇报里说明 |
+| 对这个分支开了上报，之后分支没有新提交 | 放行：已经把决定交给人；之后又提交了，旧上报不再算数 |
+| 缺验证证据、验证未通过、缺评审、评审被拒、`review_stale`、`required` 下缺清单 | 拦下，提示下一条命令 |
+| 门禁齐备但还没有 `merge` 或 `submit` | 拦下，提示交付命令；没有合并授权时 Agent 上报后结束 |
+| 分支没有新提交，但任务 Worktree 里有未提交的改动 | 拦下，提示提交后验证、评审 |
+
+拦下时 Agent 收到的信息列出每个分支还差什么和下一条命令，并说明轮次长短、耗时与上下文大小都不是停下的理由。
+为了不把会话困在循环里，两次结束之间没有任何进展（分支顶端、阻塞项与任务 Worktree 里未提交文件的内容都没变）时放行，同时在账本记 `stop.unresolved`。
+`harness status` 与 `harness merge` 会把这次“没有上报阻塞就结束”展示出来，分支再有新提交后不再提示。
+收尾检查自身出错或本机没装锁定的版本时放行并提示，不会让会话停不下来。
 
 ## 新成员或新机器
 
@@ -1023,6 +1061,9 @@ harness 防的是 Agent 的误操作，以及被提示注入后常见的绕过�
   钩子被删除或摘掉 harness 的块时，`harness doctor` 会报出来。
 - 路径规则只约束写文件、读文件类的工具调用，用 shell 命令读写同一个文件要靠 `shell-forbid` 一类的命令规则覆盖。
 - Codex 没有信任钩子时没有实时拦截；DeepSeek Harness 的本机插件尚未在运行中的客户端里端到端实测；Claude 桌面版只做了静态确认。
+- 收尾检查只能让 Agent 多做一轮，不能保证它做对：Agent 可以开一个上报再结束，或者在没有进展时第二次结束。
+  这两种情况都会留下记录（上报内容、`stop.unresolved`），由人在 `harness status`、合并输出或上报列表里核对。
+  会话经手的分支靠实时拦截记录，客户端没有接上实时拦截、或者 Agent 用无法静态推算目录的命令改了别的 Worktree，收尾检查就不知道这个分支。
 - 本机共用的 DSH 插件和版本目录都在用户目录里，目前没有规则阻止 Agent 用命令改写它们。
 - `harness worktree clean` 判断有没有会话在用某个 Worktree，只看进程的工作目录，DeepSeek Harness 这类客户端看不出来，要靠锁定保护。
   删除前只停得掉项目在 `worktree.cleanup` 里写明的服务与数据库。
@@ -1044,6 +1085,7 @@ harness 防的是 Agent 的误操作，以及被提示注入后常见的绕过�
 | 运行 `confirm --yes` 后主分支没有新提交 | 确认只记录，不合并；告诉 Agent 已确认，让它按交付方式继续：本地交付完成合并，远程交付提交 PR/MR |
 | `plan_unapproved` | 大改动没有实施授权记录，或授权后验收清单又改了；补齐方案并提交，向用户说明，用户同意后照录原话运行 `harness approve --branch <分支> --yes --note "<原话>"` |
 | 写代码时被 `plan-before-code` 拦截 | 任务分支里有实施方案但还没有授权记录；用户还没同意就停下等，已经同意就按上一条记录；只是借用了 `docs/changes/` 下的旧方案时，把它移出这次改动 |
+| Claude Code 提示 `Stop hook error occurred` | 收尾检查拦下了结束：Claude Code 把所有拦下结束的 `Stop` 钩子都这样提示，原因在 `Stop hook feedback` 里，Agent 会按它接着做，不是门禁出错 |
 | `review_missing` 或 `review_blocked` | 运行 `harness review`；被拒时按发现修复，提交后重新 verify、review |
 | 验证结果是 `incomplete` | `requires` 里的依赖目录在主 Worktree 里不存在，安装依赖后重跑 |
 | 验证提示“未找到命令” | 本机没装检查用到的工具，装好后重跑 |

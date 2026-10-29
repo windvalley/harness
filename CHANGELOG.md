@@ -2,6 +2,36 @@
 
 按 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 组织，版本号遵循语义化版本。
 
+## [Unreleased]
+
+### 新增
+
+- 收尾检查：Agent 每次结束回复前，核对本会话推进过的任务分支是否已经交付；没有交付又没有上报阻塞时拦下结束，列出每个分支还差什么和下一条命令。
+  Claude Code 与 Codex 挂在 `Stop` 钩子上（`harness hook --client <客户端> --event stop`），DeepSeek Harness 插件挂在 `agent/turn-stopping` 上，用 `steer` 让这一轮继续。
+  会话经手了哪些分支由实时拦截顺带记录：写文件落在哪个任务 Worktree、在哪个任务分支上提交、运行了哪个分支的 `approve`、`verify`、`review`、`merge`、`submit`；只读命令、预览与引号里提到的命令不算。
+  只差人工确认、等用户同意实施，或已对分支开了上报时放行；两次结束之间没有任何进展时也放行，避免困住会话，并在账本记 `stop.unresolved`，`harness status` 与 `harness merge` 会显示出来。
+- `harness doctor` 分别报告 Claude Code 与 Codex 的收尾检查钩子是否接入，以及 Codex 的 `Stop` 钩子是否已信任。
+
+### 修复
+
+- 评审进程失败时不再只给出 stderr 末尾：`claude` 在 stderr 打印的认证来源警告曾盖住 stdout 里真正的错误，让 Agent 把评审失败误判成凭据问题。
+  现在优先解析 stdout 里的结果，花费超出 `review.maxBudgetUsd` 时说明已花多少并建议拆小分支或调高预算；其他失败同时列出 stdout 与 stderr。
+- `harness status` 的验收清单一项改用真实路径 `.harness/acceptance/<分支>.md`，并说明清单有没有；`intent.mode` 为 `required` 时缺清单算作阻塞。
+  此前显示的路径少了 `.harness/`，也不说清单在不在，看起来像清单没有接入门禁。
+
+### 变更
+
+- 验收清单经人确认过（在主分支上，或是记录了实施授权的方案清单）时，评审把需求符合度 `partial` 判为拒绝：清单就是约定的交付范围，要缩小范围先向用户说明并重新取得同意。
+  任务分支从主分支继承、没有改过的清单按主分支来源处理；任务分支自带、未经确认的清单评 `partial` 仍不阻断。
+- `core.md`、`harness.md` 与 `AGENTS.md` 托管块写明：已授权的任务连续推进到交付，轮次长短、耗时与上下文大小都不是停下的理由；需要停下时先上报，`context.branch` 填任务分支。
+
+### 升级说明
+
+- `upgrade` 会刷新 `.harness/rules/core.md`、`harness.md` 与 `AGENTS.md` 托管块。
+- `upgrade` 会在 `.claude/settings.json` 与 `.codex/hooks.json` 里加上 `Stop` 钩子，属于门禁改动，合入前由人确认；其他工具的 `Stop` 钩子保留。
+  合入后重启 Claude Code 会话；Codex 要在 `/hooks` 里另外信任一次 `Stop` 钩子。
+- DeepSeek Harness 的本机插件由 `install` 或 `install --local` 更新，更新后重启 DeepSeek Harness；项目锁定的版本低于 0.9.4 时插件跳过收尾检查，拦截不受影响。
+
 ## [0.9.3] - 2026-10-29
 
 这一版把交付讲成两种方式：默认由 Agent 合入本地主分支，也可以改为由 Agent 提交 PR/MR、在 GitHub 或 GitLab 上合并。
