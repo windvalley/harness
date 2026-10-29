@@ -177,7 +177,24 @@ export function extractJson(text) {
 
 function ensureOk(result, label) {
   if (result.error?.code === "ENOENT") throw new Error(`找不到评审命令 ${label}`);
-  if (result.status !== 0) throw new Error(`评审进程失败(${result.status}): ${(result.stderr || result.stdout).trim().slice(-400)}`);
+  if (result.status !== 0) {
+    // stderr 常常只有警告（例如认证来源提示），真正的原因在 stdout，两边都要给出，不能用一边盖住另一边。
+    const tail = (text) => text.trim().slice(-400);
+    const parts = [result.stdout.trim() && `stdout: ${tail(result.stdout)}`, result.stderr.trim() && `stderr: ${tail(result.stderr)}`].filter(Boolean);
+    throw new Error(`评审进程失败(${result.status})${parts.length ? `\n${parts.join("\n")}` : ""}`);
+  }
+}
+
+// claude -p 的结果出错时 subtype 说明原因；超出预算要给出能执行的处理办法，不能让人误判成环境故障。
+function claudeFailure(payload, config) {
+  const detail = payload.result ?? payload.subtype ?? "未知错误";
+  if (payload.subtype === "error_max_budget_usd") {
+    return (
+      `评审花费超出 review.maxBudgetUsd（${config.maxBudgetUsd ?? 2} 美元${payload.total_cost_usd ? `，本次已花 ${payload.total_cost_usd}` : ""}），没有给出结论。` +
+      "按目录拆小分支后分别评审，或在 .harness/config.json 调高 review.maxBudgetUsd（门禁改动，合并前由人确认）"
+    );
+  }
+  return `评审进程报错(${payload.subtype ?? "error"}): ${detail}`;
 }
 
 function runClaude({ cwd, prompt, config, bin }) {
@@ -186,14 +203,16 @@ function runClaude({ cwd, prompt, config, bin }) {
     input: prompt,
     timeout: REVIEW_TIMEOUT_MS,
   });
-  ensureOk(result, bin);
-  let payload;
+  let payload = null;
   try {
     payload = JSON.parse(result.stdout);
   } catch {
-    throw new Error(`评审进程输出不是 JSON: ${result.stdout.slice(0, 200)}`);
+    payload = null;
   }
-  if (payload.is_error) throw new Error(`评审进程报错: ${payload.result ?? payload.subtype}`);
+  // 出错时 claude 以非零退出码结束，但 stdout 里仍有带 subtype 的结果，优先用它说明原因。
+  if (payload?.is_error) throw new Error(claudeFailure(payload, config));
+  ensureOk(result, bin);
+  if (!payload) throw new Error(`评审进程输出不是 JSON: ${result.stdout.slice(0, 200)}`);
   return { structured: payload.structured_output, costUsd: payload.total_cost_usd ?? null };
 }
 
@@ -309,15 +328,20 @@ export function blockingFindings(findings, blockSeverities) {
 export function readAcceptance({ project, root, branch, mainRef }) {
   const rel = acceptancePath(project, branch);
   const fromBranch = showBlob(root, branch, rel);
+  const fromMain = showBlob(root, mainRef, rel);
   if (fromBranch !== null) {
     // 记录实施授权时绑定了清单内容，内容没变就是用户同意过的清单。
     const approved = approvalState({ root, branch, acceptanceText: fromBranch }).approved;
-    return { path: rel, text: fromBranch, source: approved ? "approved" : "branch" };
+    // 分支从主分支继承来、没有改过的清单，仍是主分支上确认过的那一份。
+    const source = approved ? "approved" : fromBranch === fromMain ? "main" : "branch";
+    return { path: rel, text: fromBranch, source };
   }
-  const fromMain = showBlob(root, mainRef, rel);
   if (fromMain !== null) return { path: rel, text: fromMain, source: "main" };
   return null;
 }
+
+// 经人确认过的清单来源：主分支上的清单，或记录了实施授权的任务分支清单。
+const CONFIRMED_SOURCES = new Set(["main", "approved"]);
 
 const ACCEPTANCE_SOURCES = {
   main: "主分支已确认的清单",
@@ -499,6 +523,9 @@ export async function reviewBranch({ cwd, branch, log = console.error, reviewer 
   // 有清单却评 unknown，说明评审没真正核对，不能放行；没有清单时 unknown 是如实记录，不阻断。
   if (acceptance && structured.requirementFit?.rating === "unknown") verdict = "reject";
   if (structured.requirementFit?.rating === "unmet") verdict = "reject";
+  // 清单来自主分支或用户同意实施的方案时，它就是约定的交付范围，只满足一部分不能合入；
+  // 范围确实要缩小时，先向用户说明并重新取得同意。任务分支自带、未经确认的清单仍只作参考。
+  if (CONFIRMED_SOURCES.has(acceptance?.source) && structured.requirementFit?.rating === "partial") verdict = "reject";
 
   const record = writeRecord(root, REVIEW_KIND, branchCommit, {
     verdict,

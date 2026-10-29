@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import { readFileSync } from "node:fs";
+import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
 import { APPROVE, commit, CONFIG, fakeCodex, fakeReviewer, git, makeRepo, sh } from "./helpers.mjs";
@@ -72,6 +72,47 @@ describe("评审", () => {
     assert.equal(repo2.cli("verify", "--branch", "task/b").status, 0);
     fakeReviewer(repo2, { ...APPROVE, requirementFit: { rating: "unknown", evidence: "无清单" } });
     assert.equal(repo2.cli("review", "--branch", "task/b").status, 0);
+  });
+
+  test("清单经人确认过（主分支或已授权方案）时，需求只部分满足就拒绝；任务分支自带的清单不阻断", () => {
+    const partial = { ...APPROVE, requirementFit: { rating: "partial", evidence: "第 2 条未满足" } };
+    const confirmed = setup();
+    commit(confirmed.root, "docs(acceptance): 验收清单\n\n- 两条验收\n- 先合入主分支", { ".harness/acceptance/task-a.md": "- 第 1 条\n- 第 2 条\n" });
+    confirmed.branch("task/a", { "a.txt": "a\n" });
+    assert.equal(confirmed.cli("verify", "--branch", "task/a").status, 0);
+    fakeReviewer(confirmed, partial);
+    const rejected = confirmed.cli("review", "--branch", "task/a");
+    assert.equal(rejected.status, 1);
+    assert.match(rejected.stdout + rejected.stderr, /reject/);
+
+    const draft = setup();
+    draft.branch("task/b", { "b.txt": "b\n", ".harness/acceptance/task-b.md": "- 第 1 条\n" });
+    assert.equal(draft.cli("verify", "--branch", "task/b").status, 0);
+    fakeReviewer(draft, partial);
+    assert.equal(draft.cli("review", "--branch", "task/b").status, 0);
+  });
+
+  test("评审进程失败时说出真实原因：超出预算给出处理办法，警告不再盖住 stdout", () => {
+    const repo = setup();
+    repo.branch("task/a", { "a.txt": "a\n" });
+    assert.equal(repo.cli("verify", "--branch", "task/a").status, 0);
+    // 与真实的 claude -p 超出 --max-budget-usd 时一致：退出码 1，stdout 是带 subtype 的结果，stderr 只有一条认证来源警告。
+    const warning = "⚠ claude.ai connectors are disabled because ANTHROPIC_API_KEY or another auth source is set";
+    const failing = (stdout) => {
+      const bin = join(repo.root, "..", "failing-claude.mjs");
+      writeFileSync(bin, `#!/usr/bin/env node\nimport { readFileSync } from "node:fs";\nreadFileSync(0);\nprocess.stdout.write(${JSON.stringify(stdout)});\nprocess.stderr.write(${JSON.stringify(warning)});\nprocess.exit(1);\n`);
+      chmodSync(bin, 0o755);
+      repo.env.HARNESS_REVIEWER_BIN = bin;
+    };
+    failing(JSON.stringify({ type: "result", is_error: true, subtype: "error_max_budget_usd", total_cost_usd: 1.2 }));
+    const budget = repo.cli("review", "--branch", "task/a");
+    assert.equal(budget.status, 1);
+    assert.match(budget.stderr, /评审花费超出 review\.maxBudgetUsd（1 美元，本次已花 1\.2）/);
+    assert.match(budget.stderr, /拆小分支/);
+
+    failing("upstream connect error");
+    const other = repo.cli("review", "--branch", "task/a");
+    assert.match(other.stderr, /评审进程失败\(1\)\nstdout: upstream connect error\nstderr: ⚠ claude\.ai connectors/);
   });
 
   test("diff 超过默认上限时拒绝评审，并提示可调的配置项", () => {
