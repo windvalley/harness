@@ -392,8 +392,13 @@ harness merge  --branch feat/login   # 本地交付：核对证据与评审，�
 
 - 验证失败、评审拒绝、`review_stale`、合并冲突、`bad_commit_message`、`branch_moved`、`main_moved` 这类拒绝，由 Agent 按原因修改后重新 verify、review，再交付，不需要你安排。
 - 修复只能改实现、测试或提交本身：任务分支放宽不了门禁，删测试、弱化断言、跳过检查也被项目规范禁止。
-- 需要人的拒绝会停下来说明对象和做法：确认门禁改动（`gate_change_unconfirmed`）、同意实施方案（`plan_unapproved`）、安装或登录平台命令（`platform_missing`、`platform_failed`）、安装锁定的版本（`version_missing`）、判断来源不明的提交（`push_rejected`、`not_fast_forward`）。
-- 此外缺权限、需要业务拍板、改动范围明显超出方案、同一个问题连续三轮没有解决时，Agent 也会停下说明情况。
+- 常见的需要人的情况只有两种：改动涉及门禁本身（`gate_change_unconfirmed`），由人看过摘要后亲自确认；同一个问题连续三轮没有解决，Agent 说明情况后由人决定。
+- 其余需要人的拒绝少见，出现时 Agent 停下说明对象和做法：
+  - `plan_unapproved`：大任务被当成小任务直接实施，交付时按改动行数或库表文件识别出来，需要补方案并取得同意；按流程先出方案、获同意再实施的任务不会遇到。
+  - `platform_missing`、`platform_failed`：远程交付时本机的 `gh` 或 `glab` 没安装或登录已失效，由人安装或运行 `gh auth login`、`glab auth login`；本地交付不会遇到。
+  - `version_missing`：同步来的主分支锁定的 harness 版本本机没装，由人运行 `install --version`。
+  - `push_rejected`、`not_fast_forward`：远程任务分支或本地主分支上有来源不明的提交，由人判断怎么处理。
+- 实施中发现需求有歧义、缺权限或改动范围明显超出方案时，Agent 同样停下说明，这和门禁拒绝无关，见“任务分级与实施授权”。
 
 交付时用户检查：
 
