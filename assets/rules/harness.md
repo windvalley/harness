@@ -11,9 +11,11 @@
   接入默认走受控流程，是否新建 Linked Worktree 取决于隔离需要与项目规则。
 - 保留已有有效规则和检查，把起始检查对应到项目真实命令，明确占位与未执行项。
   接管原有工具或放弃某条规则需要用户决定时，先列出影响与选择。
+- 提交接入改动前和用户确定交付方式，见下面的“交付方式”：默认本地交付；主分支在 GitHub 或 GitLab 上、合并走 PR/MR 时，把 `delivery` 改为远程交付，接入分支本身就以 PR/MR 提交。
 - 写入并提交接入改动，执行验证和独立评审，展示 `harness confirm --branch <接入分支>` 的摘要。
   带 `--yes` 的确认由人在自己的终端执行，自然语言同意不能替代，Agent 不代为执行。
-- 人完成确认后，继续完成已获授权的本地合并，列出当前客户端所需的重启、信任或注册操作。
+- 人完成确认后按交付方式继续：本地交付完成已获授权的本地合并；远程交付运行 `harness submit --branch <接入分支>`，平台合入后在主 Worktree 运行 `harness sync`。
+  然后列出当前客户端所需的重启、信任或注册操作。
   用户完成后再运行诊断，区分配置就位和当前客户端实际调用已验证，不把初始化成功作为全部接入完成。
 - 合并后保留接入分支和任务 Worktree，清理遵循“收尾”。
 
@@ -28,16 +30,44 @@
 3. `harness review --branch <任务分支>`：独立评审只读验收清单、证据摘要、提交说明、文件统计和 diff，分需求符合度与工程质量两个维度。
    有 high 或 critical 级别的发现会被拒绝。
    提交说明要如实写清改了什么，评审会核对它与 diff 是否一致。
-4. 在已有合并授权的范围内执行 `harness merge --branch <任务分支>`：核对证据与评审，合并到主分支。
+4. 按项目的交付方式交付：本地交付在已有合并授权的范围内执行 `harness merge --branch <任务分支>`，核对证据与评审后合并到主分支；远程交付执行 `harness submit --branch <任务分支>`，见“远程交付”。
    改动涉及门禁配置时必须先由人确认。
-   主分支在评审之后改了本分支也改过的文件时，合并以 `review_stale` 拒绝：在任务分支上合并主分支并提交，再重新 verify、review。
-5. 合并后任务 Worktree 保留，清理按下面的“收尾”由用户发起。
-6. 汇报结果入口、逐条验收证据、验证与评审结论，以及已合并、待授权合并或阻塞的最终状态。
+   主分支在评审之后改了本分支也改过的文件时，以 `review_stale` 拒绝：在任务分支上合并主分支并提交，再重新 verify、review。
+5. 交付后任务 Worktree 保留，清理按下面的“收尾”由用户发起。
+6. 汇报结果入口、逐条验收证据、验证与评审结论和最终状态：本地交付是已合并、待授权合并或阻塞；远程交付是已提交 PR/MR 待平台合并、平台已合入并已同步或阻塞。
    同时说明任务分支、提交和工作区位置，未执行项不能算作通过。
+
+### 门禁拒绝时
+
+验证失败、评审拒绝、`review_stale`、合并冲突、`bad_commit_message`、`branch_moved`、`main_moved` 这类拒绝由 Agent 按拒绝原因修改后重新 verify、review，再交付，不需要用户安排。
+修复只能改实现、测试或提交本身：任务分支放宽不了门禁，删测试、弱化断言、跳过检查同样不允许。
+需要人的拒绝停下来说明对象和做法：`gate_change_unconfirmed`（人确认门禁改动）、`plan_unapproved`（用户同意实施）、`platform_missing` 与 `platform_failed`（人安装或登录平台命令）、`version_missing`（人安装版本）、`push_rejected` 与 `not_fast_forward`（远程或本地主分支有来源不明的提交，由人判断）。
+另外按 `core.md` 的停下条件处理：缺权限、需要业务拍板、改动范围明显超出方案、同一个问题连续三轮没有解决。
+
+## 交付方式
+
+门禁通过后怎样把改动送进主分支，由主分支上 `.harness/config.json` 的 `delivery` 决定。
+两种交付方式只能选一种，同一时间只按其中一种交付：
+
+- 本地交付（`"mode": "local"`）：`harness merge` 合入本地主分支，需要时由人推送。
+  没有这一段时按本地交付，`init` 也会写出 `{ "mode": "local" }`。
+- 远程交付（`"mode": "remote"`，`provider` 填 `github` 或 `gitlab`）：`harness submit` 推送任务分支并创建或更新 PR/MR，由用户或团队在平台上合并，合入后 `harness sync` 快进本地主分支。
+
+本地交付下 `submit` 以 `delivery_local` 拒绝，远程交付下 `merge` 以 `delivery_remote` 拒绝；`sync` 只同步，两种方式下都能用。
+
+从本地交付改为远程交付：
+
+1. 由人在本机安装并登录 `gh` 或 `glab`，并让本地主分支与远程主分支一致（本地有未推送的提交时先由人推送），否则 `submit` 以 `base_stale` 拒绝。
+2. Agent 在任务分支把 `delivery` 改为 `{ "mode": "remote", "remote": "origin", "provider": "github" }`，验证、评审后展示 `harness confirm` 摘要；摘要写明由此授予的推送与创建 PR/MR 的权限，由人确认。
+3. Agent 运行 `harness submit --branch <任务分支>`，这一步就以 PR/MR 提交；平台合入后运行 `harness sync`，此后改走 PR/MR。
+
+改回本地交付走同样的流程，把 `mode` 改回 `local`，平台合入后 `sync` 导入，此后恢复 `harness merge`。
+交付设置的任何变化都要人确认，不受 `governance.confirmOnGateChange` 影响。
 
 ## 远程交付
 
-`.harness/config.json` 的 `delivery.mode` 为 `remote` 时，主分支在平台上，合并由团队走 PR/MR 与平台的保护规则。
+`delivery.mode` 为 `remote` 时，主分支在平台上，合并由团队走 PR/MR 与平台的保护规则。
+harness 保证它提交的 PR/MR 通过了本机门禁；平台上最终合入什么，由团队在平台上配置的保护规则把关。
 交付路径与本地交付不同：
 
 1. 第 1 到第 3 步与本地交付相同：在任务分支实现、提交、`harness verify`、`harness review`。
@@ -52,7 +82,6 @@
 - `harness submit` 要求本地主分支等于远程主分支，不一致时先 `harness sync`，否则以 `base_stale` 拒绝。
 - `harness submit` 只接受本地任务分支，不接受主分支、远程跟踪引用或提交号。
 - 平台命令（`gh`、`glab`）的安装与登录由人完成，harness 不读取、不保存也不传递平台令牌。
-- 主分支还是本地交付时，把 `delivery.mode` 改成 `remote` 的分支经人工确认后可以 `submit`，这就是开启开关的路径；关闭时走普通提交流程，平台合入后 `sync` 导入。
 - 本地交付下同样可以用 `harness sync` 把主分支快进到远程，取代由人用绕过开关手动快进的做法。
 
 ## 收尾：任务 Worktree 由用户发起清理
@@ -101,9 +130,9 @@
 
 ## 门禁改动
 
-`.harness/config.json`、`policy.json`、`verify.json`、`rules/**` 允许直接修改，改动会被记录并在合并前要求人工确认（`harness confirm --branch <分支>`）。
+`.harness/config.json`、`policy.json`、`verify.json`、`rules/**` 允许直接修改，改动会被记录并在交付前（`merge` 或 `submit`）要求人工确认（`harness confirm --branch <分支>`）。
 `.harness/bin/**` 是执行器入口，`.husky/**`、`.githooks/**`、`.claude/settings.json`、`.codex/hooks.json` 是客户端与 git 钩子的入口。
-它们只由 `harness install`（或 `init`、`upgrade`）生成，Agent 不能手改，但可以在任务分支运行这些命令重新生成；改动同样在合并前要求人工确认。
+它们只由 `harness install`（或 `init`、`upgrade`）生成，Agent 不能手改，但可以在任务分支运行这些命令重新生成；改动同样在交付前要求人工确认。
 
 ## 多个 Worktree
 

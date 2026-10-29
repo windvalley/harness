@@ -2,6 +2,24 @@
 
 按 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 组织，版本号遵循语义化版本。
 
+## [Unreleased]
+
+### 变更
+
+- README、图文教程与参考手册把交付讲成两种方式：默认由 Agent 合入本地主分支，或者改为由 Agent 提交 PR/MR、在 GitHub 或 GitLab 上合并。
+  三份文档都写明两种方式只能选一种、默认是本地交付、接入时怎样直接选 PR/MR，以及已接入项目怎样切换和改回。
+  开头与“一个需求怎么交付”同时说明：没过门禁时 Agent 按拒绝原因修复后重新验证和评审，只在需要人确认、同意、拍板、登录平台或同一个问题连续三轮修不好时停下。
+- `.harness/rules/harness.md` 的接入与一次任务按交付方式分别说明，新增“交付方式”与“门禁拒绝时”两节，写明哪些拒绝由 Agent 修复重试、哪些必须停下等人。
+- `AGENTS.md` 托管块写明两条交付路只能选一种，未配置 `delivery` 时为本地交付。
+- 主分支保护拒绝直接写入时，提示按项目的交付方式给出正确做法：远程交付提示 `harness submit` 与 `harness sync`，本地交付仍提示 `harness merge`。
+- `init` 的输出先写明当前交付方式；默认本地交付时说明怎样在提交接入改动前改为 PR/MR，下一步里的交付命令随交付方式写成 `merge` 或 `submit`。
+- 新项目默认的上报条件“同一方案连续失败两次”改为“同一个问题连续三轮没有解决”，与 `core.md` 的停下条件一致。
+
+### 升级说明
+
+- `upgrade` 会刷新 `.harness/rules/harness.md` 与 `AGENTS.md` 托管块。
+- 已有项目的 `escalate.triggers` 写在各自的 `config.json` 里，`upgrade` 不改；需要统一时在任务分支改成“同一个问题连续三轮没有解决”，经人确认后合入。
+
 ## [0.9.2] - 2026-10-29
 
 这一版新增远程交付：主分支放在 GitHub 或 GitLab 上的团队，可以用 `harness submit` 把核对过的任务提交推送到远程并创建或更新 PR/MR，由平台合并，合入后用 `harness sync` 把本地主分支快进过去。

@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
-import { loadGateProject, loadGuardProject, loadTrustedProject, mainBranch } from "./lib/config.mjs";
+import { deliverySettings, describeDelivery, loadCurrentProject, loadGateProject, loadGuardProject, loadTrustedProject, mainBranch } from "./lib/config.mjs";
 import { changedPaths, git, gitOk, mainWorktreeRoot, mergeBase, repoRoot, resolveCommit } from "./lib/git.mjs";
 import { keyStatus, readLedger, rotateKey, scanRecords } from "./lib/store.mjs";
 import { resolvePolicy, ruleStats } from "./policy/resolve.mjs";
@@ -328,16 +328,33 @@ function cmdGithook(argv) {
     };
     const result = guardReference({ input, token: process.env.HARNESS_MERGE_TOKEN ?? "", cwd: root, getRef });
     if (result.decision === "deny") {
-      process.stderr.write(
-        `${result.reason}\n本地主分支只允许由 harness merge 更新，它会先核对证据与评审。\n` +
-          `正确做法: 在任务分支提交后运行 harness merge --branch <任务分支>。\n`,
-      );
+      process.stderr.write(`${result.reason}\n${mainWriteHint(project)}\n`);
       return 1;
     }
     return 0;
   }
   process.stderr.write(`未知的 git 钩子: ${name}\n`);
   return 2;
+}
+
+/** 主分支保护拒绝时的正确做法，按项目的交付方式给出；配置读不出时按默认的本地交付提示。 */
+function mainWriteHint(project) {
+  let settings;
+  try {
+    settings = deliverySettings(project.config);
+  } catch {
+    settings = deliverySettings(undefined);
+  }
+  if (settings.mode === "remote") {
+    return [
+      `本项目是远程交付（${settings.provider}，远程 ${settings.remote}）：本地主分支不合并，只由 harness sync 从平台主分支快进。`,
+      "正确做法: 在任务分支提交后运行 harness submit --branch <任务分支> 创建或更新 PR/MR，平台合入后运行 harness sync。",
+    ].join("\n");
+  }
+  return [
+    "本地主分支只允许由 harness merge 更新，它会先核对证据与评审；从远程主分支快进用 harness sync。",
+    "正确做法: 在任务分支提交后运行 harness merge --branch <任务分支>。",
+  ].join("\n");
 }
 
 /** 接管钩子目录时 core.hooksPath 的处理结果，state 取值见 ensureHooksPath。 */
@@ -552,24 +569,48 @@ function cmdInit(argv) {
 
   const branch = report.branch;
   const onMain = report.onMain || !report.mainRef;
+  // 交付方式决定最后一步用 merge 还是 submit：已接入时取主分支的配置，首次接入取刚写入的配置。
+  let delivery;
+  try {
+    delivery = deliverySettings(loadCurrentProject(result.root).config);
+  } catch {
+    delivery = deliverySettings(undefined);
+  }
+  const deliver = delivery.mode === "remote" ? "submit" : "merge";
+  print("");
+  print(`交付方式: ${delivery.mode === "remote" ? describeDelivery(delivery) : "本地交付（默认）"}`);
+  if (delivery.mode === "remote") {
+    print("  门禁通过后由 harness submit 推送任务分支并创建或更新 PR/MR，在平台上合并，合入后用 harness sync 更新本地主分支。");
+  } else if (report.harnessOnMain) {
+    print("  门禁通过后由 harness merge 合入本地主分支。两种方式只能选一种；要改用 PR/MR，在任务分支修改 delivery 并经人确认，");
+    print("  见参考手册的“交付方式：本地与远程”。");
+  } else {
+    print("  门禁通过后由 harness merge 合入本地主分支。两种方式只能选一种；主分支在 GitHub 或 GitLab 上、合并走 PR/MR 时，");
+    print('  在提交接入改动前把 .harness/config.json 的 delivery 改为 { "mode": "remote", "provider": "github" }（GitLab 写 gitlab），');
+    print("  接入分支就会以 PR/MR 提交：确认后运行 harness submit --branch <接入分支>，平台合入后运行 harness sync。");
+  }
   print("");
   print("下一步");
   print("  接入流程由 Agent 按项目规则接续处理，用户只需在需要时做决定或亲自操作，不必重复提醒验证、评审和交付要求。");
   print("  Agent 按项目规则准备任务分支与需要的 Worktree；下面的命令由 Agent 执行，标明由人的除外。");
   print("  Agent 需核对项目真实检查命令，明确起始占位、未执行项和待处理项，初始化成功不等于全部接入完成。");
   if (report.harnessOnMain) {
-    print(`  1. 在任务分支提交本次改动后按日常任务流程合入：harness verify / review / merge --branch ${onMain ? "<任务分支>" : branch}`);
+    print(`  1. 在任务分支提交本次改动后按日常任务流程交付：harness verify / review / ${deliver} --branch ${onMain ? "<任务分支>" : branch}`);
     print("     涉及门禁配置、规则、入口或钩子时，Agent 展示 harness confirm 摘要，带 --yes 的确认由人在自己的终端执行。");
   } else if (onMain) {
     print("  Agent：当前在主分支上，先核对已有改动，按项目规则准备接入分支，例如 git switch -c chore/harness-onboard 后提交，");
-    print("  再走 harness verify / review / confirm / merge，合并时会把这份配置变成主分支的信任根。");
+    print(`  再走 harness verify / review / confirm / ${deliver}，${delivery.mode === "remote" ? "平台合入后 harness sync" : "合并时"}会把这份配置变成主分支的信任根。`);
     print("  项目规则允许、没有其他门禁且用户明确选择不走受控评审时，也可以直接在主分支提交，提交后即生效。");
   } else {
     print(`  1. 检查并提交本次接入改动（需要包含 .harness/bin/harness，保留用户原有改动）`);
     print(`  2. harness verify --branch ${branch}`);
     print(`  3. harness review --branch ${branch}`);
     print(`  4. Agent 展示摘要：harness confirm --branch ${branch}；看过后由人在自己的终端执行带 --yes 的确认，自然语言同意不能替代`);
-    print(`  5. harness merge --branch ${branch}`);
+    print(
+      delivery.mode === "remote"
+        ? `  5. harness submit --branch ${branch}，平台合入后在主 Worktree 运行 harness sync`
+        : `  5. harness merge --branch ${branch}`,
+    );
   }
   if (report.conflicts.length > 0 && !takeOver) {
     print("  原有的主分支保护或 Agent 钩子被保留；如果合并时被它们拒绝，加 --take-over 重新运行 init。");

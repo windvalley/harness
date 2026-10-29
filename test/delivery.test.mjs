@@ -219,10 +219,18 @@ describe("配置与默认行为", () => {
     repos.push(fresh);
     const init = fresh.rawCli("init");
     assert.equal(init.status, 0, init.stderr);
-    assert.deepEqual(JSON.parse(readFileSync(join(fresh.root, ".harness/config.json"), "utf8")).delivery, { mode: "local" });
+    const generated = JSON.parse(readFileSync(join(fresh.root, ".harness/config.json"), "utf8"));
+    assert.deepEqual(generated.delivery, { mode: "local" });
+    assert.match(init.stdout, /交付方式: 本地交付（默认）/, "init 说明当前交付方式是默认的本地交付");
+    assert.match(init.stdout, /"mode": "remote", "provider": "github"/, "init 给出改为 PR/MR 的写法");
+    assert.match(init.stdout, /harness submit --branch/, "init 说明远程交付改用 submit");
+    assert.ok(generated.escalate.triggers.includes("同一个问题连续三轮没有解决"), "上报条件与 core.md 的停下条件一致");
 
     const existing = setup();
-    assert.equal(existing.rawCli("init").status, 0);
+    const rerun = existing.rawCli("init");
+    assert.equal(rerun.status, 0);
+    assert.match(rerun.stdout, /要改用 PR\/MR，在任务分支修改 delivery 并经人确认/, "已接入的项目提示切换方式，不再讲接入时怎样选");
+    assert.equal(rerun.stdout.includes("在提交接入改动前"), false, rerun.stdout);
     assert.equal(existing.cli("upgrade").status, 0);
     assert.equal("delivery" in JSON.parse(readFileSync(join(existing.root, ".harness/config.json"), "utf8")), false);
   });
@@ -239,6 +247,11 @@ describe("配置与默认行为", () => {
     const rules = readFileSync(join(fresh.root, ".harness/rules/harness.md"), "utf8");
     assert.match(rules, /## 远程交付/);
     assert.match(rules, /harness submit/);
+    assert.match(rules, /两种交付方式只能选一种/, "规则写明两种交付方式互斥");
+    assert.match(rules, /没有这一段时按本地交付/, "规则写明默认是本地交付");
+    assert.match(rules, /远程交付运行 `harness submit --branch <接入分支>`/, "接入流程覆盖远程交付");
+    assert.match(rules, /门禁拒绝时/, "规则写明门禁拒绝后怎样修复与何时停下");
+    assert.match(block, /未配置时为 `local`/, "托管块写明默认交付方式");
     assert.match(readFileSync(join(fresh.root, ".harness/rules/core.md"), "utf8"), /远程提交/);
     const safety = JSON.parse(readFileSync(join(PACKAGE_ROOT, "assets/presets/git-safety.json"), "utf8"));
     for (const id of ["main-write-on-branch", "main-ref-plumbing"]) {
@@ -685,6 +698,37 @@ describe("harness sync", () => {
     assert.match(result.stderr, /post_merge_failed/);
     assert.match(result.stderr, /已经更新/);
     assert.equal(git(repo.root, "rev-parse", "main"), target);
+  });
+});
+
+describe("主分支保护的提示", () => {
+  test("远程交付下直接写主分支被拒时，提示改用 submit 与 sync", () => {
+    const repo = setup({ delivery: GITHUB });
+    const target = repo.branch("task/a", { "src/a.js": "a\n" });
+    const refused = sh(repo.root, "git", ["update-ref", "refs/heads/main", target], repo.env);
+    assert.notEqual(refused.status, 0);
+    assert.match(refused.stderr, /远程交付/);
+    assert.match(refused.stderr, /harness submit --branch <任务分支>/);
+    assert.match(refused.stderr, /harness sync/);
+  });
+
+  test("本地交付下直接写主分支被拒时，提示用 merge", () => {
+    const repo = setup();
+    const target = repo.branch("task/a", { "src/a.js": "a\n" });
+    const refused = sh(repo.root, "git", ["update-ref", "refs/heads/main", target], repo.env);
+    assert.notEqual(refused.status, 0);
+    assert.match(refused.stderr, /只允许由 harness merge 更新/);
+    assert.match(refused.stderr, /harness merge --branch <任务分支>/);
+    assert.equal(refused.stderr.includes("harness submit"), false, refused.stderr);
+  });
+
+  test("已接入远程交付的项目再运行 init，下一步写 submit 而不是 merge", () => {
+    const repo = setup({ delivery: GITHUB });
+    const result = repo.rawCli("init");
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /交付方式: 远程交付（github，远程 origin）/);
+    assert.match(result.stdout, /harness verify \/ review \/ submit --branch/);
+    assert.equal(/verify \/ review \/ merge/.test(result.stdout), false, result.stdout);
   });
 });
 

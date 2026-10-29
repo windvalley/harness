@@ -27,21 +27,22 @@ Agent 调用工具 ----> [1] 实时拦截：读写文件、执行命令之前按
       |
   git commit ------> [2] git 钩子：pre-commit 查暂存内容，commit-msg 查提交信息
       |
-  任务分支 --> verify --> review --> confirm --> merge --> 主分支
-               签名证据   独立评审    人工确认     [3] 受控合并
-                                    (仅门禁改动)  reference-transaction 拒绝其他写入
+  任务分支 --> verify --> review --> confirm --> merge  --> 本地主分支
+               签名证据   独立评审    人工确认      或 submit --> PR/MR，平台合并后 sync 快进本地主分支
+                                    (仅门禁改动)  [3] 受控合并：reference-transaction 拒绝其他写入
 ```
 
 | 层 | 何时生效 | 管什么 | 覆盖谁 |
 | --- | --- | --- | --- |
 | 实时拦截 | Agent 每次调用工具之前 | 读取密钥、改写门禁入口、不可逆的 git 操作、绕过开关 | Claude Code、Codex、DeepSeek Harness |
 | git 钩子 | 每次提交与引用更新 | 提交信息、暂存的密钥文件、主分支的写入 | 所有客户端和人 |
-| 受控合并 | 合并到主分支时 | 验证证据、独立评审、门禁改动的人工确认 | 所有客户端和人 |
+| 受控合并 | 交付到主分支时（`merge` 或 `submit`） | 验证证据、独立评审、门禁改动与交付设置变化的人工确认 | 所有客户端和人 |
 
 前两层负责当场纠正：拦截信息里带着原因和正确做法，Agent 照着改道即可。
-第三层负责结果把关：即使某个客户端没有接上实时拦截，没有证据和评审的改动也进不了主分支。
+第三层负责结果把关：即使某个客户端没有接上实时拦截，没有证据和评审的改动也合不进本地主分支，也提交不了 PR/MR。
+门禁拒绝后由 Agent 按原因修复并重新验证、评审，需要人的拒绝才停下，见“一次任务”里的“门禁拒绝时”。
 
-### 合并前要满足什么
+### 交付前要满足什么
 
 1. `verify`：在固定的独立检出里，按改动路径选出要跑的检查并执行，结果写成绑定分支提交的签名证据。
    它只验证已提交的内容，工作区里未提交的改动不在其中。
@@ -49,8 +50,8 @@ Agent 调用工具 ----> [1] 实时拦截：读写文件、执行命令之前按
 3. `confirm`：改动涉及门禁本身（配置、规则、入口、钩子）时，由人看过摘要后确认一次。
    Agent 执行带 `--yes` 的确认会被拦截。
    启用 `plan-first` 时，大改动还要有你同意实施的记录，见“任务分级与实施授权”。
-4. `merge`：核对上面的记录仍然有效，再更新主分支。
-   `reference-transaction` 钩子只放行带合并令牌的写入，令牌由证据密钥对“旧提交、新提交”签名得到，只有 `harness merge` 能生成。
+4. 交付：本地交付用 `merge`，核对上面的记录仍然有效，再更新本地主分支；远程交付用 `submit`，核对同样的条件后推送任务分支并创建或更新 PR/MR，见“交付方式：本地与远程”。
+   `reference-transaction` 钩子只放行带合并令牌的写入，令牌由证据密钥对“旧提交、新提交”签名得到，只有 `harness merge` 与 `harness sync` 能生成。
 
 证据和评审按分支提交索引，分支上再提交或改写提交后，需要重新 verify 和 review。
 主分支前进后再合并时，只有触发范围被主分支新改动波及的检查会重跑，其余直接复用。
@@ -62,11 +63,11 @@ Agent 调用工具 ----> [1] 实时拦截：读写文件、执行命令之前按
 - 配置一律从主分支的 git 对象读取：任务分支里改过的规则与检查不影响它自己的判定，合入主分支后才生效。
 - 代码不放在项目里：项目只入库一个入口 `.harness/bin/harness`，它锁定版本号并转发到 `~/.local/share/harness/versions/<版本>/`。
   版本目录带内容哈希清单，`harness doctor` 会校验它没有被就地改写。
-- 改配置、规则、入口或钩子的分支，合并前必须由人确认；确认绑定合并结果的 tree，内容一变就要重新确认。
+- 改配置、规则、入口或钩子的分支，交付前（`merge` 或 `submit`）必须由人确认；确认绑定合并结果的 tree，内容一变就要重新确认。
 - 证据、评审与确认都用本机密钥做 HMAC 签名，记录被改动、密钥已轮换或丢失都能识别出来，并提示该重跑哪一步。
 
 首次接入时主分支上还没有配置，没有信任根可用。
-这时 harness 按接入分支提议的配置执行，不论改了什么都要求人工确认，确认后以快进方式合入，这份配置从此成为主分支的信任根。
+这时 harness 按接入分支提议的配置执行，不论改了什么都要求人工确认，确认后以快进方式合入（远程交付下由平台合并、再 `sync` 导入），这份配置从此成为主分支的信任根。
 
 ### 文件放在哪
 
@@ -120,13 +121,14 @@ harness 没有 npm 依赖，也不需要全局安装。
 ```
 
 Agent 应先阅读来源仓库的 README 和接入说明，调查项目规则、Git 状态、已有钩子和检查命令，预览改动并保留有效规则和检查。
-接入默认走任务分支、验证、独立评审、人工确认和受控合并。
+接入默认走任务分支、验证、独立评审、人工确认和受控交付。
+交付方式在提交接入改动前确定，默认本地交付；主分支在 GitHub 或 GitLab 上、合并走 PR/MR 时，见下面的“接入时就用 PR/MR”。
 工作环境由 Agent 根据项目规则和现状准备，用户不需要先创建分支或 Worktree。
 任务分支不等于必须新建 Linked Worktree：可以在现有目录切到接入分支，也可以使用符合隔离要求的现有 Worktree。
 需要隔离未提交改动、多个会话并行或项目规则要求时，由 Agent 创建 Linked Worktree，让主 Worktree 保持在主分支且洁净。
 Agent 应保留用户已有改动；确实需要处理这些改动时，先说明具体对象与选择。
 
-接入后你应看到：改动和检查配置的摘要、验证证据、独立评审结果、人工确认的具体命令，以及最终合并状态。
+接入后你应看到：改动和检查配置的摘要、验证证据、独立评审结果、人工确认的具体命令，以及最终交付状态。
 `init` 生成的是起始检查，Agent 还应核对项目真实命令，说明哪些已经配置、哪些是占位或尚未执行。
 合并后完成[客户端操作](#客户端那一侧)，再由 Agent 运行诊断，区分配置就位、已验证生效和仍待验证。
 
@@ -171,6 +173,29 @@ git commit -m "chore(harness): 接入门禁" -m "- 写入门禁配置、规则�
 ```
 
 合并后保留接入分支与任务 Worktree，清理由用户另行发起，见[清理任务 Worktree](#清理任务-worktree)。
+
+#### 接入时就用 PR/MR
+
+主分支在平台上、只接受 PR/MR 合并时，接入分支也要走 PR/MR，否则本地合并后推不上去，本地主分支会和远程分叉。
+先由人在本机安装并登录 `gh` 或 `glab`，确认本地主分支与远程主分支一致。
+在第 3 步提交之前，把 `.harness/config.json` 的 `delivery` 改为远程交付：
+
+```json
+"delivery": { "mode": "remote", "remote": "origin", "provider": "github" }
+```
+
+验证、评审与人工确认和上面相同，确认摘要会写明由此授予的推送与创建 PR/MR 的权限。
+确认后用 `submit` 代替 `merge`，平台合并后在主 Worktree 运行 `sync`，主分支上还没有入口，两条都用源码入口执行：
+
+```bash
+node ~/github/harness/bin/harness.mjs submit --branch chore/harness-onboard   # 推送接入分支并创建 PR/MR
+# 在平台上合并这个 PR/MR
+cd <项目>
+node ~/github/harness/bin/harness.mjs sync                                    # 快进本地主分支，沿用接入时的确认
+```
+
+`sync` 发现目标 tree 和确认时一致，就沿用这条确认导入配置；之后的任务都走 PR/MR。
+远程不叫 `origin` 时，`sync` 加 `--remote <远程名>`，并与接入提交里的配置核对。
 
 提交信息要符合默认的提交规范：标题之后空一行，每行一条 `- ` 开头的要点。
 接入期间钩子还没有生效，格式不对的提交要到合并时才被拒绝，见“提交信息”。
@@ -331,7 +356,7 @@ Agent 核实这只是已有列表页的局部改动，不改接口、数据或�
 
 ### 一次任务
 
-用户提出需求后，Agent 先理解需求并判断任务分级，再按相应流程负责澄清、工作环境准备、实现、提交、验证、独立评审和已获授权的本地合并。
+用户提出需求后，Agent 先理解需求并判断任务分级，再按相应流程负责澄清、工作环境准备、实现、提交、验证、独立评审和按项目交付方式的交付。
 分支和 Worktree 按项目规则处理，不需要用户逐条安排命令。
 下面是 Agent 执行的命令参考，以独立任务 Worktree 为例：
 
@@ -343,8 +368,11 @@ cd ../<项目>-login
 # 实现并提交
 harness verify --branch feat/login   # 选检查，在固定检出里执行，写签名证据
 harness review --branch feat/login   # 独立评审
-harness status --branch feat/login   # 只读：还差哪几步才能合并
-harness merge  --branch feat/login   # 核对证据与评审，更新主分支
+harness status --branch feat/login   # 只读：还差哪几步才能交付
+harness merge  --branch feat/login   # 本地交付：核对证据与评审，更新本地主分支
+# 远程交付改为：
+# harness submit --branch feat/login # 推送核对过的提交，创建或更新 PR/MR
+# harness sync                       # 平台合入后，快进本地主分支
 ```
 
 - `harness verify --plan --branch <分支>` 只列出会执行、记为未执行和仅提示的检查，不执行也不写证据。
@@ -357,11 +385,18 @@ harness merge  --branch feat/login   # 核对证据与评审，更新主分支
 - 合并有冲突时，在任务分支上 `git merge main` 解决冲突并提交，再重新 verify、review。
 - 合并后任务 Worktree 保留，需要时按下面的“清理任务 Worktree”清理。
 
+门禁拒绝时：
+
+- 验证失败、评审拒绝、`review_stale`、合并冲突、`bad_commit_message`、`branch_moved`、`main_moved` 这类拒绝，由 Agent 按原因修改后重新 verify、review，再交付，不需要你安排。
+- 修复只能改实现、测试或提交本身：任务分支放宽不了门禁，删测试、弱化断言、跳过检查也被项目规范禁止。
+- 需要人的拒绝会停下来说明对象和做法：确认门禁改动（`gate_change_unconfirmed`）、同意实施方案（`plan_unapproved`）、安装或登录平台命令（`platform_missing`、`platform_failed`）、安装锁定的版本（`version_missing`）、判断来源不明的提交（`push_rejected`、`not_fast_forward`）。
+- 此外缺权限、需要业务拍板、改动范围明显超出方案、同一个问题连续三轮没有解决时，Agent 也会停下说明情况。
+
 交付时用户检查：
 
 - 从约定入口观察到需求中的结果，正常路径与约定边界都有验收证据。
 - 验证与独立评审结果明确，缺少验收清单时不能把工程质量评审当作需求已经验收通过。
-- 已合并、待授权合并或阻塞的状态明确，并列出分支、提交、任务工作区与未完成项。
+- 交付状态明确，并列出分支、提交、任务工作区与未完成项：本地交付是已合并、待授权合并或阻塞；远程交付是已提交 PR/MR 等平台合并、平台已合入并已同步或阻塞。
 
 ### 清理任务 Worktree
 
@@ -502,22 +537,26 @@ Agent 按“正确做法”改道即可，实时拦截每次都会记进账本�
 Agent 运行 `harness confirm --branch <分支>` 并展示只读摘要：涉及哪些门禁文件、生效规则的增删与改动（包括只改 `disabled` 关掉某条预设规则）、检查项的增删。
 人确认无误后，在自己的终端运行 Agent 给出的带 `--yes` 的同一条命令，可以加 `--note <说明>`。
 对话里的“同意”不能替代这条人工命令。
-确认只在账本里记下这一次确认，不会合并，主分支上也不会出现新提交；告诉 Agent 已确认后，由它继续完成已获授权的本地合并。
+确认只在账本里记下这一次确认，不会合并，主分支上也不会出现新提交；告诉 Agent 已确认后，由它按交付方式继续：本地交付完成已获授权的本地合并，远程交付提交 PR/MR。
 确认绑定合并结果的 tree：分支再提交，或者主分支前进让合并结果变了，都要重新确认。
 
 ### 交付方式：本地与远程
 
-`.harness/config.json` 的 `delivery` 决定门禁通过后怎么交付到主分支：
+`.harness/config.json` 的 `delivery` 决定门禁通过后怎么交付到主分支。
+两种方式只能选一种，同一时间只按其中一种交付，配置一律从本地主分支读取：
 
 ```json
 "delivery": { "mode": "local", "remote": "origin", "provider": null }
 ```
 
 - `mode` 默认 `local`：`harness merge` 合入本地主分支，就是上面“一次任务”的流程。
+  `init` 会写入 `"delivery": { "mode": "local" }`；没有这一段的项目，包括升级上来的老项目，同样按本地交付处理。
+  这时 `harness submit` 以 `delivery_local` 拒绝。
 - `mode` 取 `remote` 时 `provider` 必填：`github` 用本机的 `gh`，`gitlab` 用本机的 `glab`。
   主分支在平台上，合并走 PR/MR 与平台的保护规则。
   这时 `harness merge` 以 `delivery_remote` 拒绝，改用 `harness submit`。
 - `remote` 是远程名，默认 `origin`，`submit` 与 `sync` 都用它。
+- `harness sync` 只把本地主分支快进到远程主分支，两种方式下都能用。
 - 本地主分支仍是唯一的信任根，配置一律从它读。
   远程模式下本地主分支只由 `sync` 快进。
 
@@ -525,9 +564,18 @@ Agent 运行 `harness confirm --branch <分支>` 并展示只读摘要：涉及�
 只把缺省值写成显式的 `local` 不算变化。
 确认摘要里单独列一行“交付设置”，写明改前改后与由此授予的权限。
 
-主分支还是本地模式时，把 `delivery.mode` 改成 `remote` 的分支经人工确认后可以 `submit`：门禁核对仍按主分支的配置，`remote` 与 `provider` 取分支提议的值。
-这是开启开关的路径，因为远程主分支通常只接受 PR/MR 合并，先本地合并会推不上去。
-关闭不需要特殊处理：把 `mode` 改回 `local` 的分支在远程模式下照常 `submit`，平台合入后 `sync` 导入。
+已经接入、正在用本地交付的项目改用远程交付：
+
+1. 由人在本机安装并登录 `gh` 或 `glab`。
+   本地主分支有未推送的提交时先由人推送，让本地主分支与远程主分支一致，否则 `submit` 以 `base_stale` 拒绝。
+2. Agent 在任务分支把 `delivery` 改为 `{ "mode": "remote", "remote": "origin", "provider": "github" }`，验证、评审后展示确认摘要，由人确认。
+3. Agent 运行 `harness submit --branch <任务分支>`，把这个改动本身作为 PR/MR 提交。
+   主分支还是本地交付时，改了 `delivery.mode` 为 `remote` 的分支经人工确认后才可以 `submit`：门禁核对仍按主分支的配置，`remote` 与 `provider` 取分支提议的值。
+   不能先用 `merge` 合入这个开关，远程主分支通常只接受 PR/MR 合并，先本地合并会推不上去，本地主分支会和远程分叉。
+4. 人在平台上合并后，Agent 运行 `harness sync` 导入，此后 `merge` 被拒绝，改走 `submit`。
+
+改回本地交付不需要特殊处理：把 `mode` 改回 `local` 的分支在远程交付下照常 `submit`，平台合入后 `sync` 导入并确认，此后恢复 `merge`。
+首次接入时就想用远程交付，见“首次接入”里的“接入时就用 PR/MR”。
 
 ### 远程交付：提交、同步与本地模式的区别
 
@@ -595,7 +643,7 @@ HARNESS_MAIN_BYPASS=1 git merge --ff-only origin/main
 
 ### 例外上报
 
-遇到需要人拍板的情况（需求有歧义、必要验证被既有问题阻塞、要推送或部署、同一方案连续失败），Agent 用上报把决定交给人：
+遇到需要人拍板的情况（需求有歧义、必要验证被既有问题阻塞、要推送或部署、同一个问题连续三轮没有解决），Agent 用上报把决定交给人：
 
 ```bash
 harness escalate open --file esc.json      # 不带 --file 时从标准输入读
@@ -643,7 +691,7 @@ DeepSeek Harness 在新机器上注册一次本机插件，见“客户端那一
 ```
 
 Agent 应检查当前版本，与用户明确目标版本，阅读变更记录并说明影响，再按项目规则准备升级环境、验证和独立评审。
-必要的人工确认后，由它继续完成已获授权的本地合并，主动报告升级结果、待迁移配置和客户端操作。
+必要的人工确认后，由它按交付方式完成交付（本地合并，或提交 PR/MR 并在平台合入后同步），主动报告升级结果、待迁移配置和客户端操作。
 任务分支及需要的 Worktree 由 Agent 准备，项目自有规则与配置的保留方式也由它核对。
 下面以新建任务 Worktree 为例列出命令参考：
 
@@ -674,7 +722,7 @@ HARNESS_MAIN_BYPASS=1 git merge --ff-only origin/main   # 由人在自己的终�
 node ~/github/harness/bin/harness.mjs install --local   # 按新锁定的版本安装并刷新钩子
 ```
 
-想让这次同步也走本机门禁（“与远端同步”的做法一），要先装好新版本：verify 里的 `harness-golden` 检查会用远端分支的入口运行，本机没有它锁定的版本时这项检查失败。
+想让这次同步也走本机门禁（“与远端同步（旧做法）”的做法一），要先装好新版本：verify 里的 `harness-golden` 检查会用远端分支的入口运行，本机没有它锁定的版本时这项检查失败。
 `node ~/github/harness/bin/harness.mjs version` 与 `git show origin/main:.harness/VERSION` 一致时，运行 `node ~/github/harness/bin/harness.mjs publish` 装好新版本，再按做法一合入。
 
 ## 配置
@@ -938,7 +986,7 @@ node ~/github/harness/bin/harness.mjs install --local   # 按新锁定的版本�
 | --- | --- |
 | `verify --branch <分支> [--plan] [--no-reuse]` | 验证并写签名证据；`--plan` 只列计划，`--no-reuse` 不复用已有结果 |
 | `review --branch <分支>` | 独立评审 |
-| `status [--branch <分支>]` | 只读汇总还差哪几步才能合并，默认看当前分支 |
+| `status [--branch <分支>]` | 只读汇总还差哪几步才能交付，默认看当前分支 |
 | `confirm --branch <分支> [--yes] [--note <说明>]` | 查看门禁改动摘要；带 `--yes` 由人记录确认 |
 | `approve --branch <分支> [--yes --note <原话>]` | 查看任务方案与授权状态；用户同意实施后由 Agent 带 `--yes` 照录原话记录授权 |
 | `merge --branch <分支> [--dry-run]` | 受控合并到主分支（本地交付） |
@@ -993,7 +1041,7 @@ harness 防的是 Agent 的误操作，以及被提示注入后常见的绕过�
 | `主 Worktree 当前不在 main 分支` 或 `存在未提交或未跟踪文件` | Agent 先核对状态并保留已有改动，再按项目规则准备主 Worktree；需要处置用户改动时说明具体对象并取得授权，不能直接丢弃 |
 | `本机没有安装门禁锁定的版本` | Agent 工具调用被拦截时，由人在项目目录运行 `node ~/github/harness/bin/harness.mjs install --local`，再让 Agent 继续诊断 |
 | `gate_change_unconfirmed` | Agent 展示确认摘要；由人在自己的终端执行它给出的带 `--yes` 的确认命令 |
-| 运行 `confirm --yes` 后主分支没有新提交 | 确认只记录，不合并；告诉 Agent 已确认，让它继续完成已获授权的本地合并 |
+| 运行 `confirm --yes` 后主分支没有新提交 | 确认只记录，不合并；告诉 Agent 已确认，让它按交付方式继续：本地交付完成合并，远程交付提交 PR/MR |
 | `plan_unapproved` | 大改动没有实施授权记录，或授权后验收清单又改了；补齐方案并提交，向用户说明，用户同意后照录原话运行 `harness approve --branch <分支> --yes --note "<原话>"` |
 | 写代码时被 `plan-before-code` 拦截 | 任务分支里有实施方案但还没有授权记录；用户还没同意就停下等，已经同意就按上一条记录；只是借用了 `docs/changes/` 下的旧方案时，把它移出这次改动 |
 | `review_missing` 或 `review_blocked` | 运行 `harness review`；被拒时按发现修复，提交后重新 verify、review |
@@ -1017,7 +1065,7 @@ harness 防的是 Agent 的误操作，以及被提示注入后常见的绕过�
 | `bootstrap_not_fast_forward` | 首次接入的分支落后于主分支，先在分支上 `git merge main` |
 | `bootstrap_update_refused` | 原有的主分支保护拒绝了这次合并；在接入分支重新运行 `init --take-over`，提交后重新验证、确认并合并 |
 | `post_merge_failed`，退出码 3 | 主分支已经更新，但 `postMergeCommand` 失败了；修好后手工补跑，不要当作合并完成 |
-| `拒绝直接更新 refs/heads/main` | 主分支只接受 `harness merge`；拉取远端见“与远端同步” |
+| `拒绝直接更新 refs/heads/main` | 本地主分支只接受 `harness merge` 与 `harness sync`；远程交付下改用 `harness submit`，平台合入后 `harness sync`；拉取远端也用 `harness sync` |
 | `另一个合并正在进行` | 等那个合并结束后重试 |
 | Codex 里的命令没被拦截 | 钩子还没信任，在 Codex 里运行 `/hooks` 信任 |
 | `doctor` 报 `client:dsh` 注册的是旧版生成在项目里的插件 | 0.8.0 起插件改为本机共用一份，按输出的命令重新注册一次，同名的旧注册会被替换；桌面版先完全退出，注册后重启 |
