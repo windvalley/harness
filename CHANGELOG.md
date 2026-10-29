@@ -2,7 +2,12 @@
 
 按 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 组织，版本号遵循语义化版本。
 
-## [Unreleased]
+## [0.9.2] - 2026-10-29
+
+这一版新增远程交付：主分支放在 GitHub 或 GitLab 上的团队，可以用 `harness submit` 把核对过的任务提交推送到远程并创建或更新 PR/MR，由平台合并，合入后用 `harness sync` 把本地主分支快进过去。
+远程交付默认关闭，没有配置 `delivery` 的项目行为不变，仍由 `harness merge` 合入本地主分支。
+GitHub 已在真实仓库上实测，GitLab 只在模拟命令下验证过。
+0.8.2 没有单独发布，它的内容（`secrets` 预设放行开发环境文件、证据复用与评审过期的修复、托管块的授权说明）一并包含在这一版里。
 
 ### 新增
 
