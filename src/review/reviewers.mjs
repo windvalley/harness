@@ -101,14 +101,28 @@ export function parseReviewers(data, file = "reviewers.json") {
   return { preferDifferentModel: data.preferDifferentModel !== false, reviewers };
 }
 
+/**
+ * JSON 语法错误的报错。Node 的原始信息会带出出错位置附近的原文，那里可能正是 apiKey 的开头，所以只报位置，不报原文。
+ */
+export function jsonSyntaxError(file, text, error) {
+  const position = /position (\d+)/.exec(error.message);
+  let where = "";
+  if (position) {
+    const before = text.slice(0, Number(position[1]));
+    where = `，大约在第 ${before.split("\n").length} 行第 ${before.length - before.lastIndexOf("\n")} 列`;
+  }
+  return new Error(`${file} 不是合法的 JSON${where}（为避免带出 apiKey，不显示原文片段）`);
+}
+
 /** 读本机文件；不存在返回 null（按项目旧字段运行），存在但读不出或不合法时抛错，不退回旧字段。 */
 export function loadLocalReviewers({ file = reviewersFile() } = {}) {
   if (!existsSync(file)) return null;
+  const text = readFileSync(file, "utf8");
   let data;
   try {
-    data = JSON.parse(readFileSync(file, "utf8"));
+    data = JSON.parse(text);
   } catch (error) {
-    throw new Error(`${file} 不是合法的 JSON: ${error.message}`);
+    throw jsonSyntaxError(file, text, error);
   }
   return { file, ...parseReviewers(data, file), raw: data };
 }
@@ -129,11 +143,12 @@ export function writeLocalReviewers(data, { file = reviewersFile() } = {}) {
  * 按任务会话的模型调整顺序：与会话同模型的评审者排到最后，其余保持原有先后。
  * 只调顺序、不删评审者；条目没写模型时无法判断，当作不同；会话模型未知时原样返回。
  */
-export function orderReviewers(reviewers, sessionModel, prefer = true) {
+export function orderReviewers(reviewers, sessionModel, prefer = true, env = process.env) {
   if (!prefer || !sessionModel) return { ordered: [...reviewers], reordered: false };
   const different = [];
   const same = [];
-  for (const entry of reviewers) (entry.model && sameModel(entry.model, sessionModel) ? same : different).push(entry);
+  // 指定了端点的评审者启动时会清掉 ANTHROPIC_*，会话环境里的别名映射对它不适用，只能按家族匹配。
+  for (const entry of reviewers) (entry.model && sameModel(entry.model, sessionModel, entry.baseUrl ? {} : env) ? same : different).push(entry);
   const ordered = [...different, ...same];
   return { ordered, reordered: ordered.some((entry, index) => entry !== reviewers[index]) };
 }

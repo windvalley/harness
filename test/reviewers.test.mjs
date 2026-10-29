@@ -679,7 +679,7 @@ describe("评审者的显示", () => {
     fakeClaudes(repo);
     writeReviewers(repo, { reviewers: [{ ...SONNET, effort: "high" }] });
     assert.equal(repo.cli("review", "--branch", name).status, 0);
-    assert.match(repo.cli("status", "--branch", name).stdout, /评审通过（.*评审者 sonnet \/ sonnet \/ effort high）/);
+    assert.match(repo.cli("status", "--branch", name).stdout, /评审通过（.*评审者 sonnet \/ claude \/ sonnet \/ effort high/);
 
     assert.equal(reviewerSummary({ verdict: "approve" }), "未记录");
     assert.deepEqual(reviewerLines({ verdict: "approve" }), ["  评审者: 未记录"]);
@@ -691,7 +691,7 @@ describe("评审者的显示", () => {
       attempts: [{ name: "flash", outcome: "failed", reason: "401\n多行" }, { name: "sonnet", outcome: "done" }],
       reviewerSelection: { reordered: true, sessionModel: "claude-opus-5-5", order: ["flash", "sonnet", "opus"] },
     };
-    assert.equal(reviewerSummary(record), "sonnet / sonnet（实际 anthropic/claude-sonnet-5.5） / effort high，由备选完成");
+    assert.equal(reviewerSummary(record), "sonnet / claude / sonnet（实际 anthropic/claude-sonnet-5.5） / effort high / 端点 gw.test（来自环境变量），由备选完成");
     const lines = reviewerLines(record).join("\n");
     assert.match(lines, /评审者: sonnet（claude，模型 sonnet（实际 anthropic\/claude-sonnet-5\.5），effort high，端点 gw\.test（来自环境变量）），耗时 12\.3 秒/);
     assert.match(lines, /由备选 sonnet 完成/);
@@ -712,5 +712,131 @@ describe("评审者的显示", () => {
     writeReviewers(fresh, { reviewers: [SONNET] });
     const again = fresh.rawCli("init");
     assert.match(again.stdout, /评审者: 本机文件 .* 里配了 1 个：sonnet\(sonnet\)/);
+  });
+});
+
+describe("codex review 发现的问题", () => {
+  const PROVIDER_FLAGS = [
+    "CLAUDE_CODE_USE_BEDROCK",
+    "CLAUDE_CODE_USE_VERTEX",
+    "CLAUDE_CODE_USE_FOUNDRY",
+    "CLAUDE_CODE_USE_ANTHROPIC_AWS",
+    "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD",
+    "CLAUDE_CODE_USE_GATEWAY",
+    "CLAUDE_CODE_USE_MANTLE",
+  ];
+
+  test("指定了端点的评审者同时清掉云提供商选择开关，无关的开关和没指定端点的评审者照旧", () => {
+    const withEndpoint = setup();
+    const first = readyBranch(withEndpoint);
+    const claude = fakeClaudes(withEndpoint);
+    for (const flag of PROVIDER_FLAGS) withEndpoint.env[flag] = "1";
+    withEndpoint.env.CLAUDE_CODE_USE_NATIVE_FILE_SEARCH = "1";
+    writeReviewers(withEndpoint, { reviewers: [FLASH] });
+    assert.equal(withEndpoint.cli("review", "--branch", first.name).status, 0);
+    const kept = Object.keys(claude.calls()[0].env).filter((key) => key.startsWith("CLAUDE_CODE_USE_"));
+    assert.deepEqual(kept, ["CLAUDE_CODE_USE_NATIVE_FILE_SEARCH"]);
+
+    const inherit = setup();
+    const second = readyBranch(inherit);
+    const inheritClaude = fakeClaudes(inherit);
+    for (const flag of PROVIDER_FLAGS) inherit.env[flag] = "1";
+    writeReviewers(inherit, { reviewers: [SONNET] });
+    assert.equal(inherit.cli("review", "--branch", second.name).status, 0);
+    for (const flag of PROVIDER_FLAGS) assert.equal(inheritClaude.calls()[0].env[flag], "1", flag);
+  });
+
+  test("reviewer test 与评审的报错擦掉本机文件里所有的 key，也擦掉继承来的令牌", () => {
+    const repo = setup();
+    const TOKEN = "inherited-token-ABCDEF123456";
+    repo.env.ANTHROPIC_AUTH_TOKEN = TOKEN;
+    fakeClaudes(repo, { "*": { mode: "fail", message: `401 ${KEY} ${TOKEN}` } });
+    writeReviewers(repo, { reviewers: [FLASH, SONNET] });
+
+    const probed = reviewerCli(repo, ["test", "sonnet"]);
+    assert.equal(probed.status, 1);
+    assert.match(probed.stdout, /不可用: .*401 \*\*\*\* \*\*\*\*/);
+    assert.doesNotMatch(probed.stdout + probed.stderr, /SECRET|ABCDEF123456/);
+
+    const { name } = readyBranch(repo);
+    const review = repo.cli("review", "--branch", name);
+    assert.equal(review.status, 1);
+    assert.doesNotMatch(review.stdout + review.stderr, /SECRET|ABCDEF123456/);
+  });
+
+  test("本机文件有 JSON 语法错误时，报错不带出原文片段（可能正是 apiKey 的开头）", () => {
+    const repo = setup();
+    const broken = `{ "reviewers": [ { "name": "a", "client": "claude", "model": "m", "apiKey": ${KEY}" } ] }`;
+    writeFileSync(fileOf(repo), broken);
+    assert.throws(() => loadLocalReviewers({ file: fileOf(repo) }), (error) => /不是合法的 JSON/.test(error.message) && !/sk-test/.test(error.message));
+    for (const args of [["list"], ["set", "a", "--model", "m2"], ["remove", "a"], ["prefer", "on"], ["test", "a"]]) {
+      const result = reviewerCli(repo, args);
+      assert.equal(result.status, 1, args.join(" "));
+      assert.match(result.stdout + result.stderr, /不是合法的 JSON/, args.join(" "));
+      assert.doesNotMatch(result.stdout + result.stderr, /sk-test/, args.join(" "));
+    }
+    const doctor = repo.cli("doctor");
+    assert.match(doctor.stdout, /不是合法的 JSON/);
+    assert.doesNotMatch(doctor.stdout, /sk-test/);
+  });
+
+  test("别名按环境变量解析成具体模型再比较；解析不出时按家族匹配；指定了端点的评审者不用环境变量", () => {
+    const env = { ANTHROPIC_DEFAULT_SONNET_MODEL: "anthropic/claude-sonnet-5.5-cpr[1M]" };
+    assert.ok(sameModel("sonnet", "claude-sonnet-5-5", env));
+    assert.ok(sameModel("sonnet[1m]", "claude-sonnet-5-5", env));
+    assert.ok(sameModel("claude-sonnet-5-5", "sonnet", env));
+    assert.equal(sameModel("sonnet", "claude-sonnet-4-5", env), false, "别名解析成 5.5，会话是 4.5，不是同一个");
+    assert.ok(sameModel("sonnet", "claude-sonnet-4-5", {}), "解析不出时按家族，宁可多后移");
+    assert.ok(sameModel("opus", "opus", {}));
+    assert.equal(sameModel("sonnet", "claude-opus-5-5", {}), false);
+    assert.equal(sameModel("opus", "claude-sonnet-5-5", env), false);
+
+    const names = (list) => list.map((item) => item.name);
+    const entries = [{ name: "sonnet", client: "claude", model: "sonnet" }, { name: "flash", client: "claude", model: "deepseek/deepseek-v4.1-flash" }];
+    assert.deepEqual(names(orderReviewers(entries, "claude-sonnet-5-5", true, env).ordered), ["flash", "sonnet"]);
+    assert.deepEqual(names(orderReviewers(entries, "claude-sonnet-5-5", true, {}).ordered), ["flash", "sonnet"]);
+    // 端点自己的评审者启动时会清掉 ANTHROPIC_*，会话环境里的别名映射对它不适用，只能按家族匹配。
+    const gateway = [{ name: "gw", client: "claude", model: "sonnet", baseUrl: "https://x.test", apiKey: "k" }, entries[1]];
+    const opusEnv = { ANTHROPIC_DEFAULT_SONNET_MODEL: "claude-opus-5-5" };
+    assert.equal(orderReviewers(gateway, "claude-opus-5-5", true, opusEnv).reordered, false);
+  });
+
+  test("评审摘要带上客户端和端点：名称、模型、强度都相同时也能区分", () => {
+    const reviewer = { name: "x", client: "claude", requestedModel: "m", actualModels: ["m"], effort: "high" };
+    const plain = reviewerSummary({ reviewer });
+    const viaCommand = reviewerSummary({ reviewer: { ...reviewer, client: "command" } });
+    const viaGateway = reviewerSummary({ reviewer: { ...reviewer, endpointHost: "gw.test", endpointFrom: "reviewer" } });
+    const viaEnv = reviewerSummary({ reviewer: { ...reviewer, endpointHost: "gw.test", endpointFrom: "environment" } });
+    assert.equal(plain, "x / claude / m / effort high");
+    assert.equal(viaCommand, "x / command / m / effort high");
+    assert.equal(viaGateway, "x / claude / m / effort high / 端点 gw.test");
+    assert.equal(viaEnv, "x / claude / m / effort high / 端点 gw.test（来自环境变量）");
+    assert.equal(reviewerSummary({ reviewer: { name: "codex", client: "codex", effort: "low" } }), "codex / effort low", "名称与客户端相同就不重复");
+  });
+
+  test("没有本机文件时 list 与 init 按项目实际的旧字段说明，不用默认值去猜", () => {
+    const legacy = { ...CONFIG, review: { backend: "command", command: ["sh", "-c", "cat >/dev/null"], blockSeverities: ["high"] } };
+    const repo = setup({ project: { ".harness/config.json": legacy } });
+    const listed = reviewerCli(repo, ["list"]);
+    assert.equal(listed.status, 0, listed.stderr);
+    const line = listed.stdout.split("\n").find((item) => item.includes("旧字段运行"));
+    assert.match(line, /旧字段运行: command/);
+    assert.doesNotMatch(line, /claude/);
+
+    const init = repo.rawCli("init");
+    assert.equal(init.status, 0, init.stderr);
+    const hint = init.stdout.split("\n").find((item) => item.startsWith("评审者:"));
+    assert.match(hint, /旧字段/);
+    assert.match(hint, /command/);
+    assert.doesNotMatch(hint, /claude/);
+  });
+
+  test("不在已接入的仓库里时 list 只说明规则，不把默认值当成当前评审者", () => {
+    const repo = setup();
+    const outside = tempDir();
+    const result = sh(outside, process.execPath, [join(PACKAGE_ROOT, "bin", "harness.mjs"), "reviewer", "list"], repo.env);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /不在已接入的仓库里/);
+    assert.doesNotMatch(result.stdout.split("\n").find((item) => item.includes("旧字段")) ?? "", /claude（sonnet）/);
   });
 });

@@ -1037,6 +1037,8 @@ node ~/github/harness/bin/harness.mjs install --local   # 按新锁定的版本�
 
 文件里不认识的字段、非法取值和重复的名字都会报错，不会被悄悄忽略。
 `apiKey` 直接存在这个文件里，所以只由 `harness reviewer` 读写，展示时只露末 4 位，错误信息、评审记录和账本里都不会出现它。
+评审进程的报错会擦掉本机文件里所有评审者的 key，以及继承来的 `ANTHROPIC_AUTH_TOKEN` 这类令牌，`harness reviewer test` 同样处理。
+文件有 JSON 语法错误时，报错只说明不合法，不显示出错位置附近的原文，因为那里可能正是 key 的开头。
 
 ### harness reviewer 命令
 
@@ -1072,7 +1074,8 @@ harness reviewer test flash                # 用极小的材料实际跑一次�
 
 指定了 `baseUrl` 的 `claude` 评审者有三点特别处理：
 
-- 启动前清掉继承来的 `ANTHROPIC_*` 环境变量，让这一项只用自己的端点和 key。实测里不清的话，配错的 key 照样成功，分不清这次用的是哪一把。
+- 启动前清掉继承来的 `ANTHROPIC_*` 环境变量，以及选择云提供商的开关（`CLAUDE_CODE_USE_BEDROCK`、`VERTEX`、`FOUNDRY` 等），让这一项只用自己的端点和 key。
+  实测里不清的话，配错的 key 照样成功，分不清这次用的是哪一把；会话跑在云提供商上时，不清开关请求就不会走指定的端点。
 - key 只通过子进程的环境变量交给 `apiKeyHelper`，不出现在命令行参数和 settings 文件的内容里。
 - 不加载 `~/.claude/settings.json`，settings 由 harness 在临时目录里生成，用完即删。
 
@@ -1087,6 +1090,9 @@ harness reviewer test flash                # 用极小的材料实际跑一次�
 `preferDifferentModel` 默认开启：评审前先识别当前任务会话在用的模型，把模型相同的评审者排到最后，其余保持原有先后。
 
 - 按具体模型比较：会话用 opus 时，sonnet 算不同。
+- 别名先解析再比较：评审者的 `model` 写 `sonnet` 这类别名时，按 `ANTHROPIC_DEFAULT_SONNET_MODEL` 这类环境变量解析成具体模型，再与会话模型比较。
+  解析不出时按家族匹配，`sonnet` 与 `claude-sonnet-4-5` 算相同。这样偏保守，误判成相同只会让评审者排到后面，不会把它丢掉。
+  指定了 `baseUrl` 的评审者启动时用不到会话的环境变量，只按家族匹配。
 - 只调顺序、不删评审者：与会话同模型的评审者仍作为最后的备选。
 - 没写 `model` 的评审者（例如没指定模型的 `codex`）无法判断，留在原位。
 - 识别不出会话模型时，按文件里的顺序运行，记录里写明“会话模型未知”。
@@ -1110,7 +1116,8 @@ Codex 和 DeepSeek Harness 的会话目前识别不出来，按文件里的顺�
 
 ### 没有本机文件时：项目里的旧字段
 
-本机文件不存在时，评审按 `.harness/config.json` 的 `review` 段里的旧字段运行，只有一个评审者，行为与以前一致：
+本机文件不存在时，评审按 `.harness/config.json` 的 `review` 段里的旧字段运行，只有一个评审者，行为与以前一致。
+`harness reviewer list` 在已接入的仓库里会读这些旧字段来说明实际会用谁；不在仓库里时只说明规则，不拿默认值去猜。
 
 | 字段 | 默认 | 说明 |
 | --- | --- | --- |
@@ -1153,6 +1160,8 @@ harness reviewer set mine --client command --command-json '["my-reviewer","--jso
 - 每个评审者的尝试结果（跳过、失败或完成）和原因，以及会话模型和顺序有没有被调整。
 
 `harness review` 的输出、`harness status`、合并输出和 PR/MR 描述都会显示由谁完成；由备选完成时会点出前面的评审者为什么没有完成。
+`status` 和 PR/MR 描述里的一行摘要包含名称、客户端、模型、推理强度和端点：平台上的评审人看不到本机记录，名称和模型相同而客户端或端点不同的两次评审，只能靠这一行区分。
+端点主机会因此出现在 PR/MR 描述里。
 升级前的旧记录没有这些信息，显示为“未记录”。
 客户端报的实际模型是它自己回报的名字，网关是否如实路由要看网关，所以端点主机也一并记录。
 

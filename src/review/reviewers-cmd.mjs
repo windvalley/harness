@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { parseArgs } from "node:util";
-import { planReviewers, probeReviewer } from "./review.mjs";
-import { EFFORTS, endpointHost, loadLocalReviewers, maskKey, reviewersFile, writeLocalReviewers } from "./reviewers.mjs";
+import { planReviewers, probeReviewer, projectReviewConfig, projectReviewerNote } from "./review.mjs";
+import { EFFORTS, endpointHost, jsonSyntaxError, loadLocalReviewers, maskKey, reviewersFile, writeLocalReviewers } from "./reviewers.mjs";
 
 const USAGE = `用法:
   harness reviewer list                               列出本机评审者与是否可用
@@ -25,10 +25,11 @@ const CLEARABLE = ["model", "baseUrl", "apiKey", "effort", "timeoutMinutes", "ma
 
 function readRaw(file) {
   if (!existsSync(file)) return { reviewers: [] };
+  const text = readFileSync(file, "utf8");
   try {
-    return JSON.parse(readFileSync(file, "utf8"));
+    return JSON.parse(text);
   } catch (error) {
-    throw new Error(`${file} 不是合法的 JSON，先修好或删掉它: ${error.message}`);
+    throw new Error(`${jsonSyntaxError(file, text, error).message}，先修好或删掉它`);
   }
 }
 
@@ -46,15 +47,15 @@ function describe(entry) {
   return parts.filter(Boolean).join("，");
 }
 
-function list({ file, print }) {
+function list({ file, print, projectConfig }) {
   const local = loadLocalReviewers({ file });
   if (!local) {
-    const plan = planReviewers({}, { local: null });
+    const note = projectReviewerNote(projectConfig());
     print(`本机评审者文件: ${file}（不存在）`);
-    print(`当前按项目配置里的旧字段运行: ${plan.candidates.map((entry) => `${entry.client}${entry.model ? `（${entry.model}）` : ""}`).join("、")}`);
+    print(note.known ? `当前按项目配置里的旧字段运行: ${note.text}` : note.text);
     print("要指定模型、推理强度或第三方端点，例如:");
     print("  harness reviewer set flash --client claude --model <模型> --base-url <地址> --api-key-stdin --effort high");
-    return 0;
+    return note.ok ? 0 : 1;
   }
   const plan = planReviewers({}, { local });
   const byName = new Map(plan.candidates.map((entry) => [entry.name, entry]));
@@ -166,7 +167,7 @@ function test({ file, print, args }) {
   if (!entry) throw new Error(`本机文件里没有评审者 ${name}，harness reviewer list 可以查看`);
   print(`测试评审者 ${name}（${describe(entry)}），会产生少量费用……`);
   try {
-    const result = probeReviewer(entry);
+    const result = probeReviewer(entry, { secrets: local.reviewers.map((item) => item.apiKey).filter(Boolean) });
     print(`可用。耗时 ${(result.durationMs / 1000).toFixed(1)} 秒${result.models.length ? `，实际模型 ${result.models.join("、")}` : ""}${result.costUsd != null ? `，客户端估算花费 ${result.costUsd} 美元（第三方端点的花费以平台账单为准）` : ""}`);
     return 0;
   } catch (error) {
@@ -176,11 +177,14 @@ function test({ file, print, args }) {
 }
 
 /** harness reviewer 命令。返回退出码；出错时抛 Error，由调用方打印。 */
-export function reviewerCommand(argv, { print = console.log, readStdin = () => readFileSync(0, "utf8"), file = reviewersFile() } = {}) {
+export function reviewerCommand(
+  argv,
+  { print = console.log, readStdin = () => readFileSync(0, "utf8"), file = reviewersFile(), projectConfig = () => projectReviewConfig() } = {},
+) {
   const [action, ...args] = argv;
   switch (action) {
     case "list":
-      return list({ file, print });
+      return list({ file, print, projectConfig });
     case "set":
       return set({ file, print, readStdin, args });
     case "remove":

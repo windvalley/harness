@@ -256,7 +256,7 @@ const behaviors = JSON.parse(readFileSync(${JSON.stringify(behaviorFile)}, "utf8
 const behavior = behaviors[model] ?? behaviors["*"] ?? { mode: "ok" };
 const env = {};
 for (const name of Object.keys(process.env)) {
-  if (/^(ANTHROPIC_|CLAUDE_EFFORT$|CLAUDE_CODE_MAX_RETRIES$|HARNESS_REVIEW_API_KEY$)/.test(name)) env[name] = process.env[name];
+  if (/^(ANTHROPIC_|CLAUDE_EFFORT$|CLAUDE_CODE_MAX_RETRIES$|CLAUDE_CODE_USE_|HARNESS_REVIEW_API_KEY$)/.test(name)) env[name] = process.env[name];
 }
 appendFileSync(${JSON.stringify(calls)}, JSON.stringify({
   model, args, env, promptLength: prompt.length,

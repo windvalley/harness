@@ -28,10 +28,29 @@ export function normalizeModel(name) {
   return text.replace(/-+$/, "");
 }
 
-export function sameModel(left, right) {
-  const a = normalizeModel(left);
-  const b = normalizeModel(right);
-  return Boolean(a) && a === b;
+// claude 的 --model 接受别名，别名指向哪个具体模型由 ANTHROPIC_DEFAULT_<别名>_MODEL 决定；会话记录里存的是完整的模型名。
+const FAMILY_ALIASES = ["opus", "sonnet", "haiku", "fable"];
+
+function resolveAlias(name, env) {
+  const value = normalizeModel(name);
+  if (!FAMILY_ALIASES.includes(value)) return { value, alias: null };
+  const configured = normalizeModel(env[`ANTHROPIC_DEFAULT_${value.toUpperCase()}_MODEL`] ?? "");
+  return configured ? { value: configured, alias: null } : { value, alias: value };
+}
+
+/**
+ * 是不是同一个模型。别名先按 env 里的映射解析成具体模型再比较；映射不存在时没法确定，按家族匹配，
+ * 例如 sonnet 与 claude-sonnet-4-5 算相同。这样偏保守：误判成相同只会让评审者排到后面，不会把它丢掉。
+ */
+export function sameModel(left, right, env = {}) {
+  const a = resolveAlias(left, env);
+  const b = resolveAlias(right, env);
+  if (!a.value || !b.value) return false;
+  if (a.value === b.value) return true;
+  for (const [alias, other] of [[a.alias, b.value], [b.alias, a.value]]) {
+    if (alias && new RegExp(`(^|-)${alias}(-|$)`).test(other)) return true;
+  }
+  return false;
 }
 
 function readTailLines(file) {

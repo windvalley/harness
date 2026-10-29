@@ -14,7 +14,7 @@ import { planChecks, verify } from "./verify/verify.mjs";
 import { MergeError, mergeTask } from "./merge/merge.mjs";
 import { submitTask } from "./delivery/submit.mjs";
 import { syncTask } from "./delivery/sync.mjs";
-import { describePlan, planReviewers, reviewBranch, reviewerLines } from "./review/review.mjs";
+import { describePlan, planReviewers, projectReviewConfig, projectReviewerNote, reviewBranch, reviewerLines } from "./review/review.mjs";
 import { reviewerCommand } from "./review/reviewers-cmd.mjs";
 import { loadLocalReviewers, reviewersFile } from "./review/reviewers.mjs";
 import { approveConfirm, confirmSummary, formatSummary } from "./confirm/confirm.mjs";
@@ -153,9 +153,8 @@ function printReviewerHint() {
       print("  调整用 harness reviewer list、set、remove；改动只在本机生效，不需要提交。");
       return;
     }
-    const plan = planReviewers({}, { local: null });
-    const [first] = plan.candidates;
-    print(`评审者: 本机还没有 ${reviewersFile()}，评审用本机第一个可用的客户端 ${first.client}${first.model ? `，模型 ${first.model}` : ""}。`);
+    const note = projectReviewerNote(projectReviewConfig(process.cwd()));
+    print(`评审者: 本机还没有 ${reviewersFile()}，${note.known ? `评审按项目配置里的旧字段（没写的取缺省值）运行: ${note.text}` : note.text}。`);
   } catch (error) {
     print(`评审者: ${error.message}`);
   }

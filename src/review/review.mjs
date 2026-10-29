@@ -1,7 +1,7 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { acceptancePath, loadGateProject, mainBranch } from "../lib/config.mjs";
+import { acceptancePath, loadCurrentProject, loadGateProject, mainBranch } from "../lib/config.mjs";
 import { changedPaths, gitOk, run, showBlob } from "../lib/git.mjs";
 import { appendLedger, readRecord, writeRecord } from "../lib/store.mjs";
 import { approvalState } from "../plan/plan.mjs";
@@ -220,6 +220,17 @@ function claudeFailure(payload, entry) {
 // 评审者指定了端点时，key 只经子进程的环境变量交给 apiKeyHelper，不出现在命令行参数和 settings 文件的内容里。
 const KEY_ENV = "HARNESS_REVIEW_API_KEY";
 
+// 决定 Claude Code 连哪家云提供商的开关；用明确列出的名单，CLAUDE_CODE_USE_* 里还有 NATIVE_FILE_SEARCH 这类无关的开关。
+const PROVIDER_SWITCHES = [
+  "CLAUDE_CODE_USE_BEDROCK",
+  "CLAUDE_CODE_USE_VERTEX",
+  "CLAUDE_CODE_USE_FOUNDRY",
+  "CLAUDE_CODE_USE_ANTHROPIC_AWS",
+  "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD",
+  "CLAUDE_CODE_USE_GATEWAY",
+  "CLAUDE_CODE_USE_MANTLE",
+];
+
 function runClaude({ cwd, prompt, entry, bin }) {
   const scratch = entry.baseUrl ? mkdtempSync(join(tmpdir(), "harness-review-")) : null;
   try {
@@ -230,7 +241,8 @@ function runClaude({ cwd, prompt, entry, bin }) {
     let settingsFile = userSettingsFile();
     if (scratch) {
       // 继承来的 ANTHROPIC_* 会和评审者自己的端点、key 混在一起：实测里配错 key 照样成功，分不清这次用的是哪一把。
-      for (const name of Object.keys(env)) if (name.startsWith("ANTHROPIC_")) delete env[name];
+      // 会话跑在 Bedrock、Vertex、Foundry 上时，选择提供商的 CLAUDE_CODE_USE_* 开关同样要清掉，否则请求不走评审者指定的端点。
+      for (const name of Object.keys(env)) if (name.startsWith("ANTHROPIC_") || PROVIDER_SWITCHES.includes(name)) delete env[name];
       settingsFile = join(scratch, "settings.json");
       writeFileSync(
         settingsFile,
@@ -354,7 +366,7 @@ function localCandidate(entry, { has, overrideBin }) {
  */
 export function planReviewers(
   config = {},
-  { local = loadLocalReviewers(), has = commandExists, overrideBin = process.env.HARNESS_REVIEWER_BIN, detect = detectSessionModel } = {},
+  { local = loadLocalReviewers(), has = commandExists, overrideBin = process.env.HARNESS_REVIEWER_BIN, detect = detectSessionModel, env = process.env } = {},
 ) {
   if (!local) {
     const candidates = legacyCandidates(config, { has, overrideBin }).map((entry) => ({ ...entry, source: "project" }));
@@ -362,7 +374,7 @@ export function planReviewers(
     return { source: "project", file: null, candidates, configuredOrder: names, sessionModel: null, sessionNote: null, reordered: false, secrets: [] };
   }
   const session = local.preferDifferentModel ? detect() : { model: null, reason: "已关闭优先使用不同模型的评审者" };
-  const { ordered, reordered } = orderReviewers(local.reviewers, session.model, local.preferDifferentModel);
+  const { ordered, reordered } = orderReviewers(local.reviewers, session.model, local.preferDifferentModel, env);
   return {
     source: "local",
     file: local.file,
@@ -390,6 +402,11 @@ export function describePlan(plan) {
 // 评审进程的输出不可信：报错里可能带出任何一把配置过的 key（不只是当前这个评审者的），一律擦掉再展示和落盘。
 function scrub(text, secrets) {
   return secrets.reduce((result, secret) => result.split(secret).join("****"), text);
+}
+
+// 评审进程继承了当前环境，报错里也可能带出环境里的令牌；太短的值（例如占位的 1）擦了只会误伤别的文字。
+function inheritedSecrets(env = process.env) {
+  return [env.ANTHROPIC_AUTH_TOKEN, env.ANTHROPIC_API_KEY, env[KEY_ENV]].filter((value) => typeof value === "string" && value.length >= 8);
 }
 
 export function runReviewer({ cwd, prompt, config = {}, log = () => {}, plan = planReviewers(config) }) {
@@ -434,9 +451,9 @@ export function runReviewer({ cwd, prompt, config = {}, log = () => {}, plan = p
         },
       };
     } catch (error) {
-      // 旧字段只有一个评审者，原样抛出原因，和以前的报错一致。
-      if (plan.source === "project") throw error;
-      const reason = scrub(error.message, plan.secrets);
+      const reason = scrub(error.message, [...plan.secrets, ...inheritedSecrets()]);
+      // 旧字段只有一个评审者，抛出原因，和以前的报错一致。
+      if (plan.source === "project") throw new Error(reason);
       attempts.push({ name: entry.name, outcome: "failed", reason: reason.slice(0, 600) });
       log(`[review] ${entry.name} 失败，换下一个: ${reason.split("\n")[0].slice(0, 200)}`);
     }
@@ -741,8 +758,45 @@ export function reviewerSummary(record) {
   const reviewer = record?.reviewer;
   if (!reviewer) return "未记录";
   const fallback = (record.attempts ?? []).some((item) => item.outcome !== "done") ? "，由备选完成" : "";
-  const parts = [reviewer.name, modelLabel(reviewer), reviewer.effort && `effort ${reviewer.effort}`].filter(Boolean);
+  // 名称、模型、强度都相同时，客户端和端点是区分两次评审是否真是同一套配置的仅有线索，平台上的评审人看不到本机记录。
+  const endpoint = reviewer.endpointHost && `端点 ${reviewer.endpointHost}${reviewer.endpointFrom === "environment" ? "（来自环境变量）" : ""}`;
+  const parts = [
+    reviewer.name,
+    reviewer.client !== reviewer.name && reviewer.client,
+    modelLabel(reviewer),
+    reviewer.effort && `effort ${reviewer.effort}`,
+    endpoint,
+  ].filter(Boolean);
   return `${parts.join(" / ")}${fallback}`;
+}
+
+/** 当前目录所在项目的 review 配置；不在已接入的仓库里、读不出配置时返回 null。 */
+export function projectReviewConfig(cwd = process.cwd()) {
+  try {
+    return loadCurrentProject(cwd).config.review ?? {};
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 没有本机评审者文件时，评审实际会用谁。读不到项目配置时只说明规则，不拿默认值去猜；
+ * 项目的旧字段解析不出评审者（例如两个标准客户端都没装又没配 command）时 ok 为 false。
+ */
+export function projectReviewerNote(config, options = {}) {
+  if (!config) {
+    return {
+      ok: true,
+      known: false,
+      text: "当前目录不在已接入的仓库里，读不到项目配置；评审时按所在项目 review 段的旧字段运行，没有旧字段就用本机第一个可用的 claude（模型 sonnet）或 codex",
+    };
+  }
+  try {
+    const plan = planReviewers(config, { local: null, ...options });
+    return { ok: true, known: true, text: plan.candidates.map(describeEntry).join("、") };
+  } catch (error) {
+    return { ok: false, known: true, text: `无法确定: ${error.message}` };
+  }
 }
 
 /** harness review 的结果里关于评审者的几行：谁完成、用了什么、前面的评审者为什么没完成、顺序有没有按会话模型调整。 */
@@ -772,7 +826,7 @@ export function reviewerLines(record) {
  * 用一个极小的材料实际跑一次指定评审者，确认客户端、端点、key、模型和结构化输出都能用。
  * 不写任何记录。结论是通过还是拒绝无所谓，能解析出结构化结果才算可用。
  */
-export function probeReviewer(entry, { has = commandExists, overrideBin = process.env.HARNESS_REVIEWER_BIN } = {}) {
+export function probeReviewer(entry, { has = commandExists, overrideBin = process.env.HARNESS_REVIEWER_BIN, secrets = [] } = {}) {
   const candidate = localCandidate(entry, { has, overrideBin });
   if (candidate.skip) throw new Error(candidate.skip);
   const prompt = buildPrompt({
@@ -790,7 +844,8 @@ export function probeReviewer(entry, { has = commandExists, overrideBin = proces
     parseVerdict(outcome.structured);
     return { models: outcome.models, costUsd: outcome.costUsd, durationMs: Date.now() - started };
   } catch (error) {
-    throw new Error(scrub(error.message, [entry.apiKey].filter(Boolean)));
+    // secrets 是本机文件里所有评审者的 key：被测的评审者没写 key 时，它的报错也可能带出别的评审者的 key。
+    throw new Error(scrub(error.message, [...secrets, entry.apiKey, ...inheritedSecrets()].filter(Boolean)));
   } finally {
     rmSync(cwd, { recursive: true, force: true });
   }
