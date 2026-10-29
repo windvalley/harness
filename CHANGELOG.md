@@ -2,6 +2,49 @@
 
 按 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 组织，版本号遵循语义化版本。
 
+## [Unreleased]
+
+### 新增
+
+- 本机评审者文件 `~/.config/harness/reviewers.json`，用 `harness reviewer` 管理。
+  每个评审者指定客户端（`claude`、`codex` 或任意命令）、模型和推理强度，`claude` 还可以指定第三方端点和 key。
+  评审用什么模型是各机器自己的事，换模型不再需要提交，也不触发门禁确认。
+- 可以列多个评审者：前一个鉴权失败、限流、超时或输出不合结构就换下一个，给出结论（通过或拒绝）就停，被拒后不会换人重评。
+  启动前就能判断不可用的（命令不在 PATH 里、写了端点却没有 key）直接跳过，不花钱。
+  全部不可用时逐条列出原因和补救命令。
+- 默认优先使用与当前任务会话模型不同的评审者，减少评审和实现共用同一套盲点。
+  会话模型取自 Claude Code 的会话记录，按具体模型比较，同模型的评审者排到最后但保留作备选；识别不出时按文件里的顺序。
+  `harness reviewer prefer off` 关闭。
+- 推理强度 `effort` 统一取 `low`、`medium`、`high`、`xhigh`、`max`，`claude` 传 `--effort`，`codex` 传 `-c model_reasoning_effort`，`command` 经环境变量 `HARNESS_REVIEW_EFFORT`。
+- `harness reviewer test <名称>` 用极小的材料实际跑一次评审者，确认端点、key、模型和结构化输出都能用。
+- 评审记录和账本写明由谁完成：评审者名称、客户端、请求的模型和客户端回报的实际模型、推理强度、端点主机、耗时、各次尝试的结果、会话模型与顺序调整。
+  `harness review` 的输出、`harness status`、合并输出和 PR/MR 描述都会显示，由备选完成时点出前面的评审者为什么没有完成。
+- `harness doctor` 逐项列出本机评审者是否可用；`harness init` 结束时说明怎样配置本机评审者。
+
+### 变更
+
+- 评审预算默认不限：不配 `maxBudgetUsd` 就不传 `--max-budget-usd`。
+  此前默认 2 美元，触顶时钱已经花了却拿不到结论；实测里一次大 diff 评审就用掉了上限的七成。
+  项目配置里已经写了 `maxBudgetUsd` 的照旧生效。
+- `harness init` 生成的项目配置里，`review` 段只留判据 `blockSeverities` 与 `maxDiffChars`，不再写 `backend`、`model`、`maxBudgetUsd`、`codexModel`、`command`。
+- 指定了端点的评审者启动前清掉继承来的 `ANTHROPIC_*` 环境变量，key 只通过子进程环境变量交给 `apiKeyHelper`，不出现在命令行参数和 settings 文件里。
+  实测里不清的话，配错的 key 照样成功，分不清这次用的是哪一把。
+- 本机评审者文件里的 `claude` 评审者设置 `CLAUDE_CODE_MAX_RETRIES=2`：此前 key 失效要等四分多钟才报错，回退会被拖住。
+
+### 修复
+
+- 评审进程鉴权失败时，报错不再带 `(success)` 这个误导性的标签。
+
+### 升级说明
+
+- 没有本机评审者文件时，评审按项目配置里的旧字段运行，只有一个评审者，行为不变，不需要做任何事。
+- 创建本机文件后，项目里的 `review.backend`、`model`、`maxBudgetUsd`、`codexModel`、`command` 不再起作用，`harness doctor` 会提示可以删掉；
+  这些字段在 `.harness/config.json` 里，删除是门禁改动，在任务分支上改，合并前由人确认。
+- 已接入的项目，配置里写死的 `"maxBudgetUsd": 2` 不会自动去掉，仍然生效；要改成不限，在任务分支上删掉这个字段。
+- 本机评审者文件允许 Agent 通过 `harness reviewer` 修改，key 明文存放在里面。
+  评审的强弱因此在本机可调，harness 只负责如实记录，由人在记录、`harness status` 和 PR/MR 描述里核对；详见参考手册“信任模型与已知限制”。
+- `upgrade` 会刷新 `.harness/rules/harness.md` 与 `AGENTS.md` 托管块，其中新增了“不要直接读取或改写 reviewers.json、评审失败时不要换更弱的评审者”的规则。
+
 ## [0.9.4] - 2026-10-29
 
 这一版新增收尾检查，补上门禁管不到的一环：Agent 做到一半、没有遇到阻塞就自己结束了回复。

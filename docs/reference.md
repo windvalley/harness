@@ -498,7 +498,7 @@ git -C <主 Worktree> worktree unlock <Worktree 路径>
 - 评审前必须有通过的验证证据。
 - diff 上限默认 300000 字符，由 `review.maxDiffChars` 调整：超出时整文件删除改为只列路径和行数，仍然超出就拒绝评审，并按顶层目录给出拆分建议。
 - 评审还会拿到合并基线之后的提交说明（不含合并提交）和每个文件的增删行数；提交说明标明是实现方自述，只用来理解意图，说法与 diff 不符时评审会报出来。
-- 评审进程失败时报出真实原因：花费超出 `review.maxBudgetUsd` 时说明已花多少，并建议拆小分支或调高预算；其他失败同时列出评审进程的 stdout 与 stderr。
+- 评审进程失败时报出真实原因：设了预算上限而花费超出时说明已花多少，并建议拆小分支或调高预算；其他失败同时列出评审进程的 stdout 与 stderr。
   `claude` 在 stderr 打印的认证来源警告（例如 `claude.ai connectors are disabled ...`）只是提示，不是失败原因。
 
 ### 提交信息
@@ -990,25 +990,148 @@ node ~/github/harness/bin/harness.mjs install --local   # 按新锁定的版本�
 
 评审进程不了解实现过程，只读验收清单、验证证据摘要、提交说明、改动文件统计与变更 diff。
 提交说明超过 20000 字符时只列标题，文件统计超过 20000 字符时按改动量从大到小列出，都不占 diff 的额度。
+
+评审的配置分两处，按性质拆开：
+
+- 判据放在项目里：哪些级别的发现阻断合并，单次评审能接受多大的 diff。它们决定放不放行，改动要经人确认。
+- 评审者放在本机：用哪个客户端、哪个模型、什么推理强度、连哪个端点。这是各机器自己的事，换模型不需要提交，也不触发门禁确认。
+
+### 项目配置：只放判据
+
 `.harness/config.json` 的 `review` 段：
 
 | 字段 | 默认 | 说明 |
 | --- | --- | --- |
-| `backend` | `auto` | `auto` 按 `claude`、`codex` 的顺序用本机第一个可用的，都没有时报错并提示改用 `command`；也可以固定为 `claude`、`codex` 或 `command` |
-| `model` | `sonnet` | `claude` 后端用的模型 |
-| `maxBudgetUsd` | `2` | `claude` 后端单次评审的花费上限，单位美元 |
-| `codexModel` | `null` | `codex` 后端用的模型，不填时用 Codex 的默认值 |
-| `command` | `null` | `command` 后端的命令数组 |
 | `blockSeverities` | `["high", "critical"]` | 哪些级别的发现阻断合并 |
-| `maxDiffChars` | `300000` | 单次评审能接受的 diff 字符数，超过时拒绝评审并给出拆分建议；调高时 `claude` 后端可能还要调高 `maxBudgetUsd` |
+| `maxDiffChars` | `300000` | 单次评审能接受的 diff 字符数，超过时拒绝评审并给出拆分建议；评审者设了预算上限时可能还要调高预算 |
 
-- `claude`：在仓库目录里运行 `claude -p`，不开放任何工具，不加载项目设置，只带上你自己的 `~/.claude/settings.json`。
+### 本机评审者文件
+
+文件是 `~/.config/harness/reviewers.json`，不进仓库。
+它按顺序列出评审者，由 `harness reviewer` 命令管理，创建时权限为 600。
+
+```json
+{
+  "preferDifferentModel": true,
+  "reviewers": [
+    { "name": "flash", "client": "claude", "model": "deepseek/deepseek-v4.1-flash",
+      "baseUrl": "https://llm.example.com", "apiKey": "<key>", "effort": "high", "timeoutMinutes": 30 },
+    { "name": "sonnet", "client": "claude", "model": "sonnet" },
+    { "name": "codex", "client": "codex" }
+  ]
+}
+```
+
+每个评审者的字段：
+
+| 字段 | 说明 |
+| --- | --- |
+| `name` | 名字，由字母、数字、点、下划线、短横线组成，文件内不能重复 |
+| `client` | `claude`、`codex` 或 `command` |
+| `model` | 模型名，原样交给客户端；`claude` 必填，`codex` 不填时用 Codex 自己的默认值 |
+| `effort` | 推理强度，取 `low`、`medium`、`high`、`xhigh`、`max`；不填用客户端默认值 |
+| `baseUrl`、`apiKey` | 第三方端点和它的 key，只对 `claude` 有效；写了 `baseUrl` 就必须有 `apiKey` |
+| `timeoutMinutes` | 单次评审的超时，默认 20 分钟 |
+| `maxBudgetUsd` | 单次评审的花费上限，只对 `claude` 有效；不填就不限 |
+| `command` | 只用于 `command` 客户端：命令数组，约定见下文 |
+
+文件里不认识的字段、非法取值和重复的名字都会报错，不会被悄悄忽略。
+`apiKey` 直接存在这个文件里，所以只由 `harness reviewer` 读写，展示时只露末 4 位，错误信息、评审记录和账本里都不会出现它。
+
+### harness reviewer 命令
+
+```sh
+harness reviewer list                      # 列出评审者、是否可用、当前会话下的实际顺序
+printf '%s' "$KEY" | harness reviewer set flash --client claude --model deepseek/deepseek-v4.1-flash \
+  --base-url https://llm.example.com --api-key-stdin --effort high --timeout-minutes 30
+harness reviewer set sonnet --client claude --model sonnet
+harness reviewer set flash --effort medium # 只改给出的字段
+harness reviewer set flash --clear effort  # 清掉一个字段
+harness reviewer set sonnet --first        # 调到最前面
+harness reviewer remove flash
+harness reviewer prefer off                # 关掉“优先使用与会话不同的模型”
+harness reviewer test flash                # 用极小的材料实际跑一次，确认能用
+```
+
+`test` 会产生少量费用。
+它确认客户端、端点、key、模型和结构化输出都能用，不写任何评审记录。
+`set` 写入前先校验，不合法的内容不会落盘。
+删掉最后一个评审者时文件一并移除，之后按项目里的旧字段运行。
+
+### 运行规则
+
+评审按文件里的顺序尝试评审者：
+
+| 情况 | 处理 |
+| --- | --- |
+| 命令不在 PATH 里，或写了 `baseUrl` 却没有 `apiKey` | 启动前就跳过，不花钱；不会拿客户端的默认账号顶替一个写了端点的评审者 |
+| 鉴权失败、限流、超时、进程报错、输出不符合结构 | 换下一个评审者 |
+| 给出结论，无论通过还是拒绝 | 停止，不再尝试后面的；被拒后不会换人重评 |
+| 全部都没有给出结论 | 报错，逐条列出每个评审者的原因，并提示 `harness reviewer list` 与 `set` |
+| 本机文件不是合法 JSON 或有非法内容 | 报错，不退回项目里的旧字段 |
+
+指定了 `baseUrl` 的 `claude` 评审者有三点特别处理：
+
+- 启动前清掉继承来的 `ANTHROPIC_*` 环境变量，让这一项只用自己的端点和 key。实测里不清的话，配错的 key 照样成功，分不清这次用的是哪一把。
+- key 只通过子进程的环境变量交给 `apiKeyHelper`，不出现在命令行参数和 settings 文件的内容里。
+- 不加载 `~/.claude/settings.json`，settings 由 harness 在临时目录里生成，用完即删。
+
+没有指定 `baseUrl` 的 `claude` 评审者继承当前环境和你自己的 `~/.claude/settings.json`。
+所有来自本机文件的 `claude` 评审者都设置 `CLAUDE_CODE_MAX_RETRIES=2`，否则 key 失效时客户端要重试四分多钟才报错，回退被拖住；你自己设了这个变量则以你的为准。
+
+`codex` 评审者目前只支持 `model` 和 `effort`，写了 `baseUrl` 或 `apiKey` 会在读取时报错，因为 Codex 接第三方端点的方式还没有实测。
+
+### 优先使用与会话不同的模型
+
+评审和实现用同一个模型时，容易有相同的盲点。
+`preferDifferentModel` 默认开启：评审前先识别当前任务会话在用的模型，把模型相同的评审者排到最后，其余保持原有先后。
+
+- 按具体模型比较：会话用 opus 时，sonnet 算不同。
+- 只调顺序、不删评审者：与会话同模型的评审者仍作为最后的备选。
+- 没写 `model` 的评审者（例如没指定模型的 `codex`）无法判断，留在原位。
+- 识别不出会话模型时，按文件里的顺序运行，记录里写明“会话模型未知”。
+
+会话模型取自 Claude Code 的会话记录（`CLAUDE_CODE_SESSION_ID` 对应的文件里最后一条真实的助手消息），不用启动时的环境变量，因为会话中途用 `/model` 切换后环境变量不会更新。
+不同来源对同一个模型的写法不一样，比较前先统一：转小写，去掉厂商前缀、`[1M]` 这类方括号后缀和 `-cpr` 这类限定词，点换成短横线。
+Codex 和 DeepSeek Harness 的会话目前识别不出来，按文件里的顺序运行。
+关闭用 `harness reviewer prefer off`。
+
+### 推理强度
+
+`effort` 统一取 `low`、`medium`、`high`、`xhigh`、`max`，由 harness 换成各客户端认的写法：
+
+- `claude`：`--effort <级别>`。
+- `codex`：`-c model_reasoning_effort="<级别>"`。
+- `command`：环境变量 `HARNESS_REVIEW_EFFORT`，模型在 `HARNESS_REVIEW_MODEL`。
+
+记录里写的是请求的强度。
+客户端不回传实际生效的强度，通过第三方网关时是否生效取决于网关，harness 无法核实。
+推理强度越高，耗时和花费通常越多，大 diff 要相应调大 `timeoutMinutes`。
+
+### 没有本机文件时：项目里的旧字段
+
+本机文件不存在时，评审按 `.harness/config.json` 的 `review` 段里的旧字段运行，只有一个评审者，行为与以前一致：
+
+| 字段 | 默认 | 说明 |
+| --- | --- | --- |
+| `backend` | `auto` | `auto` 按 `claude`、`codex` 的顺序用本机第一个可用的，都没有时报错；也可以固定为 `claude`、`codex` 或 `command` |
+| `model` | `sonnet` | `claude` 后端用的模型 |
+| `maxBudgetUsd` | 不限 | `claude` 后端单次评审的花费上限，单位美元；不填就不传 |
+| `codexModel` | `null` | `codex` 后端用的模型 |
+| `command` | `null` | `command` 后端的命令数组 |
+
+本机文件存在后，这些旧字段不再起作用，`harness doctor` 会提示可以删掉。
+`harness init` 不再生成这些字段。
+
+### 各客户端怎么运行
+
+- `claude`：在临时目录以外的仓库目录里运行 `claude -p`，不开放任何工具，不加载项目设置。
 - `codex`：在空的临时目录里以只读沙箱运行 `codex exec`，读不到项目文件，也不会被项目里的钩子拦住。
 - `command`：同样在空的临时目录里运行。
 
-单次评审的超时是 20 分钟。
+### command 评审者的约定
 
-`command` 后端的约定：提示从 stdin 读入，结果写在 stdout，或者写到 `{output}` 指定的文件。
+提示从 stdin 读入，结果写在 stdout，或者写到 `{output}` 指定的文件。
 命令数组里的以下占位符会被替换成临时文件路径：
 
 - `{schema}`：评审结果要满足的 JSON Schema，严格模式，可以直接交给支持结构化输出的工具。
@@ -1017,9 +1140,21 @@ node ~/github/harness/bin/harness.mjs install --local   # 按新锁定的版本�
 
 输出可以是 `{"verdict": ..., "requirementFit": ..., "engineeringQuality": ..., "findings": [...]}`，也可以是带 `structured_output` 字段的包装对象，允许包在 Markdown 代码块里。
 
-```json
-{ "review": { "backend": "command", "command": ["my-reviewer", "--json-schema", "{schema}", "--out", "{output}"] } }
+```sh
+harness reviewer set mine --client command --command-json '["my-reviewer","--json-schema","{schema}","--out","{output}"]'
 ```
+
+### 记录了什么
+
+评审记录和账本写明：
+
+- 完成评审的评审者名称、客户端、请求的模型、客户端回报的实际模型、请求的推理强度、耗时。
+- 端点主机，不含用户名、密码和 key；端点来自评审者自己的 `baseUrl` 还是继承的环境变量也会注明。
+- 每个评审者的尝试结果（跳过、失败或完成）和原因，以及会话模型和顺序有没有被调整。
+
+`harness review` 的输出、`harness status`、合并输出和 PR/MR 描述都会显示由谁完成；由备选完成时会点出前面的评审者为什么没有完成。
+升级前的旧记录没有这些信息，显示为“未记录”。
+客户端报的实际模型是它自己回报的名字，网关是否如实路由要看网关，所以端点主机也一并记录。
 
 ## 命令速查
 
@@ -1029,6 +1164,7 @@ node ~/github/harness/bin/harness.mjs install --local   # 按新锁定的版本�
 | --- | --- |
 | `verify --branch <分支> [--plan] [--no-reuse]` | 验证并写签名证据；`--plan` 只列计划，`--no-reuse` 不复用已有结果 |
 | `review --branch <分支>` | 独立评审 |
+| `reviewer list`、`set`、`remove`、`prefer`、`test` | 管理本机评审者：客户端、模型、推理强度、端点与 key，见“独立评审的后端” |
 | `status [--branch <分支>]` | 只读汇总还差哪几步才能交付，默认看当前分支 |
 | `confirm --branch <分支> [--yes] [--note <说明>]` | 查看门禁改动摘要；带 `--yes` 由人记录确认 |
 | `approve --branch <分支> [--yes --note <原话>]` | 查看任务方案与授权状态；用户同意实施后由 Agent 带 `--yes` 照录原话记录授权 |
@@ -1070,6 +1206,10 @@ harness 防的是 Agent 的误操作，以及被提示注入后常见的绕过�
   这两种情况都会留下记录（上报内容、`stop.unresolved`），由人在 `harness status`、合并输出或上报列表里核对。
   会话经手的分支靠实时拦截记录，客户端没有接上实时拦截、或者 Agent 用无法静态推算目录的命令改了别的 Worktree，收尾检查就不知道这个分支。
 - 本机共用的 DSH 插件和版本目录都在用户目录里，目前没有规则阻止 Agent 用命令改写它们。
+- 本机评审者文件 `~/.config/harness/reviewers.json` 允许 Agent 通过 `harness reviewer` 修改，key 也存在这个文件里。
+  所以评审的强弱在本机是可调的：Agent 可以把评审者换成更弱的模型，甚至换成一条直接输出“通过”的命令。
+  harness 能做的是把它记下来：评审记录、`harness status`、合并输出和 PR/MR 描述都写明由谁、用什么模型和端点评审，由人核对。
+  key 是明文存放的，读到这个文件的进程就拿到了 key，文件权限为 600，Agent 应当用 `harness reviewer list` 查看而不是直接读取它。
 - `harness worktree clean` 判断有没有会话在用某个 Worktree，只看进程的工作目录，DeepSeek Harness 这类客户端看不出来，要靠锁定保护。
   删除前只停得掉项目在 `worktree.cleanup` 里写明的服务与数据库。
 - 任务分级与先红后绿的判断仍由 Agent 做出，门禁只兜底可以机械判定的部分：
@@ -1092,6 +1232,8 @@ harness 防的是 Agent 的误操作，以及被提示注入后常见的绕过�
 | 写代码时被 `plan-before-code` 拦截 | 任务分支里有实施方案但还没有授权记录；用户还没同意就停下等，已经同意就按上一条记录；只是借用了 `docs/changes/` 下的旧方案时，把它移出这次改动 |
 | Claude Code 提示 `Stop hook error occurred` | 收尾检查拦下了结束：Claude Code 把所有拦下结束的 `Stop` 钩子都这样提示，原因在 `Stop hook feedback` 里，Agent 会按它接着做，不是门禁出错 |
 | `review_missing` 或 `review_blocked` | 运行 `harness review`；被拒时按发现修复，提交后重新 verify、review |
+| `没有评审者给出结论` | 本机评审者都不可用或都失败了，错误里逐条列出原因；`harness reviewer list` 查看，`harness reviewer set` 补全，`harness reviewer test <名称>` 确认能用 |
+| 想换评审用的模型或接第三方网关 | 在本机用 `harness reviewer set`，不需要提交，见“独立评审的后端” |
 | 验证结果是 `incomplete` | `requires` 里的依赖目录在主 Worktree 里不存在，安装依赖后重跑 |
 | 验证提示“未找到命令” | 本机没装检查用到的工具，装好后重跑 |
 | 评审报 diff 超过上限 | 按输出的目录分组，把改动拆成几个分支分别合并；确实需要一次评审时调高 `review.maxDiffChars`，属于门禁改动，合入主分支后才生效 |

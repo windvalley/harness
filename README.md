@@ -70,7 +70,7 @@ harness 是跑在本机的 AI-Native 研发流程，让 Agent 在 git 项目里�
 需要：
 
 - macOS 或 Linux，Node.js 20 及以上，git 2.38 及以上。
-- 本机已登录的 `claude`（Claude Code CLI）或 `codex`，用来做独立评审；两者都没有时见[独立评审的后端](docs/reference.md#独立评审的后端)。
+- 本机已登录的 `claude`（Claude Code CLI）或 `codex`，用来做独立评审；评审用的模型、推理强度和第三方端点用 `harness reviewer` 在本机配置，见[独立评审的后端](docs/reference.md#独立评审的后端)。
 
 harness 没有 npm 依赖，也不需要全局安装，由 Agent 在接入时获取；手工获取见[安装](docs/reference.md#安装)。
 

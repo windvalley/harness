@@ -676,8 +676,11 @@ footer { border-top: 1px solid var(--line); color: var(--muted); font-size: .88r
     <h3 id="review">独立评审</h3>
     <p>写代码的 Agent 很难客观评价自己的改动。<code>review</code> 启动一个<strong>不了解实现过程</strong>的评审进程，只给它评审材料：验收清单、验证证据摘要、提交说明、改动文件统计和 diff，从“需求符合度”和“工程质量”两个维度给出结论。</p>
     <ul>
-      <li>后端默认 <code>auto</code>：本机有 <code>claude</code> 就用它，否则用 <code>codex</code>；都没有时可以接入任意命令（<code>command</code> 后端）。</li>
-      <li><code>claude</code> 后端不开放任何工具、不加载项目设置；<code>codex</code> 与 <code>command</code> 后端在空的临时目录里运行，读不到项目文件。</li>
+      <li>评审者在本机配置（<code>harness reviewer</code>，文件是 <code>~/.config/harness/reviewers.json</code>，不进仓库）：每个评审者指定客户端（<code>claude</code>、<code>codex</code> 或任意命令）、模型、推理强度，<code>claude</code> 还可以指定第三方端点和 key。换模型不需要提交，也不触发门禁确认。</li>
+      <li>可以列多个评审者：前一个失败（鉴权、限流、超时）就换下一个，给出结论就停，被拒后不会换人重评。默认优先使用与当前会话模型不同的评审者，评审和实现不共用同一套盲点。</li>
+      <li>没有本机文件时按项目配置里的旧字段运行：本机有 <code>claude</code> 就用它，否则用 <code>codex</code>。</li>
+      <li><code>claude</code> 不开放任何工具、不加载项目设置；<code>codex</code> 与 <code>command</code> 在空的临时目录里运行，读不到项目文件。</li>
+      <li>评审记录写明由谁、用什么模型、什么端点完成，<code>harness status</code> 与 PR/MR 描述里都能看到。</li>
       <li>有 <code>high</code> 或 <code>critical</code> 级别的发现时拒绝合并，级别可以用 <code>review.blockSeverities</code> 调整。</li>
       <li>提交说明标明是实现方自述，只用来理解意图；说法与 diff 不符时，评审会作为发现报出来。</li>
       <li>diff 超过 <code>review.maxDiffChars</code>（默认 300000 字符）时拒绝评审，并按目录给出拆分建议。</li>

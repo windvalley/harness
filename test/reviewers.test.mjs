@@ -287,6 +287,23 @@ describe("多个评审者的回退", () => {
     assert.doesNotMatch(review.stdout + review.stderr, /SECRET/);
   });
 
+  test("超时的评审者被终止并换下一个，原因里写明超时分钟数", () => {
+    const repo = setup();
+    const { name, oid } = readyBranch(repo);
+    const claude = fakeClaudes(repo);
+    // exec 让 sleep 取代 shell 本身，超时终止时不会留下占着管道的子进程。
+    writeReviewers(repo, { reviewers: [{ name: "slow", client: "command", command: ["sh", "-c", "exec sleep 30"], timeoutMinutes: 0.005 }, SONNET] });
+    const started = Date.now();
+    const review = repo.cli("review", "--branch", name);
+    assert.equal(review.status, 0, review.stderr);
+    assert.ok(Date.now() - started < 20_000, "超时后应当很快换下一个");
+    assert.match(review.stderr, /slow 失败，换下一个: 评审进程超过 0\.005 分钟没有结束/);
+    assert.deepEqual(claude.calls().map((call) => call.model), ["sonnet"]);
+    const record = readReviewRecord(repo, oid);
+    assert.equal(record.attempts[0].outcome, "failed");
+    assert.match(record.attempts[0].reason, /超过 0\.005 分钟/);
+  });
+
   test("本机文件不合法时报错，不退回项目旧字段", () => {
     const repo = setup();
     const { name } = readyBranch(repo);
