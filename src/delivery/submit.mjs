@@ -5,6 +5,7 @@ import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { appendLedger, dataDir, readRecord, writeRecord } from "../lib/store.mjs";
 import { MergeError, checkGates } from "../merge/merge.mjs";
+import { reviewerSummary } from "../review/review.mjs";
 import { fetchRemoteMain, pushCommit, remoteBranchTip } from "./remote.mjs";
 import { createRequest, findOpen, managedSection, platformRepo, platformStatus, replaceManagedSection, updateRequest } from "./platform.mjs";
 
@@ -83,6 +84,7 @@ function describeGates({ evidence, review, approval }) {
   if (review) {
     lines.push(
       `- 独立评审: ${review.verdict}（需求符合度 ${review.requirementFit?.rating ?? "?"}，工程质量 ${review.engineeringQuality?.rating ?? "?"}，清单来源 ${review.acceptanceSource ?? "无"}）`,
+      `  - 评审者: ${reviewerSummary(review)}`,
     );
     for (const finding of review.findings ?? []) {
       if (finding.severity === "info") continue;

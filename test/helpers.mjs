@@ -1,4 +1,4 @@
-import { chmodSync, cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -134,6 +134,10 @@ export function makeRepo({ files = {}, project = {}, install = true, trustCodex 
     CODEX_HOME: join(base, "codex-home"),
     // 同理隔离 DeepSeek Harness 的 profile 目录。
     DSH_HOME: join(base, "dsh-home"),
+    // 本机评审者文件指向夹具自己的路径，避免读到开发机上真实的 ~/.config/harness/reviewers.json。
+    HARNESS_REVIEWERS_FILE: join(base, "reviewers.json"),
+    // 测试可能跑在 Claude Code 会话里，继承来的会话编号会让评审去读真实的会话记录；默认当作没有会话。
+    CLAUDE_CODE_SESSION_ID: "",
   };
 
   REPO_ENV.set(root, env);
@@ -226,6 +230,70 @@ process.stdout.write(JSON.stringify({ is_error: false, total_cost_usd: 0.01, str
   chmodSync(bin, 0o755);
   repo.env.HARNESS_REVIEWER_BIN = bin;
   return bin;
+}
+
+/**
+ * 按模型区分行为的假 claude，用来测多个评审者的回退与环境处理。
+ * behaviors 的键是 --model 的值（"*" 兜底）：{ mode: "fail" | "ok", structured, message, actual }。
+ * 每次调用往 calls.jsonl 追加一行：模型、参数、与端点相关的环境变量、评审者 settings 文件的内容。
+ */
+export function fakeClaudes(repo, behaviors = {}) {
+  const dir = join(repo.root, "..");
+  const bin = join(dir, "fake-claude-multi.mjs");
+  const calls = join(dir, "claude-calls.jsonl");
+  const behaviorFile = join(dir, "claude-behaviors.json");
+  writeFileSync(behaviorFile, JSON.stringify(behaviors));
+  writeFileSync(
+    bin,
+    `#!/usr/bin/env node
+import { readFileSync, appendFileSync, existsSync } from "node:fs";
+const args = process.argv.slice(2);
+const at = (flag) => args[args.indexOf(flag) + 1];
+const prompt = readFileSync(0, "utf8");
+const model = at("--model");
+const settings = args.includes("--settings") ? at("--settings") : null;
+const behaviors = JSON.parse(readFileSync(${JSON.stringify(behaviorFile)}, "utf8"));
+const behavior = behaviors[model] ?? behaviors["*"] ?? { mode: "ok" };
+const env = {};
+for (const name of Object.keys(process.env)) {
+  if (/^(ANTHROPIC_|CLAUDE_EFFORT$|CLAUDE_CODE_MAX_RETRIES$|HARNESS_REVIEW_API_KEY$)/.test(name)) env[name] = process.env[name];
+}
+appendFileSync(${JSON.stringify(calls)}, JSON.stringify({
+  model, args, env, promptLength: prompt.length,
+  settings: settings && existsSync(settings) ? readFileSync(settings, "utf8") : null,
+}) + "\\n");
+if (behavior.mode === "fail") {
+  process.stderr.write("warning: auth source\\n");
+  process.stdout.write(JSON.stringify({ is_error: true, subtype: "error", result: behavior.message ?? "Failed to authenticate. API Error: 401" }));
+  process.exit(1);
+}
+process.stdout.write(JSON.stringify({
+  is_error: false,
+  total_cost_usd: 0.01,
+  structured_output: behavior.structured ?? ${JSON.stringify({ verdict: "approve", requirementFit: { rating: "met", evidence: "满足" }, engineeringQuality: { rating: "good", evidence: "无问题" }, findings: [] })},
+  modelUsage: { [behavior.actual ?? model]: { inputTokens: 1, outputTokens: 1 } },
+}));
+`,
+  );
+  chmodSync(bin, 0o755);
+  repo.env.HARNESS_REVIEWER_BIN = bin;
+  return {
+    bin,
+    calls() {
+      return existsSync(calls) ? readFileSync(calls, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line)) : [];
+    },
+  };
+}
+
+/** 写入本机评审者文件（夹具自己的路径）。 */
+export function writeReviewers(repo, data) {
+  writeFileSync(repo.env.HARNESS_REVIEWERS_FILE, `${JSON.stringify(data, null, 2)}\n`);
+  return repo.env.HARNESS_REVIEWERS_FILE;
+}
+
+/** 读某个提交的评审记录（JSON 文件，签名已由 harness 校验过，测试只看内容）。 */
+export function readReviewRecord(repo, oid) {
+  return JSON.parse(readFileSync(join(repo.env.HARNESS_DATA_DIR, "review", `${oid}.json`), "utf8"));
 }
 
 /** 假的 codex：记录参数、工作目录、输入与结构定义，再把给定结果写到 --output-last-message。 */

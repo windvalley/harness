@@ -14,7 +14,7 @@ import { planChecks, verify } from "./verify/verify.mjs";
 import { MergeError, mergeTask } from "./merge/merge.mjs";
 import { submitTask } from "./delivery/submit.mjs";
 import { syncTask } from "./delivery/sync.mjs";
-import { reviewBranch } from "./review/review.mjs";
+import { reviewBranch, reviewerLines } from "./review/review.mjs";
 import { approveConfirm, confirmSummary, formatSummary } from "./confirm/confirm.mjs";
 import { approvePlan, formatPlanSummary, planSummary } from "./plan/plan.mjs";
 import { checkCommitMessage, checkStaged, guardReference } from "./githook.mjs";
@@ -155,6 +155,7 @@ async function cmdReview(argv) {
       `  工程质量: ${record.engineeringQuality?.rating} - ${record.engineeringQuality?.evidence ?? ""}`,
       `  验收清单来源: ${record.acceptanceSource ?? "无"}`,
       `  评审后端: ${record.backend ?? "未知"}`,
+      ...reviewerLines(record),
     ];
     for (const item of record.findings) {
       lines.push(`  [${item.severity}] ${item.file}${item.line ? `:${item.line}` : ""} ${item.summary}`);

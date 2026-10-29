@@ -5,6 +5,8 @@ import { acceptancePath, loadGateProject, mainBranch } from "../lib/config.mjs";
 import { changedPaths, gitOk, run, showBlob } from "../lib/git.mjs";
 import { appendLedger, readRecord, writeRecord } from "../lib/store.mjs";
 import { approvalState } from "../plan/plan.mjs";
+import { endpointHost, loadLocalReviewers, orderReviewers } from "./reviewers.mjs";
+import { detectSessionModel } from "./session.mjs";
 
 export const REVIEW_KIND = "review";
 // diff 上限可以在 review.maxDiffChars 里调整；提交说明与文件统计各自另有上限，不挤占 diff 的额度。
@@ -67,7 +69,7 @@ export function userSettingsFile(home = homedir()) {
   return existsSync(file) ? file : "";
 }
 
-export function reviewerArgs({ model, maxBudgetUsd }, settingsFile = "") {
+export function reviewerArgs({ model, maxBudgetUsd, effort }, settingsFile = "") {
   return [
     "-p",
     "--no-session-persistence",
@@ -85,13 +87,14 @@ export function reviewerArgs({ model, maxBudgetUsd }, settingsFile = "") {
     SYSTEM_PROMPT,
     "--model",
     model,
-    "--max-budget-usd",
-    String(maxBudgetUsd),
+    ...(effort ? ["--effort", effort] : []),
+    // 预算不配就不传：触顶时钱已经花了却拿不到结论，上限反而更费钱。
+    ...(maxBudgetUsd ? ["--max-budget-usd", String(maxBudgetUsd)] : []),
   ];
 }
 
 export const REVIEW_BACKENDS = ["auto", "claude", "codex", "command"];
-const REVIEW_TIMEOUT_MS = 20 * 60 * 1000;
+const DEFAULT_TIMEOUT_MINUTES = 20;
 
 export function commandExists(bin) {
   return run("sh", ["-c", 'command -v "$1" >/dev/null 2>&1', "sh", bin]).status === 0;
@@ -185,35 +188,76 @@ function ensureOk(result, label) {
   }
 }
 
+function timeoutMs(entry) {
+  return (entry.timeoutMinutes ?? DEFAULT_TIMEOUT_MINUTES) * 60 * 1000;
+}
+
+function ensureNotTimedOut(result, entry) {
+  if (result.error?.code === "ETIMEDOUT") {
+    throw new Error(`评审进程超过 ${entry.timeoutMinutes ?? DEFAULT_TIMEOUT_MINUTES} 分钟没有结束，已终止`);
+  }
+}
+
 // claude -p 的结果出错时 subtype 说明原因；超出预算要给出能执行的处理办法，不能让人误判成环境故障。
-function claudeFailure(payload, config) {
+function claudeFailure(payload, entry) {
   const detail = payload.result ?? payload.subtype ?? "未知错误";
   if (payload.subtype === "error_max_budget_usd") {
+    const local = entry.source === "local";
+    const field = local ? `评审者 ${entry.name} 的 maxBudgetUsd` : "review.maxBudgetUsd";
+    const how = local
+      ? `用 harness reviewer set ${entry.name} --max-budget-usd <更大的数> 调高，或改回不限`
+      : "在 .harness/config.json 调高 review.maxBudgetUsd（门禁改动，合并前由人确认）";
     return (
-      `评审花费超出 review.maxBudgetUsd（${config.maxBudgetUsd ?? 2} 美元${payload.total_cost_usd ? `，本次已花 ${payload.total_cost_usd}` : ""}），没有给出结论。` +
-      "按目录拆小分支后分别评审，或在 .harness/config.json 调高 review.maxBudgetUsd（门禁改动，合并前由人确认）"
+      `评审花费超出 ${field}（${entry.maxBudgetUsd} 美元${payload.total_cost_usd ? `，本次已花 ${payload.total_cost_usd}` : ""}），没有给出结论。` +
+      `按目录拆小分支后分别评审，或${how}`
     );
   }
   return `评审进程报错(${payload.subtype ?? "error"}): ${detail}`;
 }
 
-function runClaude({ cwd, prompt, config, bin }) {
-  const result = run(bin, reviewerArgs({ model: config.model ?? "sonnet", maxBudgetUsd: config.maxBudgetUsd ?? 2 }, userSettingsFile()), {
-    cwd,
-    input: prompt,
-    timeout: REVIEW_TIMEOUT_MS,
-  });
-  let payload = null;
+// 评审者指定了端点时，key 只经子进程的环境变量交给 apiKeyHelper，不出现在命令行参数和 settings 文件的内容里。
+const KEY_ENV = "HARNESS_REVIEW_API_KEY";
+
+function runClaude({ cwd, prompt, entry, bin }) {
+  const scratch = entry.baseUrl ? mkdtempSync(join(tmpdir(), "harness-review-")) : null;
   try {
-    payload = JSON.parse(result.stdout);
-  } catch {
-    payload = null;
+    const env = { ...process.env };
+    // 重试次数不限制时，key 失效要等四分多钟才报错，回退到下一个评审者就被拖住。
+    // 只在本机评审者文件的路径上限制：旧字段只有一个评审者，没有可回退的对象，保持客户端默认。
+    if (entry.source === "local") env.CLAUDE_CODE_MAX_RETRIES ??= "2";
+    let settingsFile = userSettingsFile();
+    if (scratch) {
+      // 继承来的 ANTHROPIC_* 会和评审者自己的端点、key 混在一起：实测里配错 key 照样成功，分不清这次用的是哪一把。
+      for (const name of Object.keys(env)) if (name.startsWith("ANTHROPIC_")) delete env[name];
+      settingsFile = join(scratch, "settings.json");
+      writeFileSync(
+        settingsFile,
+        JSON.stringify({ env: { ANTHROPIC_BASE_URL: entry.baseUrl }, apiKeyHelper: `printf %s "$${KEY_ENV}"` }),
+        { mode: 0o600 },
+      );
+      env[KEY_ENV] = entry.apiKey;
+    }
+    const result = run(bin, reviewerArgs({ model: entry.model, maxBudgetUsd: entry.maxBudgetUsd, effort: entry.effort }, settingsFile), {
+      cwd,
+      input: prompt,
+      timeout: timeoutMs(entry),
+      env,
+    });
+    ensureNotTimedOut(result, entry);
+    let payload = null;
+    try {
+      payload = JSON.parse(result.stdout);
+    } catch {
+      payload = null;
+    }
+    // 出错时 claude 以非零退出码结束，但 stdout 里仍有带 subtype 的结果，优先用它说明原因。
+    if (payload?.is_error) throw new Error(claudeFailure(payload, entry));
+    ensureOk(result, bin);
+    if (!payload) throw new Error(`评审进程输出不是 JSON: ${result.stdout.slice(0, 200)}`);
+    return { structured: payload.structured_output, costUsd: payload.total_cost_usd ?? null, models: Object.keys(payload.modelUsage ?? {}) };
+  } finally {
+    if (scratch) rmSync(scratch, { recursive: true, force: true });
   }
-  // 出错时 claude 以非零退出码结束，但 stdout 里仍有带 subtype 的结果，优先用它说明原因。
-  if (payload?.is_error) throw new Error(claudeFailure(payload, config));
-  ensureOk(result, bin);
-  if (!payload) throw new Error(`评审进程输出不是 JSON: ${result.stdout.slice(0, 200)}`);
-  return { structured: payload.structured_output, costUsd: payload.total_cost_usd ?? null };
 }
 
 // codex 与通用命令都在空的临时目录里运行：评审只依据给出的材料，不读项目文件，也不加载项目里的钩子与规则。
@@ -228,7 +272,7 @@ function withScratch(fn) {
   }
 }
 
-function runCodex({ prompt, config, bin }) {
+function runCodex({ prompt, entry, bin }) {
   return withScratch(({ dir, schema, output }) => {
     const args = [
       "exec",
@@ -244,40 +288,159 @@ function runCodex({ prompt, config, bin }) {
       schema,
       "--output-last-message",
       output,
-      ...(config.codexModel ? ["--model", config.codexModel] : []),
+      ...(entry.model ? ["--model", entry.model] : []),
+      ...(entry.effort ? ["-c", `model_reasoning_effort="${entry.effort}"`] : []),
       "-",
     ];
-    const result = run(bin, args, { cwd: dir, input: `${SYSTEM_PROMPT}\n\n${prompt}`, timeout: REVIEW_TIMEOUT_MS });
+    const result = run(bin, args, { cwd: dir, input: `${SYSTEM_PROMPT}\n\n${prompt}`, timeout: timeoutMs(entry) });
+    ensureNotTimedOut(result, entry);
     ensureOk(result, bin);
     if (!existsSync(output)) throw new Error("codex 没有写出评审结果");
-    return { structured: dropNulls(extractJson(readFileSync(output, "utf8"))), costUsd: null };
+    return { structured: dropNulls(extractJson(readFileSync(output, "utf8"))), costUsd: null, models: [] };
   });
 }
 
-function runCommand({ prompt, argv }) {
+function runCommand({ prompt, entry }) {
   return withScratch((files) => {
+    const argv = entry.command;
     const usesOutput = argv.some((arg) => arg.includes("{output}"));
     const expanded = argv.map((arg) =>
       arg.replaceAll("{schema}", files.schema).replaceAll("{system}", files.system).replaceAll("{output}", files.output),
     );
     const [cmd, ...args] = expanded;
-    const result = run(cmd, args, { cwd: files.dir, input: `${SYSTEM_PROMPT}\n\n${prompt}`, timeout: REVIEW_TIMEOUT_MS });
+    // 命令自己决定怎么用模型与推理强度，这里只通过环境变量告知。
+    const env = {
+      ...process.env,
+      ...(entry.effort ? { HARNESS_REVIEW_EFFORT: entry.effort } : {}),
+      ...(entry.model ? { HARNESS_REVIEW_MODEL: entry.model } : {}),
+    };
+    const result = run(cmd, args, { cwd: files.dir, input: `${SYSTEM_PROMPT}\n\n${prompt}`, timeout: timeoutMs(entry), env });
+    ensureNotTimedOut(result, entry);
     ensureOk(result, cmd);
     const text = usesOutput && existsSync(files.output) ? readFileSync(files.output, "utf8") : result.stdout;
     const payload = extractJson(text);
-    return { structured: dropNulls(payload.structured_output ?? payload), costUsd: payload.total_cost_usd ?? null };
+    return { structured: dropNulls(payload.structured_output ?? payload), costUsd: payload.total_cost_usd ?? null, models: [] };
   });
 }
 
-export function runReviewer({ cwd, prompt, config = {} }) {
-  const backend = resolveBackend(config);
-  const outcome =
-    backend.name === "claude"
-      ? runClaude({ cwd, prompt, config, bin: backend.bin })
-      : backend.name === "codex"
-        ? runCodex({ prompt, config, bin: backend.bin })
-        : runCommand({ prompt, argv: backend.argv });
-  return { ...outcome, structured: parseVerdict(outcome.structured), backend: backend.name };
+function runEntry({ cwd, prompt, entry }) {
+  if (entry.client === "claude") return runClaude({ cwd, prompt, entry, bin: entry.bin });
+  if (entry.client === "codex") return runCodex({ prompt, entry, bin: entry.bin });
+  return runCommand({ prompt, entry });
+}
+
+// 没有本机文件时按项目里的旧字段运行，只有一个评审者，行为和以前一致。
+function legacyCandidates(config, options) {
+  const backend = resolveBackend(config, options);
+  if (backend.name === "command") return [{ name: "command", client: "command", command: backend.argv }];
+  if (backend.name === "codex") return [{ name: "codex", client: "codex", bin: backend.bin, ...(config.codexModel ? { model: config.codexModel } : {}) }];
+  return [{ name: "claude", client: "claude", bin: backend.bin, model: config.model ?? "sonnet", ...(config.maxBudgetUsd ? { maxBudgetUsd: config.maxBudgetUsd } : {}) }];
+}
+
+// 启动前能判断的不可用都在这里挡掉，不花钱。写了 baseUrl 却没有 key 时不拿客户端的默认账号顶替。
+function localCandidate(entry, { has, overrideBin }) {
+  const bin = entry.client === "claude" ? overrideBin || "claude" : entry.client === "codex" ? "codex" : entry.command[0];
+  let skip = null;
+  if (entry.client === "claude" && entry.baseUrl && !entry.apiKey) skip = "写了 baseUrl 但没有 apiKey，不用客户端的默认账号顶替";
+  else if (!has(bin)) skip = `命令 ${bin} 不在 PATH 里`;
+  return { ...entry, source: "local", bin, skip };
+}
+
+/**
+ * 决定这次评审按什么顺序尝试哪些评审者。
+ * 本机文件存在就以它为准（格式不对直接报错，不退回旧字段）；不存在时按项目旧字段，只有一个评审者。
+ */
+export function planReviewers(
+  config = {},
+  { local = loadLocalReviewers(), has = commandExists, overrideBin = process.env.HARNESS_REVIEWER_BIN, detect = detectSessionModel } = {},
+) {
+  if (!local) {
+    const candidates = legacyCandidates(config, { has, overrideBin }).map((entry) => ({ ...entry, source: "project" }));
+    const names = candidates.map((entry) => entry.name);
+    return { source: "project", file: null, candidates, configuredOrder: names, sessionModel: null, sessionNote: null, reordered: false, secrets: [] };
+  }
+  const session = local.preferDifferentModel ? detect() : { model: null, reason: "已关闭优先使用不同模型的评审者" };
+  const { ordered, reordered } = orderReviewers(local.reviewers, session.model, local.preferDifferentModel);
+  return {
+    source: "local",
+    file: local.file,
+    candidates: ordered.map((entry) => localCandidate(entry, { has, overrideBin })),
+    configuredOrder: local.reviewers.map((entry) => entry.name),
+    sessionModel: session.model ?? null,
+    sessionNote: session.model ? null : `会话模型未知（${session.reason}），按文件里的顺序`,
+    reordered,
+    secrets: local.reviewers.map((entry) => entry.apiKey).filter(Boolean),
+  };
+}
+
+function describeEntry(entry) {
+  const parts = [entry.model, entry.effort && `effort ${entry.effort}`, entry.baseUrl && endpointHost(entry.baseUrl)].filter(Boolean);
+  return `${entry.name}${parts.length ? `(${parts.join(", ")})` : ""}${entry.skip ? "[不可用]" : ""}`;
+}
+
+export function describePlan(plan) {
+  const order = plan.candidates.map(describeEntry).join(" -> ");
+  if (plan.reordered) return `${order}；与会话模型 ${plan.sessionModel} 相同的排到了后面`;
+  if (plan.sessionModel) return `${order}；会话模型 ${plan.sessionModel}，顺序无需调整`;
+  return plan.sessionNote ? `${order}；${plan.sessionNote}` : order;
+}
+
+// 评审进程的输出不可信：报错里可能带出任何一把配置过的 key（不只是当前这个评审者的），一律擦掉再展示和落盘。
+function scrub(text, secrets) {
+  return secrets.reduce((result, secret) => result.split(secret).join("****"), text);
+}
+
+export function runReviewer({ cwd, prompt, config = {}, log = () => {}, plan = planReviewers(config) }) {
+  log(`[review] 评审者（${plan.source === "local" ? `本机文件 ${plan.file}` : "项目配置"}）: ${describePlan(plan)}`);
+  const attempts = [];
+  for (const entry of plan.candidates) {
+    if (entry.skip) {
+      attempts.push({ name: entry.name, outcome: "skipped", reason: entry.skip });
+      log(`[review] 跳过 ${entry.name}: ${entry.skip}`);
+      continue;
+    }
+    const started = Date.now();
+    try {
+      const outcome = runEntry({ cwd, prompt, entry });
+      // 给出结论（通过或拒绝）就停；输出不符合结构按失败处理，换下一个。
+      const structured = parseVerdict(outcome.structured);
+      attempts.push({ name: entry.name, outcome: "done" });
+      const inherited = entry.client === "claude" && !entry.baseUrl ? process.env.ANTHROPIC_BASE_URL : null;
+      return {
+        structured,
+        costUsd: outcome.costUsd,
+        backend: entry.client,
+        reviewer: {
+          name: entry.name,
+          client: entry.client,
+          source: entry.source,
+          requestedModel: entry.model ?? null,
+          actualModels: outcome.models,
+          effort: entry.effort ?? null,
+          endpointHost: entry.baseUrl ? endpointHost(entry.baseUrl) : inherited ? endpointHost(inherited) : null,
+          endpointFrom: entry.baseUrl ? "reviewer" : inherited ? "environment" : null,
+          timeoutMinutes: entry.timeoutMinutes ?? DEFAULT_TIMEOUT_MINUTES,
+          durationMs: Date.now() - started,
+        },
+        attempts,
+        selection: {
+          source: plan.source,
+          sessionModel: plan.sessionModel,
+          reordered: plan.reordered,
+          configuredOrder: plan.configuredOrder,
+          order: plan.candidates.map((candidate) => candidate.name),
+        },
+      };
+    } catch (error) {
+      // 旧字段只有一个评审者，原样抛出原因，和以前的报错一致。
+      if (plan.source === "project") throw error;
+      const reason = scrub(error.message, plan.secrets);
+      attempts.push({ name: entry.name, outcome: "failed", reason: reason.slice(0, 600) });
+      log(`[review] ${entry.name} 失败，换下一个: ${reason.split("\n")[0].slice(0, 200)}`);
+    }
+  }
+  const lines = attempts.map((item) => `- ${item.name}: ${item.outcome === "skipped" ? "跳过" : "失败"}，${item.reason}`);
+  throw new Error(`没有评审者给出结论：\n${lines.join("\n")}\n用 harness reviewer list 查看本机评审者，harness reviewer set 新增或补全`);
 }
 
 export function parseVerdict(structured) {
@@ -486,7 +649,7 @@ export async function reviewBranch({ cwd, branch, log = console.error, reviewer 
       `变更 diff 有 ${diffText.length} 字符，超过独立评审上限 ${limit}，不能只评审一部分就放行。\n` +
         `按目录拆分建议（每组单独一个分支验收）：\n${splitSuggestion(root, baseCommit, branchCommit, diffText.length, limit)}\n` +
         "确实需要一次评审时，在 .harness/config.json 里调高 review.maxDiffChars，按主分支的配置生效，合并前由人确认；" +
-        "diff 越大单次评审花费越高，claude 后端需要时同步调高 review.maxBudgetUsd。",
+        "diff 越大单次评审花费越高，设了预算上限的 claude 评审者要同步调高 review.maxBudgetUsd 或评审者自己的 maxBudgetUsd。",
     );
   }
 
@@ -513,7 +676,7 @@ export async function reviewBranch({ cwd, branch, log = console.error, reviewer 
       `，${acceptance ? `验收清单来自${{ main: "主分支", approved: "已授权实施的方案", branch: "任务分支(未确认)" }[acceptance.source]}` : "无验收清单"}`,
   );
   const prompt = buildPrompt({ acceptance, evidence: evidenceText, commits: commits.text, stats, diff: diffText, branch });
-  const { structured, costUsd, backend } = reviewer({ cwd: root, prompt, config });
+  const { structured, costUsd, backend, reviewer: reviewerInfo, attempts, selection } = reviewer({ cwd: root, prompt, config, log });
 
   const blockSeverities = config.blockSeverities ?? ["high", "critical"];
   const blocking = blockingFindings(structured.findings, blockSeverities);
@@ -539,13 +702,66 @@ export async function reviewBranch({ cwd, branch, log = console.error, reviewer 
     acceptanceSource: acceptance?.source ?? null,
     hadAcceptance: Boolean(acceptance),
     backend: backend ?? null,
+    reviewer: reviewerInfo ?? null,
+    attempts: attempts ?? undefined,
+    reviewerSelection: selection ?? undefined,
     // 记录哪些删除的文件只给了路径，事后能看出这次评审没有读到这些文件的原内容。
     collapsedDeletions: collapsed.length ? collapsed : undefined,
     costUsd,
     reviewedAt: new Date().toISOString(),
   });
-  appendLedger(root, { event: "review", branch, tree: record.reviewedCommit, verdict, blocking: blocking.length, backend, costUsd });
+  appendLedger(root, {
+    event: "review",
+    branch,
+    tree: record.reviewedCommit,
+    verdict,
+    blocking: blocking.length,
+    backend,
+    reviewer: reviewerInfo?.name,
+    model: reviewerInfo?.actualModels?.[0] ?? reviewerInfo?.requestedModel ?? undefined,
+    durationMs: reviewerInfo?.durationMs,
+    costUsd,
+  });
   return record;
 }
 
 export { changedPaths };
+
+function modelLabel(reviewer) {
+  const requested = reviewer.requestedModel;
+  const actual = (reviewer.actualModels ?? []).filter((name) => name !== requested);
+  if (requested && actual.length) return `${requested}（实际 ${actual.join("、")}）`;
+  return requested ?? (reviewer.actualModels ?? []).join("、");
+}
+
+/** 一行说清评审由谁完成，给 status、PR 描述这类只有一行位置的地方用。旧记录没有这项，写“未记录”。 */
+export function reviewerSummary(record) {
+  const reviewer = record?.reviewer;
+  if (!reviewer) return "未记录";
+  const fallback = (record.attempts ?? []).some((item) => item.outcome !== "done") ? "，由备选完成" : "";
+  const parts = [reviewer.name, modelLabel(reviewer), reviewer.effort && `effort ${reviewer.effort}`].filter(Boolean);
+  return `${parts.join(" / ")}${fallback}`;
+}
+
+/** harness review 的结果里关于评审者的几行：谁完成、用了什么、前面的评审者为什么没完成、顺序有没有按会话模型调整。 */
+export function reviewerLines(record) {
+  const reviewer = record?.reviewer;
+  if (!reviewer) return ["  评审者: 未记录"];
+  const lines = [];
+  const detail = [
+    reviewer.client,
+    modelLabel(reviewer) && `模型 ${modelLabel(reviewer)}`,
+    reviewer.effort && `effort ${reviewer.effort}`,
+    reviewer.endpointHost && `端点 ${reviewer.endpointHost}${reviewer.endpointFrom === "environment" ? "（来自环境变量）" : ""}`,
+  ].filter(Boolean);
+  const seconds = typeof reviewer.durationMs === "number" ? `，耗时 ${(reviewer.durationMs / 1000).toFixed(1)} 秒` : "";
+  lines.push(`  评审者: ${reviewer.name}（${detail.join("，")}）${seconds}`);
+  const earlier = (record.attempts ?? []).filter((item) => item.outcome !== "done");
+  if (earlier.length > 0) {
+    lines.push(`  由备选 ${reviewer.name} 完成，前面的评审者没有给出结论:`);
+    for (const item of earlier) lines.push(`    ${item.name}: ${item.outcome === "skipped" ? "跳过" : "失败"}，${String(item.reason ?? "").split("\n")[0].slice(0, 200)}`);
+  }
+  const selection = record.reviewerSelection;
+  if (selection?.reordered) lines.push(`  顺序已按会话模型 ${selection.sessionModel} 调整: ${selection.order.join(" -> ")}`);
+  return lines;
+}

@@ -3,7 +3,7 @@ import { matchAny } from "./lib/glob.mjs";
 import { changedPaths, gitOk, isAncestor, mainWorktreeRoot, refExists, showBlob } from "./lib/git.mjs";
 import { readRecord } from "./lib/store.mjs";
 import { EVIDENCE_KIND } from "./verify/verify.mjs";
-import { REVIEW_KIND } from "./review/review.mjs";
+import { REVIEW_KIND, reviewerSummary } from "./review/review.mjs";
 import { CONFIRM_KIND } from "./confirm/confirm.mjs";
 import { mainWorktreeProblems, planMergeResult, reuseDecision, reviewStaleFiles } from "./merge/merge.mjs";
 import { approvalState, planEnforced, planRequirement } from "./plan/plan.mjs";
@@ -106,7 +106,7 @@ export function branchStatus({ cwd, branch }) {
     add("review", "fail", `主分支在评审之后改了本分支也改过的文件（${stale.slice(0, 5).join("、")}${stale.length > 5 ? " 等" : ""}），在任务分支上 git merge ${mainRef} 后重新 verify、review`);
     block("review_stale", "评审之后主分支改了同一批文件");
   } else {
-    add("review", "ok", `评审通过（需求符合度 ${review.record.requirementFit?.rating ?? "?"}，工程质量 ${review.record.engineeringQuality?.rating ?? "?"}，清单来源 ${review.record.acceptanceSource ?? "无"}）`);
+    add("review", "ok", `评审通过（需求符合度 ${review.record.requirementFit?.rating ?? "?"}，工程质量 ${review.record.engineeringQuality?.rating ?? "?"}，清单来源 ${review.record.acceptanceSource ?? "无"}，评审者 ${reviewerSummary(review.record)}）`);
   }
 
   if (planEnforced(project.policy)) {

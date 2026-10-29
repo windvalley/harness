@@ -1,0 +1,505 @@
+import { strict as assert } from "node:assert";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, test } from "node:test";
+import { APPROVE, CONFIG, fakeClaudes, fakeCodex, git, makeRepo, readReviewRecord, writeReviewers } from "./helpers.mjs";
+import { describePlan, planReviewers, reviewerArgs } from "../src/review/review.mjs";
+import { loadLocalReviewers, maskKey, orderReviewers, parseReviewers } from "../src/review/reviewers.mjs";
+import { detectSessionModel, normalizeModel, sameModel } from "../src/review/session.mjs";
+
+let repos = [];
+let dirs = [];
+afterEach(() => {
+  for (const repo of repos) repo.cleanup();
+  for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
+  repos = [];
+  dirs = [];
+});
+function setup(opts = {}) {
+  const repo = makeRepo(opts);
+  repos.push(repo);
+  return repo;
+}
+function tempDir() {
+  const dir = mkdtempSync(join(tmpdir(), "harness-reviewers-"));
+  dirs.push(dir);
+  return dir;
+}
+
+const KEY = "sk-test-0123456789abcdef-SECRET";
+const FLASH = { name: "flash", client: "claude", model: "deepseek/deepseek-v4.1-flash", baseUrl: "https://llm.example.test", apiKey: KEY, effort: "high" };
+const SONNET = { name: "sonnet", client: "claude", model: "sonnet" };
+
+// 建一个已经验证过、可以评审的任务分支，返回分支名与提交号。
+function readyBranch(repo, name = "task/a") {
+  const oid = repo.branch(name, { "a.txt": "a\n" });
+  assert.equal(repo.cli("verify", "--branch", name).status, 0);
+  return { name, oid };
+}
+
+describe("模型名比较", () => {
+  test("不同来源的写法归一化后判为同一个模型", () => {
+    assert.equal(normalizeModel("anthropic/claude-opus-5.5-cpr[1M]"), "claude-opus-5-5");
+    assert.equal(normalizeModel("claude-opus-5-5"), "claude-opus-5-5");
+    assert.equal(normalizeModel("coding-anthropic/claude-opus-5.5"), "claude-opus-5-5");
+    assert.ok(sameModel("anthropic/claude-opus-5.5-cpr[1M]", "claude-opus-5-5"));
+    assert.ok(sameModel("DeepSeek/DeepSeek-V4.1-Flash", "deepseek-v4-1-flash"));
+  });
+
+  test("按具体模型比较：同一厂商的不同模型算不同，空值不算相同", () => {
+    assert.equal(sameModel("claude-opus-5-5", "claude-sonnet-5-5"), false);
+    assert.equal(sameModel("deepseek/deepseek-v4.1-flash", "deepseek/deepseek-v4-pro"), false);
+    assert.equal(sameModel("", ""), false);
+    assert.equal(sameModel(undefined, "claude-opus-5-5"), false);
+  });
+});
+
+describe("本机评审者文件的校验", () => {
+  const ok = { reviewers: [FLASH, SONNET, { name: "codex", client: "codex" }] };
+
+  test("合法内容规整后返回，preferDifferentModel 默认开启", () => {
+    const parsed = parseReviewers(ok);
+    assert.equal(parsed.preferDifferentModel, true);
+    assert.deepEqual(parsed.reviewers.map((item) => item.name), ["flash", "sonnet", "codex"]);
+    assert.equal(parseReviewers({ ...ok, preferDifferentModel: false }).preferDifferentModel, false);
+  });
+
+  test("不认识的字段、非法取值与缺项都报错", () => {
+    const bad = (reviewer, pattern) => assert.throws(() => parseReviewers({ reviewers: [reviewer] }), pattern);
+    assert.throws(() => parseReviewers({ reviewers: [SONNET], extra: 1 }), /不认识的字段 extra/);
+    assert.throws(() => parseReviewers({ reviewers: [] }), /非空数组/);
+    bad({ ...SONNET, color: "red" }, /不认识的字段 color/);
+    bad({ ...SONNET, client: "gemini" }, /client 必须是/);
+    bad({ name: "x", client: "claude" }, /必须写 model/);
+    bad({ ...SONNET, effort: "ultra" }, /effort 必须是 low、medium、high、xhigh、max/);
+    bad({ ...SONNET, effort: "minimal" }, /effort 必须是/);
+    bad({ ...SONNET, timeoutMinutes: 0 }, /timeoutMinutes/);
+    bad({ ...SONNET, maxBudgetUsd: -1 }, /maxBudgetUsd/);
+    bad({ ...SONNET, baseUrl: "not a url" }, /baseUrl 必须是 http 或 https/);
+    bad({ name: "c", client: "command" }, /必须在 command 里给出命令数组/);
+    bad({ ...SONNET, command: ["x"] }, /command 只对 command 客户端有效/);
+    bad({ name: "c", client: "codex", baseUrl: "https://x.test" }, /baseUrl 目前只对 claude 客户端有效/);
+    bad({ name: "c", client: "codex", apiKey: "k" }, /apiKey 目前只对 claude 客户端有效/);
+    bad({ name: "bad name", client: "codex" }, /name 必须是/);
+    assert.throws(() => parseReviewers({ reviewers: [SONNET, SONNET] }), /名字 sonnet 重复/);
+  });
+
+  test("校验失败的信息里不回显 apiKey", () => {
+    for (const reviewer of [{ ...FLASH, effort: "ultra" }, { ...FLASH, baseUrl: "bad" }, { ...FLASH, timeoutMinutes: "x" }]) {
+      try {
+        parseReviewers({ reviewers: [reviewer] });
+        assert.fail("应当报错");
+      } catch (error) {
+        assert.doesNotMatch(error.message, /SECRET/);
+      }
+    }
+    assert.equal(maskKey(KEY), "****CRET");
+    assert.equal(maskKey("short"), "****");
+  });
+
+  test("文件不存在返回 null，内容不是 JSON 时报错而不是当作不存在", () => {
+    const dir = tempDir();
+    assert.equal(loadLocalReviewers({ file: join(dir, "none.json") }), null);
+    writeFileSync(join(dir, "bad.json"), "{ not json");
+    assert.throws(() => loadLocalReviewers({ file: join(dir, "bad.json") }), /不是合法的 JSON/);
+  });
+});
+
+describe("按会话模型调整顺序", () => {
+  const entries = [
+    { name: "opus", client: "claude", model: "anthropic/claude-opus-5.5" },
+    { name: "flash", client: "claude", model: "deepseek/deepseek-v4.1-flash" },
+    { name: "sonnet", client: "claude", model: "sonnet" },
+    { name: "codex", client: "codex" },
+  ];
+  const names = (list) => list.map((item) => item.name);
+
+  test("与会话同模型的排到最后，其余保持原有先后；没写模型的无法判断，留在原位", () => {
+    const { ordered, reordered } = orderReviewers(entries, "claude-opus-5-5");
+    assert.deepEqual(names(ordered), ["flash", "sonnet", "codex", "opus"]);
+    assert.equal(reordered, true);
+  });
+
+  test("会话模型不在列表里、未知或关闭时保持原顺序", () => {
+    assert.deepEqual(names(orderReviewers(entries, "gpt-9").ordered), ["opus", "flash", "sonnet", "codex"]);
+    assert.equal(orderReviewers(entries, "gpt-9").reordered, false);
+    assert.equal(orderReviewers(entries, null).reordered, false);
+    assert.equal(orderReviewers(entries, "claude-opus-5-5", false).reordered, false);
+    assert.deepEqual(names(orderReviewers(entries, "claude-opus-5-5", false).ordered), names(entries));
+  });
+
+  test("按具体模型比较：会话用 opus 时 sonnet 不被后移", () => {
+    const { ordered } = orderReviewers([{ name: "sonnet", client: "claude", model: "claude-sonnet-5-5" }, entries[0]], "claude-opus-5-5");
+    assert.deepEqual(names(ordered), ["sonnet", "opus"]);
+  });
+});
+
+describe("读取会话模型", () => {
+  function transcript(lines) {
+    const home = tempDir();
+    const dir = join(home, ".claude", "projects", "-some-project");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "sess-1.jsonl"), `${lines.map((line) => JSON.stringify(line)).join("\n")}\n`);
+    return home;
+  }
+  const assistant = (model) => ({ type: "assistant", message: { model, content: [] } });
+
+  test("取最后一条真实的 assistant 消息，跳过合成消息；中途切换模型以最后一次为准", () => {
+    const home = transcript([assistant("claude-opus-5-5"), assistant("DeepSeek-V4.1-Flash"), { type: "user" }, assistant("<synthetic>")]);
+    const found = detectSessionModel({ env: { CLAUDE_CODE_SESSION_ID: "sess-1" }, home });
+    assert.deepEqual(found, { model: "DeepSeek-V4.1-Flash", client: "claude", reason: null });
+  });
+
+  test("没有会话编号、找不到记录或没有模型信息时返回未知并说明原因", () => {
+    const home = transcript([{ type: "user" }]);
+    assert.equal(detectSessionModel({ env: {}, home }).model, null);
+    assert.match(detectSessionModel({ env: {}, home }).reason, /没有会话编号/);
+    assert.match(detectSessionModel({ env: { CLAUDE_CODE_SESSION_ID: "nope" }, home }).reason, /找不到当前会话的记录/);
+    assert.match(detectSessionModel({ env: { CLAUDE_CODE_SESSION_ID: "sess-1" }, home }).reason, /没有可用的模型信息/);
+    assert.match(detectSessionModel({ env: { CLAUDE_CODE_SESSION_ID: "../etc" }, home }).reason, /不合法/);
+  });
+});
+
+describe("评审计划", () => {
+  const has = (bin) => bin !== "codex";
+  const detect = () => ({ model: "claude-opus-5-5", client: "claude", reason: null });
+  const local = (reviewers, prefer = true) => ({ file: "/x/reviewers.json", preferDifferentModel: prefer, reviewers });
+
+  test("启动前能判断的不可用直接标记跳过：写了 baseUrl 没有 key、命令不在 PATH 里", () => {
+    const plan = planReviewers(
+      {},
+      {
+        local: local([{ name: "nokey", client: "claude", model: "m", baseUrl: "https://x.test" }, { name: "codex", client: "codex" }, { name: "cmd", client: "command", command: ["/nonexistent/reviewer"] }, SONNET]),
+        has: (bin) => bin === "claude",
+        overrideBin: undefined,
+        detect,
+      },
+    );
+    const by = Object.fromEntries(plan.candidates.map((item) => [item.name, item.skip]));
+    assert.match(by.nokey, /没有 apiKey，不用客户端的默认账号顶替/);
+    assert.match(by.codex, /codex 不在 PATH/);
+    assert.match(by.cmd, /不在 PATH/);
+    assert.equal(by.sonnet, null);
+  });
+
+  test("超时按评审者配置，默认 20 分钟", () => {
+    const plan = planReviewers({}, { local: local([{ ...SONNET, timeoutMinutes: 30 }]), has, overrideBin: undefined, detect });
+    assert.equal(plan.candidates[0].timeoutMinutes, 30);
+    const defaults = planReviewers({}, { local: local([SONNET]), has, overrideBin: undefined, detect });
+    assert.equal(defaults.candidates[0].timeoutMinutes, undefined);
+  });
+
+  test("计划说明写出顺序、会话模型和是否调整过", () => {
+    const entries = [{ name: "opus", client: "claude", model: "anthropic/claude-opus-5.5" }, SONNET];
+    const text = describePlan(planReviewers({}, { local: local(entries), has, overrideBin: undefined, detect }));
+    assert.match(text, /sonnet\(sonnet\) -> opus\(anthropic\/claude-opus-5\.5\)；与会话模型 claude-opus-5-5 相同的排到了后面/);
+    const unknown = describePlan(planReviewers({}, { local: local(entries), has, overrideBin: undefined, detect: () => ({ model: null, reason: "当前环境没有会话编号" }) }));
+    assert.match(unknown, /会话模型未知（当前环境没有会话编号），按文件里的顺序/);
+  });
+
+  test("没有本机文件时按项目旧字段，只有一个评审者", () => {
+    const plan = planReviewers({ backend: "claude", model: "opus" }, { local: null, has, overrideBin: undefined, detect });
+    assert.equal(plan.source, "project");
+    assert.equal(plan.candidates.length, 1);
+    assert.equal(plan.candidates[0].model, "opus");
+  });
+});
+
+describe("claude 参数", () => {
+  test("预算不配就不传，推理强度配了才传", () => {
+    const bare = reviewerArgs({ model: "sonnet" });
+    assert.ok(!bare.includes("--max-budget-usd"));
+    assert.ok(!bare.includes("--effort"));
+    const full = reviewerArgs({ model: "sonnet", maxBudgetUsd: 3, effort: "xhigh" });
+    assert.equal(full[full.indexOf("--effort") + 1], "xhigh");
+    assert.equal(full[full.indexOf("--max-budget-usd") + 1], "3");
+  });
+});
+
+describe("多个评审者的回退", () => {
+  test("前一个失败后换下一个，记录里写明谁完成、前面为什么失败，并在输出里点出备选", () => {
+    const repo = setup();
+    const { name, oid } = readyBranch(repo);
+    const claude = fakeClaudes(repo, { "deepseek/deepseek-v4.1-flash": { mode: "fail", message: `Failed to authenticate. API Error: 401 ${KEY}` } });
+    writeReviewers(repo, { reviewers: [FLASH, SONNET] });
+
+    const review = repo.cli("review", "--branch", name);
+    assert.equal(review.status, 0, review.stderr);
+    assert.match(review.stderr, /flash 失败，换下一个/);
+    assert.match(review.stderr, /评审者: sonnet/);
+    assert.match(review.stderr, /由备选 sonnet 完成/);
+    assert.match(review.stderr, /flash: 失败/);
+    assert.deepEqual(claude.calls().map((call) => call.model), ["deepseek/deepseek-v4.1-flash", "sonnet"]);
+
+    const record = readReviewRecord(repo, oid);
+    assert.equal(record.reviewer.name, "sonnet");
+    assert.equal(record.reviewer.source, "local");
+    assert.deepEqual(record.reviewer.actualModels, ["sonnet"]);
+    assert.deepEqual(record.attempts.map((item) => [item.name, item.outcome]), [["flash", "failed"], ["sonnet", "done"]]);
+    assert.match(record.attempts[0].reason, /401/);
+    assert.equal(record.backend, "claude");
+  });
+
+  test("给出结论就停：评审拒绝时不换下一个评审者重评", () => {
+    const repo = setup();
+    const { name } = readyBranch(repo);
+    const reject = {
+      ...APPROVE,
+      verdict: "reject",
+      findings: [{ severity: "high", file: "a.txt", summary: "有问题", scenario: "输入 x 时崩溃" }],
+    };
+    const claude = fakeClaudes(repo, { "deepseek/deepseek-v4.1-flash": { structured: reject } });
+    writeReviewers(repo, { reviewers: [FLASH, SONNET] });
+
+    const review = repo.cli("review", "--branch", name);
+    assert.equal(review.status, 1);
+    assert.match(review.stderr, /评审结论: reject/);
+    assert.equal(claude.calls().length, 1);
+  });
+
+  test("输出不符合结构按失败处理，换下一个", () => {
+    const repo = setup();
+    const { name } = readyBranch(repo);
+    const claude = fakeClaudes(repo, { "deepseek/deepseek-v4.1-flash": { structured: { verdict: "maybe", findings: [] } } });
+    writeReviewers(repo, { reviewers: [FLASH, SONNET] });
+    const review = repo.cli("review", "--branch", name);
+    assert.equal(review.status, 0, review.stderr);
+    assert.equal(claude.calls().length, 2);
+    assert.match(review.stderr, /由备选 sonnet 完成/);
+  });
+
+  test("跳过的评审者不启动进程；全部不可用时逐条列出原因，错误里没有 key", () => {
+    const repo = setup();
+    const { name } = readyBranch(repo);
+    const claude = fakeClaudes(repo, { "*": { mode: "fail", message: `denied ${KEY}` } });
+    writeReviewers(repo, { reviewers: [{ ...FLASH, apiKey: undefined }, FLASH, SONNET] .map((item, index) => (index === 1 ? { ...item, name: "flash2" } : item)) });
+
+    const review = repo.cli("review", "--branch", name);
+    assert.equal(review.status, 1);
+    assert.match(review.stderr, /没有评审者给出结论/);
+    assert.match(review.stderr, /- flash: 跳过，写了 baseUrl 但没有 apiKey/);
+    assert.match(review.stderr, /- flash2: 失败/);
+    assert.match(review.stderr, /- sonnet: 失败/);
+    assert.match(review.stderr, /harness reviewer list/);
+    // 第一个只是跳过，没有启动进程。
+    assert.deepEqual(claude.calls().map((call) => call.model), ["deepseek/deepseek-v4.1-flash", "sonnet"]);
+    assert.doesNotMatch(review.stdout + review.stderr, /SECRET/);
+  });
+
+  test("本机文件不合法时报错，不退回项目旧字段", () => {
+    const repo = setup();
+    const { name } = readyBranch(repo);
+    const claude = fakeClaudes(repo);
+    writeReviewers(repo, { reviewers: [{ ...SONNET, effort: "ultra" }] });
+    const review = repo.cli("review", "--branch", name);
+    assert.equal(review.status, 1);
+    assert.match(review.stderr, /effort 必须是/);
+    assert.equal(claude.calls().length, 0);
+
+    writeFileSync(repo.env.HARNESS_REVIEWERS_FILE, "{ broken");
+    const broken = repo.cli("review", "--branch", name);
+    assert.equal(broken.status, 1);
+    assert.match(broken.stderr, /不是合法的 JSON/);
+    assert.equal(claude.calls().length, 0);
+  });
+});
+
+describe("评审者的环境与参数", () => {
+  test("指定了端点的评审者：清掉继承的 ANTHROPIC_*，key 只走环境变量，推理强度与重试次数传下去", () => {
+    const repo = setup();
+    const { name, oid } = readyBranch(repo);
+    const claude = fakeClaudes(repo);
+    repo.env.ANTHROPIC_BASE_URL = "http://inherited.invalid";
+    repo.env.ANTHROPIC_AUTH_TOKEN = "inherited-token";
+    repo.env.ANTHROPIC_MODEL = "inherited-model";
+    repo.env.CLAUDE_EFFORT = "low";
+    writeReviewers(repo, { reviewers: [FLASH] });
+
+    const review = repo.cli("review", "--branch", name);
+    assert.equal(review.status, 0, review.stderr);
+    const [call] = claude.calls();
+    assert.deepEqual(Object.keys(call.env).filter((key) => key.startsWith("ANTHROPIC_")), []);
+    assert.equal(call.env.HARNESS_REVIEW_API_KEY, KEY);
+    assert.equal(call.env.CLAUDE_CODE_MAX_RETRIES, "2");
+    assert.equal(call.args[call.args.indexOf("--effort") + 1], "high");
+    assert.ok(!call.args.includes("--max-budget-usd"), "没配预算就不传");
+    // settings 里有端点和读 key 的命令，但没有 key 本身；key 也不在命令行参数里。
+    const settings = JSON.parse(call.settings);
+    assert.equal(settings.env.ANTHROPIC_BASE_URL, "https://llm.example.test");
+    assert.match(settings.apiKeyHelper, /HARNESS_REVIEW_API_KEY/);
+    assert.ok(!call.settings.includes(KEY));
+    assert.ok(!call.args.join(" ").includes(KEY));
+    // 记录里有端点主机，没有 key。
+    const record = readReviewRecord(repo, oid);
+    assert.equal(record.reviewer.endpointHost, "llm.example.test");
+    assert.equal(record.reviewer.endpointFrom, "reviewer");
+    assert.equal(record.reviewer.effort, "high");
+    assert.equal(record.reviewer.requestedModel, "deepseek/deepseek-v4.1-flash");
+    assert.ok(!JSON.stringify(record).includes(KEY));
+    assert.ok(!readFileSync(join(repo.env.HARNESS_DATA_DIR, "ledger.jsonl"), "utf8").includes(KEY));
+    assert.ok(!review.stdout.includes(KEY) && !review.stderr.includes(KEY));
+  });
+
+  test("没有指定端点的评审者继承当前环境，不生成评审者 settings", () => {
+    const repo = setup();
+    const { name, oid } = readyBranch(repo);
+    const claude = fakeClaudes(repo);
+    repo.env.ANTHROPIC_BASE_URL = "http://gateway.example.test:8080/path";
+    writeReviewers(repo, { reviewers: [SONNET] });
+    assert.equal(repo.cli("review", "--branch", name).status, 0);
+    const [call] = claude.calls();
+    assert.equal(call.env.ANTHROPIC_BASE_URL, "http://gateway.example.test:8080/path");
+    assert.ok(!call.settings || !call.settings.includes("apiKeyHelper"));
+    assert.ok(!("HARNESS_REVIEW_API_KEY" in call.env));
+    const record = readReviewRecord(repo, oid);
+    assert.equal(record.reviewer.endpointHost, "gateway.example.test:8080");
+    assert.equal(record.reviewer.endpointFrom, "environment");
+  });
+
+  test("配了预算才传 --max-budget-usd，超出预算时点名评审者和调整办法", () => {
+    const repo = setup();
+    const { name } = readyBranch(repo);
+    const claude = fakeClaudes(repo);
+    writeReviewers(repo, { reviewers: [{ ...SONNET, maxBudgetUsd: 3 }] });
+    assert.equal(repo.cli("review", "--branch", name).status, 0);
+    const [call] = claude.calls();
+    assert.equal(call.args[call.args.indexOf("--max-budget-usd") + 1], "3");
+
+    const budget = setup();
+    const branch = readyBranch(budget);
+    fakeClaudes(budget, { "*": { mode: "fail" } });
+    const script = join(budget.root, "..", "fake-claude-multi.mjs");
+    writeFileSync(
+      script,
+      `#!/usr/bin/env node\nimport { readFileSync } from "node:fs";\nreadFileSync(0);\nprocess.stdout.write(${JSON.stringify(JSON.stringify({ is_error: true, subtype: "error_max_budget_usd", total_cost_usd: 3.2 }))});\nprocess.exit(1);\n`,
+    );
+    chmodSync(script, 0o755);
+    writeReviewers(budget, { reviewers: [{ ...SONNET, maxBudgetUsd: 3 }] });
+    const over = budget.cli("review", "--branch", branch.name);
+    assert.equal(over.status, 1);
+    assert.match(over.stderr, /评审者 sonnet 的 maxBudgetUsd（3 美元，本次已花 3\.2）/);
+    assert.match(over.stderr, /harness reviewer set sonnet --max-budget-usd/);
+  });
+
+  test("codex 评审者：模型用 --model，推理强度用 -c model_reasoning_effort", () => {
+    const repo = setup();
+    const { name } = readyBranch(repo);
+    const log = fakeCodex(repo, APPROVE);
+    writeReviewers(repo, { reviewers: [{ name: "codex", client: "codex", model: "gpt-x", effort: "xhigh" }] });
+    const review = repo.cli("review", "--branch", name);
+    assert.equal(review.status, 0, review.stderr);
+    const call = JSON.parse(readFileSync(log, "utf8"));
+    assert.equal(call.args[call.args.indexOf("--model") + 1], "gpt-x");
+    const at = call.args.indexOf("-c");
+    assert.equal(call.args[at + 1], 'model_reasoning_effort="xhigh"');
+  });
+
+  test("codex 评审者写了 baseUrl 在读取时就报错", () => {
+    const repo = setup();
+    const { name } = readyBranch(repo);
+    fakeCodex(repo, APPROVE);
+    writeReviewers(repo, { reviewers: [{ name: "codex", client: "codex", baseUrl: "https://x.test" }] });
+    const review = repo.cli("review", "--branch", name);
+    assert.equal(review.status, 1);
+    assert.match(review.stderr, /baseUrl 目前只对 claude 客户端有效/);
+  });
+
+  test("command 评审者通过环境变量拿到推理强度与模型", () => {
+    const repo = setup();
+    const { name } = readyBranch(repo);
+    const out = join(repo.root, "..", "env-seen.txt");
+    const script = `cat >/dev/null; printf '%s|%s' "$HARNESS_REVIEW_EFFORT" "$HARNESS_REVIEW_MODEL" > "$0"; printf '%s' '${JSON.stringify(APPROVE)}'`;
+    writeReviewers(repo, { reviewers: [{ name: "mine", client: "command", model: "my-model", effort: "medium", command: ["sh", "-c", script, out] }] });
+    const review = repo.cli("review", "--branch", name);
+    assert.equal(review.status, 0, review.stderr);
+    assert.equal(readFileSync(out, "utf8"), "medium|my-model");
+  });
+});
+
+describe("优先使用与会话不同的模型", () => {
+  function sessionHome(repo, model) {
+    const home = tempDir();
+    const dir = join(home, ".claude", "projects", "-proj");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "sess-9.jsonl"), `${JSON.stringify({ type: "assistant", message: { model, content: [] } })}\n`);
+    repo.env.HOME = home;
+    repo.env.CLAUDE_CODE_SESSION_ID = "sess-9";
+  }
+  const OPUS = { name: "opus", client: "claude", model: "anthropic/claude-opus-5.5" };
+
+  test("与会话同模型的评审者后移，记录里写明会话模型与前后顺序", () => {
+    const repo = setup();
+    const { name, oid } = readyBranch(repo);
+    const claude = fakeClaudes(repo);
+    sessionHome(repo, "claude-opus-5-5");
+    writeReviewers(repo, { reviewers: [OPUS, SONNET] });
+
+    const review = repo.cli("review", "--branch", name);
+    assert.equal(review.status, 0, review.stderr);
+    assert.deepEqual(claude.calls().map((call) => call.model), ["sonnet"]);
+    assert.match(review.stderr, /与会话模型 claude-opus-5-5 相同的排到了后面/);
+    const record = readReviewRecord(repo, oid);
+    assert.equal(record.reviewerSelection.sessionModel, "claude-opus-5-5");
+    assert.equal(record.reviewerSelection.reordered, true);
+    assert.deepEqual(record.reviewerSelection.configuredOrder, ["opus", "sonnet"]);
+    assert.deepEqual(record.reviewerSelection.order, ["sonnet", "opus"]);
+  });
+
+  test("只有同模型的评审者时仍然使用它，作为最后的备选", () => {
+    const repo = setup();
+    const { name } = readyBranch(repo);
+    const claude = fakeClaudes(repo);
+    sessionHome(repo, "claude-opus-5-5");
+    writeReviewers(repo, { reviewers: [OPUS] });
+    assert.equal(repo.cli("review", "--branch", name).status, 0);
+    assert.deepEqual(claude.calls().map((call) => call.model), ["anthropic/claude-opus-5.5"]);
+  });
+
+  test("关闭开关或识别不出会话模型时按文件里的顺序", () => {
+    const off = setup();
+    const a = readyBranch(off);
+    const offClaude = fakeClaudes(off);
+    sessionHome(off, "claude-opus-5-5");
+    writeReviewers(off, { preferDifferentModel: false, reviewers: [OPUS, SONNET] });
+    assert.equal(off.cli("review", "--branch", a.name).status, 0);
+    assert.deepEqual(offClaude.calls().map((call) => call.model), ["anthropic/claude-opus-5.5"]);
+
+    const unknown = setup();
+    const b = readyBranch(unknown);
+    const unknownClaude = fakeClaudes(unknown);
+    writeReviewers(unknown, { reviewers: [OPUS, SONNET] });
+    const review = unknown.cli("review", "--branch", b.name);
+    assert.equal(review.status, 0, review.stderr);
+    assert.deepEqual(unknownClaude.calls().map((call) => call.model), ["anthropic/claude-opus-5.5"]);
+    assert.match(review.stderr, /会话模型未知/);
+    assert.equal(readReviewRecord(unknown, git(unknown.root, "rev-parse", b.name)).reviewerSelection.sessionModel, null);
+  });
+});
+
+describe("没有本机文件", () => {
+  test("按项目旧字段运行，记录写明来源是项目配置；旧字段没配预算时不传预算", () => {
+    const noBudget = { ...CONFIG, review: { model: "sonnet", blockSeverities: ["high", "critical"] } };
+    const repo = setup({ project: { ".harness/config.json": noBudget } });
+    const { name, oid } = readyBranch(repo);
+    const claude = fakeClaudes(repo);
+    const review = repo.cli("review", "--branch", name);
+    assert.equal(review.status, 0, review.stderr);
+    const [call] = claude.calls();
+    assert.ok(!call.args.includes("--max-budget-usd"));
+    assert.ok(!("CLAUDE_CODE_MAX_RETRIES" in call.env) || call.env.CLAUDE_CODE_MAX_RETRIES === process.env.CLAUDE_CODE_MAX_RETRIES);
+    const record = readReviewRecord(repo, oid);
+    assert.equal(record.reviewer.source, "project");
+    assert.equal(record.reviewer.name, "claude");
+    assert.equal(record.reviewerSelection.source, "project");
+  });
+
+  test("旧字段配了预算照旧传", () => {
+    const repo = setup();
+    const { name } = readyBranch(repo);
+    const claude = fakeClaudes(repo);
+    assert.equal(repo.cli("review", "--branch", name).status, 0);
+    const [call] = claude.calls();
+    assert.equal(call.args[call.args.indexOf("--max-budget-usd") + 1], "1");
+  });
+});
