@@ -224,18 +224,20 @@ export async function checkGates({ project, root, branch, log = console.error, d
   if (bootstrap || change.changed || (governance.confirmOnGateChange !== false && gateTouched.length > 0)) {
     const confirm = readRecord(root, "confirm", resultTree);
     if (!confirm.ok || confirm.record.decision !== "approve") {
+      // merge 与 submit 共用这段核对，拒绝信息按调用方说清是哪一步之前要确认。
+      const when = label === "submit" ? "提交前" : "合并前";
       const reason = bootstrap
-        ? "首次接入会把这个分支里的门禁配置变成主分支的信任根，需要人在合并前确认一次。"
+        ? `首次接入会把这个分支里的门禁配置变成主分支的信任根，需要人在${when}确认一次。`
         : change.changed
-          ? `本次改动改变了交付设置（${describeChange(change)}），需要人在合并前确认一次。`
-          : `本次改动涉及门禁配置或规则(${gateTouched.length} 个文件)，需要人在合并前确认一次。`;
+          ? `本次改动改变了交付设置（${describeChange(change)}），需要人在${when}确认一次。`
+          : `本次改动涉及门禁配置或规则(${gateTouched.length} 个文件)，需要人在${when}确认一次。`;
       throw new MergeError(
         [
           reason,
           `  ${(change.changed ? resultPaths.filter((path) => matchAny(path, [".harness/config.json"])) : gateTouched).slice(0, 12).join("\n  ")}`,
           `由人查看并确认: harness confirm --branch ${branch}，确认无误后加 --yes`,
           "Agent 不能代为确认；在 Claude Code 里可以让用户在输入框执行 ! .harness/bin/harness confirm --branch <分支> --yes",
-          "确认后重新运行。",
+          `确认后重新运行 harness ${label} --branch ${branch}。`,
         ].join("\n"),
         "gate_change_unconfirmed",
       );

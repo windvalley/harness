@@ -27,6 +27,8 @@ export function branchStatus({ cwd, branch }) {
   const root = project.root;
   const mainRef = mainBranch(project);
   const delivery = deliverySettings(project.config);
+  // 远程交付下门禁在 submit 时核对，提示里说“提交前”；本地交付说“合并前”。
+  const when = delivery.mode === "remote" ? "提交前" : "合并前";
   const result = { branch, mainRef, delivery, steps: [], ready: false, blockers: [] };
   const add = (id, state, detail) => result.steps.push({ id, state, detail });
 
@@ -121,7 +123,7 @@ export function branchStatus({ cwd, branch }) {
     const confirms = confirmFor(project, root, branch);
     if (confirms.ok) add("gate", "ok", "首次接入的门禁配置已确认");
     else {
-      add("gate", "fail", `首次接入，合并前需要人确认这份门禁配置：harness confirm --branch ${branch}`);
+      add("gate", "fail", `首次接入，${when}需要人确认这份门禁配置：harness confirm --branch ${branch}`);
       result.blockers.push("首次接入待确认");
     }
     if (delivery.mode === "remote") submitStep({ result, add, root, branch, branchCommit });
@@ -140,7 +142,7 @@ export function branchStatus({ cwd, branch }) {
     const anyConfirm = confirms.ok;
     if (anyConfirm) add("gate", "ok", `门禁改动已确认（${gateTouched.length} 个文件）`);
     else {
-      add("gate", "fail", `改动涉及门禁 ${gateTouched.length} 个文件，合并前需要人工确认：harness confirm --branch ${branch}`);
+      add("gate", "fail", `改动涉及门禁 ${gateTouched.length} 个文件，${when}需要人工确认：harness confirm --branch ${branch}`);
       result.blockers.push("门禁改动待确认");
     }
   }

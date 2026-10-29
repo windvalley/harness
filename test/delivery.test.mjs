@@ -206,6 +206,8 @@ describe("配置与默认行为", () => {
     const refused = repo.cli("merge", "--branch", "chore/enable");
     assert.notEqual(refused.status, 0);
     assert.match(refused.stderr, /gate_change_unconfirmed/);
+    assert.match(refused.stderr, /合并前确认一次/);
+    assert.match(refused.stderr, /确认后重新运行 harness merge --branch chore\/enable/);
     assert.match(refused.stderr, /交付设置/);
     assert.equal(repo.cli("confirm", "--branch", "chore/enable", "--yes").status, 0);
     const merged = repo.cli("merge", "--branch", "chore/enable");
@@ -826,6 +828,9 @@ describe("开启、关闭与首次接入", () => {
     const refused = repo.cli("submit", "--branch", "chore/enable-remote");
     assert.notEqual(refused.status, 0);
     assert.match(refused.stderr, /gate_change_unconfirmed/);
+    assert.match(refused.stderr, /提交前确认一次/, "submit 的拒绝说提交前，不说合并前");
+    assert.match(refused.stderr, /确认后重新运行 harness submit --branch chore\/enable-remote/);
+    assert.equal(refused.stderr.includes("合并前"), false, refused.stderr);
     assert.equal(remoteRef(remote, "refs/heads/chore/enable-remote"), null);
 
     const summary = repo.cli("confirm", "--branch", "chore/enable-remote");
@@ -855,6 +860,9 @@ describe("开启、关闭与首次接入", () => {
     fakePlatform(repo);
     const head = setDelivery(repo, "chore/disable-remote", null);
     assert.match(repo.cli("submit", "--branch", "chore/disable-remote").stderr, /gate_change_unconfirmed/);
+    const pending = repo.cli("status", "--branch", "chore/disable-remote");
+    assert.match(pending.stdout, /提交前需要人工确认/, pending.stdout);
+    assert.equal(pending.stdout.includes("合并前"), false, pending.stdout);
     assert.equal(repo.cli("confirm", "--branch", "chore/disable-remote", "--yes").status, 0);
     const submitted = repo.cli("submit", "--branch", "chore/disable-remote");
     assert.equal(submitted.status, 0, output(submitted));
