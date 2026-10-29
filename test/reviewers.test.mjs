@@ -814,6 +814,26 @@ describe("codex review 发现的问题", () => {
     assert.equal(reviewerSummary({ reviewer: { name: "codex", client: "codex", effort: "low" } }), "codex / effort low", "名称与客户端相同就不重复");
   });
 
+  test("发往平台的摘要不含端点域名，只说明是自定义端点还是来自环境变量", () => {
+    const reviewer = { name: "x", client: "claude", requestedModel: "m", effort: "high" };
+    const platform = { forPlatform: true };
+    assert.equal(reviewerSummary({ reviewer: { ...reviewer, endpointHost: "gw.internal.test", endpointFrom: "reviewer" } }, platform), "x / claude / m / effort high / 自定义端点");
+    assert.equal(reviewerSummary({ reviewer: { ...reviewer, endpointHost: "gw.internal.test", endpointFrom: "environment" } }, platform), "x / claude / m / effort high / 端点来自环境变量");
+    assert.equal(reviewerSummary({ reviewer }, platform), "x / claude / m / effort high", "没有端点信息就不写");
+    const text = reviewerSummary({ reviewer: { ...reviewer, endpointHost: "gw.internal.test", endpointFrom: "reviewer" }, attempts: [{ name: "y", outcome: "failed", reason: "ENOTFOUND gw.internal.test" }, { name: "x", outcome: "done" }] }, platform);
+    assert.doesNotMatch(text, /gw\.internal\.test/);
+    assert.match(text, /由备选完成/);
+  });
+
+  test("status 是本机输出，继续显示端点域名", () => {
+    const repo = setup();
+    const { name } = readyBranch(repo);
+    fakeClaudes(repo);
+    writeReviewers(repo, { reviewers: [FLASH] });
+    assert.equal(repo.cli("review", "--branch", name).status, 0);
+    assert.match(repo.cli("status", "--branch", name).stdout, /评审者 flash \/ claude \/ .* \/ 端点 llm\.example\.test/);
+  });
+
   test("没有本机文件时 list 与 init 按项目实际的旧字段说明，不用默认值去猜", () => {
     const legacy = { ...CONFIG, review: { backend: "command", command: ["sh", "-c", "cat >/dev/null"], blockSeverities: ["high"] } };
     const repo = setup({ project: { ".harness/config.json": legacy } });

@@ -84,7 +84,7 @@ function describeGates({ evidence, review, approval }) {
   if (review) {
     lines.push(
       `- 独立评审: ${review.verdict}（需求符合度 ${review.requirementFit?.rating ?? "?"}，工程质量 ${review.engineeringQuality?.rating ?? "?"}，清单来源 ${review.acceptanceSource ?? "无"}）`,
-      `  - 评审者: ${reviewerSummary(review)}`,
+      `  - 评审者: ${reviewerSummary(review, { forPlatform: true })}`,
     );
     for (const finding of review.findings ?? []) {
       if (finding.severity === "info") continue;

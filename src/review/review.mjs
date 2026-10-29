@@ -754,12 +754,16 @@ function modelLabel(reviewer) {
 }
 
 /** 一行说清评审由谁完成，给 status、PR 描述这类只有一行位置的地方用。旧记录没有这项，写“未记录”。 */
-export function reviewerSummary(record) {
+export function reviewerSummary(record, { forPlatform = false } = {}) {
   const reviewer = record?.reviewer;
   if (!reviewer) return "未记录";
   const fallback = (record.attempts ?? []).some((item) => item.outcome !== "done") ? "，由备选完成" : "";
   // 名称、模型、强度都相同时，客户端和端点是区分两次评审是否真是同一套配置的仅有线索，平台上的评审人看不到本机记录。
-  const endpoint = reviewer.endpointHost && `端点 ${reviewer.endpointHost}${reviewer.endpointFrom === "environment" ? "（来自环境变量）" : ""}`;
+  // 发往平台的摘要（PR/MR 描述）不带端点域名：内部网关的域名不该外露，只说明是不是评审者自己指定的端点；本机输出照常写域名。
+  const fromEnv = reviewer.endpointFrom === "environment";
+  const endpoint =
+    reviewer.endpointHost &&
+    (forPlatform ? (fromEnv ? "端点来自环境变量" : "自定义端点") : `端点 ${reviewer.endpointHost}${fromEnv ? "（来自环境变量）" : ""}`);
   const parts = [
     reviewer.name,
     reviewer.client !== reviewer.name && reviewer.client,

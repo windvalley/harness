@@ -321,6 +321,26 @@ describe("harness submit", () => {
     assert.equal(result.stderr.includes("[merge]"), false, "submit 的日志不用 merge 的前缀");
   });
 
+  test("PR 描述和推送里不出现评审用的端点域名，只说明是自定义端点", () => {
+    const repo = setup({ delivery: GITHUB });
+    const remote = withRemote(repo);
+    const platform = fakePlatform(repo);
+    const head = task(repo);
+    const HOST = "gw.internal.test";
+    writeReview(repo, head, "approve", {
+      reviewer: { name: "flash", client: "claude", requestedModel: "m", actualModels: ["m"], effort: "high", endpointHost: HOST, endpointFrom: "reviewer" },
+      attempts: [{ name: "other", outcome: "failed", reason: `getaddrinfo ENOTFOUND ${HOST}` }, { name: "flash", outcome: "done" }],
+    });
+
+    const result = repo.cli("submit", "--branch", "task/a");
+    assert.equal(result.status, 0, output(result));
+    const body = platform.items()[0].body;
+    assert.match(body, /- 评审者: flash \/ claude \/ m \/ effort high \/ 自定义端点，由备选完成/);
+    assert.equal(body.includes(HOST), false, "描述里不能有端点域名");
+    assert.equal(JSON.stringify(platform.calls()).includes(HOST), false, "发给平台的所有调用里都不能有端点域名");
+    assert.equal(sh(remote, "git", ["--git-dir", remote, "log", "--all", "--format=%B"]).stdout.includes(HOST), false, "推送上去的提交里不能有端点域名");
+  });
+
   test("R5 已有 MR 时只替换 harness 管理的区块，保留团队写的说明，不新建", () => {
     const repo = setup({ delivery: GITLAB });
     withRemote(repo);
