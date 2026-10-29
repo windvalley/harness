@@ -20,14 +20,9 @@ function defaultConfig({ mainBranch }) {
       commitMessagePattern: "^[a-z]+(\\([^)]+\\))?: .+\\n\\n(- .+\\n?)+$",
       forbidMessagePatterns: ["^Co-Authored-By:", "^Co-authored-by:"],
     },
-    // backend 取 auto 时按 claude、codex 顺序用本机第一个可用的；其他工具用 command 接入。
-    // maxDiffChars：单次评审能接受的 diff 字符数，超过时拒绝评审并给出拆分建议。
+    // 只放判据：哪些级别的发现阻断合并、单次评审能接受的 diff 字符数（超过时拒绝评审并给出拆分建议）。
+    // 用哪个评审客户端、模型、推理强度和端点是各机器自己的事，放在本机 ~/.config/harness/reviewers.json，用 harness reviewer 管理。
     review: {
-      backend: "auto",
-      model: "sonnet",
-      maxBudgetUsd: 2,
-      codexModel: null,
-      command: null,
       blockSeverities: ["high", "critical"],
       maxDiffChars: 300000,
     },

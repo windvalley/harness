@@ -1,10 +1,10 @@
 import { strict as assert } from "node:assert";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
-import { APPROVE, CONFIG, fakeClaudes, fakeCodex, git, makeRepo, readReviewRecord, writeReviewers } from "./helpers.mjs";
-import { describePlan, planReviewers, reviewerArgs } from "../src/review/review.mjs";
+import { APPROVE, CONFIG, fakeClaudes, fakeCodex, git, makeRepo, PACKAGE_ROOT, readReviewRecord, sh, writeReviewers } from "./helpers.mjs";
+import { describePlan, planReviewers, reviewerArgs, reviewerLines, reviewerSummary } from "../src/review/review.mjs";
 import { loadLocalReviewers, maskKey, orderReviewers, parseReviewers } from "../src/review/reviewers.mjs";
 import { detectSessionModel, normalizeModel, sameModel } from "../src/review/session.mjs";
 
@@ -501,5 +501,199 @@ describe("没有本机文件", () => {
     assert.equal(repo.cli("review", "--branch", name).status, 0);
     const [call] = claude.calls();
     assert.equal(call.args[call.args.indexOf("--max-budget-usd") + 1], "1");
+  });
+});
+
+// harness reviewer 不依赖仓库，直接用源码里的入口运行；key 经标准输入传入。
+function reviewerCli(repo, args, input) {
+  return sh(repo.root, process.execPath, [join(PACKAGE_ROOT, "bin", "harness.mjs"), "reviewer", ...args], repo.env, input);
+}
+const fileOf = (repo) => repo.env.HARNESS_REVIEWERS_FILE;
+const readFile = (repo) => JSON.parse(readFileSync(fileOf(repo), "utf8"));
+
+describe("harness reviewer 命令", () => {
+  test("set 新增评审者：key 从标准输入读，文件权限 600，输出和 list 里 key 只露末 4 位", () => {
+    const repo = setup();
+    const created = reviewerCli(
+      repo,
+      ["set", "flash", "--client", "claude", "--model", "deepseek/deepseek-v4.1-flash", "--base-url", "https://llm.example.test", "--api-key-stdin", "--effort", "high", "--timeout-minutes", "30"],
+      `${KEY}\n`,
+    );
+    assert.equal(created.status, 0, created.stderr);
+    assert.match(created.stdout, /已新增评审者 flash/);
+    assert.doesNotMatch(created.stdout + created.stderr, /sk-test-0123456789abcdef-SECRET/);
+    assert.equal(statSync(fileOf(repo)).mode & 0o777, 0o600);
+    assert.deepEqual(readFile(repo).reviewers[0], {
+      name: "flash",
+      client: "claude",
+      model: "deepseek/deepseek-v4.1-flash",
+      baseUrl: "https://llm.example.test",
+      apiKey: KEY,
+      effort: "high",
+      timeoutMinutes: 30,
+    });
+
+    const listed = reviewerCli(repo, ["list"]);
+    assert.equal(listed.status, 0, listed.stderr);
+    assert.match(listed.stdout, /1\. flash\s+claude，deepseek\/deepseek-v4\.1-flash，effort high，端点 llm\.example\.test，key \*\*\*\*CRET，超时 30 分钟/);
+    assert.doesNotMatch(listed.stdout, /sk-test-0123456789abcdef-SECRET/);
+  });
+
+  test("新评审者必须指明 --client；非法取值被拒绝且文件原样不动", () => {
+    const repo = setup();
+    const missing = reviewerCli(repo, ["set", "x", "--model", "m"]);
+    assert.equal(missing.status, 1);
+    assert.match(missing.stderr, /必须用 --client/);
+    assert.equal(existsSync(fileOf(repo)), false);
+
+    assert.equal(reviewerCli(repo, ["set", "sonnet", "--client", "claude", "--model", "sonnet"]).status, 0);
+    const before = readFileSync(fileOf(repo), "utf8");
+    const bad = reviewerCli(repo, ["set", "sonnet", "--effort", "ultra"]);
+    assert.equal(bad.status, 1);
+    assert.match(bad.stderr, /effort 必须是/);
+    assert.equal(readFileSync(fileOf(repo), "utf8"), before);
+  });
+
+  test("修改已有评审者只改给出的字段，--clear 清字段，--first 调到最前", () => {
+    const repo = setup();
+    reviewerCli(repo, ["set", "flash", "--client", "claude", "--model", "m1", "--effort", "low"]);
+    reviewerCli(repo, ["set", "sonnet", "--client", "claude", "--model", "sonnet"]);
+    reviewerCli(repo, ["set", "flash", "--model", "m2"]);
+    assert.deepEqual(readFile(repo).reviewers.map((item) => [item.name, item.model, item.effort]), [["flash", "m2", "low"], ["sonnet", "sonnet", undefined]]);
+
+    reviewerCli(repo, ["set", "flash", "--clear", "effort"]);
+    assert.equal(readFile(repo).reviewers[0].effort, undefined);
+    assert.match(reviewerCli(repo, ["set", "flash", "--clear", "client"]).stderr, /--clear 只能清/);
+
+    reviewerCli(repo, ["set", "sonnet", "--first"]);
+    assert.deepEqual(readFile(repo).reviewers.map((item) => item.name), ["sonnet", "flash"]);
+  });
+
+  test("remove 删除评审者，删掉最后一个时移除文件，回到项目旧字段", () => {
+    const repo = setup();
+    reviewerCli(repo, ["set", "a", "--client", "claude", "--model", "m"]);
+    reviewerCli(repo, ["set", "b", "--client", "codex"]);
+    assert.match(reviewerCli(repo, ["remove", "nope"]).stderr, /没有评审者 nope/);
+    assert.match(reviewerCli(repo, ["remove", "a"]).stdout, /还剩 b/);
+    const last = reviewerCli(repo, ["remove", "b"]);
+    assert.equal(last.status, 0);
+    assert.match(last.stdout, /本机文件已移除/);
+    assert.equal(existsSync(fileOf(repo)), false);
+  });
+
+  test("prefer 切换优先使用不同模型的开关，没有文件时提示先新增", () => {
+    const repo = setup();
+    assert.match(reviewerCli(repo, ["prefer", "off"]).stderr, /先用 harness reviewer set/);
+    reviewerCli(repo, ["set", "a", "--client", "claude", "--model", "m"]);
+    assert.equal(reviewerCli(repo, ["prefer", "off"]).status, 0);
+    assert.equal(readFile(repo).preferDifferentModel, false);
+    assert.match(reviewerCli(repo, ["list"]).stdout, /优先使用与会话模型不同的评审者: 关/);
+    reviewerCli(repo, ["prefer", "on"]);
+    assert.equal(readFile(repo).preferDifferentModel, true);
+    assert.match(reviewerCli(repo, ["prefer", "maybe"]).stderr, /on 或 off/);
+  });
+
+  test("没有本机文件时 list 说明当前按旧字段运行，并给出配置示例", () => {
+    const repo = setup();
+    fakeClaudes(repo);
+    const listed = reviewerCli(repo, ["list"]);
+    assert.equal(listed.status, 0, listed.stderr);
+    assert.match(listed.stdout, /（不存在）/);
+    assert.match(listed.stdout, /当前按项目配置里的旧字段运行/);
+    assert.match(listed.stdout, /harness reviewer set flash --client claude/);
+  });
+
+  test("list 标出不可用的评审者和原因；全部不可用时退出码为 1", () => {
+    const repo = setup();
+    writeReviewers(repo, { reviewers: [{ ...FLASH, apiKey: undefined }] });
+    const listed = reviewerCli(repo, ["list"]);
+    assert.equal(listed.status, 1);
+    assert.match(listed.stdout, /\[不可用: 写了 baseUrl 但没有 apiKey/);
+    assert.match(listed.stdout, /没有可用的评审者/);
+  });
+
+  test("test 实际跑一次：可用时报耗时和实际模型，不可用时给出原因且不带 key", () => {
+    const repo = setup();
+    const claude = fakeClaudes(repo, { "deepseek/deepseek-v4.1-flash": { actual: "DeepSeek-V4.1-Flash" } });
+    writeReviewers(repo, { reviewers: [FLASH, { ...SONNET, name: "broken" }] });
+    const ok = reviewerCli(repo, ["test", "flash"]);
+    assert.equal(ok.status, 0, ok.stdout + ok.stderr);
+    assert.match(ok.stdout, /可用。耗时 .* 秒，实际模型 DeepSeek-V4\.1-Flash/);
+    assert.equal(claude.calls().length, 1);
+    assert.doesNotMatch(ok.stdout + ok.stderr, /sk-test-0123456789abcdef-SECRET/);
+
+    fakeClaudes(repo, { "*": { mode: "fail", message: `401 ${KEY}` } });
+    const bad = reviewerCli(repo, ["test", "broken"]);
+    assert.equal(bad.status, 1);
+    assert.match(bad.stdout, /不可用: .*401/);
+    assert.match(reviewerCli(repo, ["test", "nope"]).stderr, /没有评审者 nope/);
+  });
+});
+
+describe("评审者的显示", () => {
+  test("doctor 列出本机评审者；全部不可用时失败；项目里的旧字段提示可删", () => {
+    const repo = setup();
+    fakeClaudes(repo);
+    writeReviewers(repo, { reviewers: [{ ...FLASH, apiKey: undefined }, SONNET] });
+    const ok = repo.cli("doctor");
+    assert.match(ok.stdout, /\[ok\] review: 独立评审者（本机文件）: flash\(.*\)\[不可用\] -> sonnet\(sonnet\)/);
+    assert.match(ok.stdout, /不可用 flash: 写了 baseUrl 但没有 apiKey/);
+    assert.match(ok.stdout, /review:legacy: 项目配置的 review\.model、maxBudgetUsd 已被本机评审者文件取代/);
+
+    writeReviewers(repo, { reviewers: [{ ...FLASH, apiKey: undefined }] });
+    const none = repo.cli("doctor");
+    assert.notEqual(none.status, 0);
+    assert.match(none.stdout, /\[!!\] review: 本机评审者全部不可用/);
+
+    writeFileSync(fileOf(repo), "{ broken");
+    assert.match(repo.cli("doctor").stdout, /\[!!\] review: .*不是合法的 JSON/);
+  });
+
+  test("doctor 在没有本机文件时提示可以用 harness reviewer 配置", () => {
+    const repo = setup();
+    fakeClaudes(repo);
+    const report = repo.cli("doctor");
+    assert.match(report.stdout, /review:config: 没有本机评审者文件.*harness reviewer set/);
+  });
+
+  test("status 写出评审者与模型，旧记录显示未记录", () => {
+    const repo = setup();
+    const { name } = readyBranch(repo);
+    fakeClaudes(repo);
+    writeReviewers(repo, { reviewers: [{ ...SONNET, effort: "high" }] });
+    assert.equal(repo.cli("review", "--branch", name).status, 0);
+    assert.match(repo.cli("status", "--branch", name).stdout, /评审通过（.*评审者 sonnet \/ sonnet \/ effort high）/);
+
+    assert.equal(reviewerSummary({ verdict: "approve" }), "未记录");
+    assert.deepEqual(reviewerLines({ verdict: "approve" }), ["  评审者: 未记录"]);
+  });
+
+  test("摘要与明细标出备选完成、实际模型与请求模型不同、端点来自环境变量", () => {
+    const record = {
+      reviewer: { name: "sonnet", client: "claude", requestedModel: "sonnet", actualModels: ["anthropic/claude-sonnet-5.5"], effort: "high", endpointHost: "gw.test", endpointFrom: "environment", durationMs: 12_345 },
+      attempts: [{ name: "flash", outcome: "failed", reason: "401\n多行" }, { name: "sonnet", outcome: "done" }],
+      reviewerSelection: { reordered: true, sessionModel: "claude-opus-5-5", order: ["flash", "sonnet", "opus"] },
+    };
+    assert.equal(reviewerSummary(record), "sonnet / sonnet（实际 anthropic/claude-sonnet-5.5） / effort high，由备选完成");
+    const lines = reviewerLines(record).join("\n");
+    assert.match(lines, /评审者: sonnet（claude，模型 sonnet（实际 anthropic\/claude-sonnet-5\.5），effort high，端点 gw\.test（来自环境变量）），耗时 12\.3 秒/);
+    assert.match(lines, /由备选 sonnet 完成/);
+    assert.match(lines, /flash: 失败，401$/m);
+    assert.match(lines, /顺序已按会话模型 claude-opus-5-5 调整: flash -> sonnet -> opus/);
+  });
+
+  test("init 不再往项目配置写评审者相关的旧字段，结束时说明怎样配置本机评审者", () => {
+    const fresh = makeRepo({ install: false, project: { ".harness/config.json": null, ".harness/policy.json": null, ".harness/verify.json": null } });
+    repos.push(fresh);
+    const init = fresh.rawCli("init");
+    assert.equal(init.status, 0, init.stderr);
+    const generated = JSON.parse(readFileSync(join(fresh.root, ".harness/config.json"), "utf8"));
+    assert.deepEqual(Object.keys(generated.review).sort(), ["blockSeverities", "maxDiffChars"]);
+    assert.match(init.stdout, /评审者: 本机还没有 .*reviewers\.json/);
+    assert.match(init.stdout, /harness reviewer set <名称> --client claude --model <模型>/);
+
+    writeReviewers(fresh, { reviewers: [SONNET] });
+    const again = fresh.rawCli("init");
+    assert.match(again.stdout, /评审者: 本机文件 .* 里配了 1 个：sonnet\(sonnet\)/);
   });
 });

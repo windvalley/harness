@@ -212,7 +212,9 @@ function claudeFailure(payload, entry) {
       `按目录拆小分支后分别评审，或${how}`
     );
   }
-  return `评审进程报错(${payload.subtype ?? "error"}): ${detail}`;
+  // 鉴权失败这类错误 claude 也会报 subtype 为 success，写进报错只会误导，按通用的 error 处理。
+  const subtype = payload.subtype && payload.subtype !== "success" ? payload.subtype : "error";
+  return `评审进程报错(${subtype}): ${detail}`;
 }
 
 // 评审者指定了端点时，key 只经子进程的环境变量交给 apiKeyHelper，不出现在命令行参数和 settings 文件的内容里。
@@ -764,4 +766,32 @@ export function reviewerLines(record) {
   const selection = record.reviewerSelection;
   if (selection?.reordered) lines.push(`  顺序已按会话模型 ${selection.sessionModel} 调整: ${selection.order.join(" -> ")}`);
   return lines;
+}
+
+/**
+ * 用一个极小的材料实际跑一次指定评审者，确认客户端、端点、key、模型和结构化输出都能用。
+ * 不写任何记录。结论是通过还是拒绝无所谓，能解析出结构化结果才算可用。
+ */
+export function probeReviewer(entry, { has = commandExists, overrideBin = process.env.HARNESS_REVIEWER_BIN } = {}) {
+  const candidate = localCandidate(entry, { has, overrideBin });
+  if (candidate.skip) throw new Error(candidate.skip);
+  const prompt = buildPrompt({
+    acceptance: null,
+    evidence: "状态: passed（评审者连通性测试，不是真实任务）",
+    commits: "- chore: 连通性测试",
+    stats: "共 1 个文件，+1 -0 行",
+    diff: "diff --git a/probe.txt b/probe.txt\n--- a/probe.txt\n+++ b/probe.txt\n@@ -1 +1,2 @@\n hello\n+world\n",
+    branch: "probe",
+  });
+  const cwd = mkdtempSync(join(tmpdir(), "harness-probe-"));
+  const started = Date.now();
+  try {
+    const outcome = runEntry({ cwd, prompt, entry: candidate });
+    parseVerdict(outcome.structured);
+    return { models: outcome.models, costUsd: outcome.costUsd, durationMs: Date.now() - started };
+  } catch (error) {
+    throw new Error(scrub(error.message, [entry.apiKey].filter(Boolean)));
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
 }

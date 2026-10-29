@@ -5,7 +5,8 @@ import { deliverySettings, loadCurrentProject, mainBranch } from "../lib/config.
 import { git, mainWorktreeRoot, repoRoot } from "../lib/git.mjs";
 import { keyStatus } from "../lib/store.mjs";
 import { mainWorktreeProblems } from "../merge/merge.mjs";
-import { commandExists, maxDiffChars, resolveBackend } from "../review/review.mjs";
+import { commandExists, describePlan, maxDiffChars, planReviewers, resolveBackend } from "../review/review.mjs";
+import { loadLocalReviewers } from "../review/reviewers.mjs";
 import { resolvePolicy } from "../policy/resolve.mjs";
 import { packageVersion, MARK_START } from "./managed.mjs";
 import { leftoverWorktrees } from "../worktree/clean.mjs";
@@ -260,15 +261,33 @@ export function doctor({ cwd = process.cwd() } = {}) {
       try {
         const reviewConfig = project.config.review ?? {};
         maxDiffChars(reviewConfig);
-        const backend = resolveBackend(reviewConfig);
-        const label = backend.name === "command" ? `command(${backend.argv[0]})` : backend.name;
-        const how = (reviewConfig.backend ?? "auto") === "auto" ? "，由 auto 选中" : "";
-        const bin = backend.bin ?? backend.argv[0];
-        checks.push(
-          commandExists(bin)
-            ? { id: "review", ok: true, detail: `独立评审后端: ${label}${how}` }
-            : { id: "review", ok: false, detail: `独立评审后端 ${label} 的命令 ${bin} 不在 PATH 里` },
-        );
+        const local = loadLocalReviewers();
+        if (local) {
+          // 本机评审者文件存在时以它为准，项目里的旧字段不再起作用。
+          const plan = planReviewers(reviewConfig, { local });
+          const usable = plan.candidates.filter((entry) => !entry.skip);
+          const reasons = plan.candidates.filter((entry) => entry.skip).map((entry) => `${entry.name}: ${entry.skip}`);
+          checks.push(
+            usable.length > 0
+              ? { id: "review", ok: true, detail: `独立评审者（本机文件）: ${describePlan(plan)}${reasons.length ? `；不可用 ${reasons.join("；")}` : ""}` }
+              : { id: "review", ok: false, detail: `本机评审者全部不可用: ${reasons.join("；")}。harness reviewer list 查看，harness reviewer set 补全` },
+          );
+          const legacy = ["backend", "model", "codexModel", "command", "maxBudgetUsd"].filter((field) => reviewConfig[field] != null);
+          if (legacy.length > 0) {
+            checks.push({ id: "review:legacy", ok: true, detail: `项目配置的 review.${legacy.join("、")} 已被本机评审者文件取代，不再起作用，可以在任务分支删掉` });
+          }
+        } else {
+          const backend = resolveBackend(reviewConfig);
+          const label = backend.name === "command" ? `command(${backend.argv[0]})` : backend.name;
+          const how = (reviewConfig.backend ?? "auto") === "auto" ? "，由 auto 选中" : "";
+          const bin = backend.bin ?? backend.argv[0];
+          checks.push(
+            commandExists(bin)
+              ? { id: "review", ok: true, detail: `独立评审后端: ${label}${how}` }
+              : { id: "review", ok: false, detail: `独立评审后端 ${label} 的命令 ${bin} 不在 PATH 里` },
+          );
+          checks.push({ id: "review:config", ok: true, detail: "没有本机评审者文件，评审用项目配置里的旧字段；要指定模型、推理强度或第三方端点，用 harness reviewer set" });
+        }
       } catch (error) {
         checks.push({ id: "review", ok: false, detail: error.message });
       }

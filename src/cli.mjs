@@ -14,7 +14,9 @@ import { planChecks, verify } from "./verify/verify.mjs";
 import { MergeError, mergeTask } from "./merge/merge.mjs";
 import { submitTask } from "./delivery/submit.mjs";
 import { syncTask } from "./delivery/sync.mjs";
-import { reviewBranch, reviewerLines } from "./review/review.mjs";
+import { describePlan, planReviewers, reviewBranch, reviewerLines } from "./review/review.mjs";
+import { reviewerCommand } from "./review/reviewers-cmd.mjs";
+import { loadLocalReviewers, reviewersFile } from "./review/reviewers.mjs";
 import { approveConfirm, confirmSummary, formatSummary } from "./confirm/confirm.mjs";
 import { approvePlan, formatPlanSummary, planSummary } from "./plan/plan.mjs";
 import { checkCommitMessage, checkStaged, guardReference } from "./githook.mjs";
@@ -60,6 +62,7 @@ const USAGE = `harness <命令> [参数]
   install  [--take-over] [--local] [--version <v>]   重新生成入口与钩子；--local 只刷新本机共用部分；--version 只装指定版本
   upgrade                                            升级项目到当前版本
   uninstall [--purge] [--dry-run]                    解除接入；--purge 连 .harness/ 一起删
+  reviewer <list|set|remove|prefer|test>              本机评审者：列出、新增或修改、删除、是否优先不同模型、实测一个；见 harness reviewer
   versions                                           列出已安装的版本
   prune    [--keep <v,...>] [--dry-run]              清理旧版本，默认只保留当前版本
   publish  [--version <v>]                           把当前代码装进版本目录
@@ -139,6 +142,26 @@ function cmdVerifyPlan({ cwd, branch, base, json }) {
   for (const item of notExecuted) print(`  TODO ${item.id}  ${item.reason}`);
   for (const item of advisory) print(`  HINT ${item.id}  ${item.hint}`);
   return 0;
+}
+
+// 独立评审用哪个客户端、模型是各机器自己的事，不进项目配置；接入时告诉用户现状和改法。
+function printReviewerHint() {
+  try {
+    const local = loadLocalReviewers();
+    if (local) {
+      print(`评审者: 本机文件 ${local.file} 里配了 ${local.reviewers.length} 个：${describePlan(planReviewers({}, { local }))}`);
+      print("  调整用 harness reviewer list、set、remove；改动只在本机生效，不需要提交。");
+      return;
+    }
+    const plan = planReviewers({}, { local: null });
+    const [first] = plan.candidates;
+    print(`评审者: 本机还没有 ${reviewersFile()}，评审用本机第一个可用的客户端 ${first.client}${first.model ? `，模型 ${first.model}` : ""}。`);
+  } catch (error) {
+    print(`评审者: ${error.message}`);
+  }
+  print("  要指定模型、推理强度或第三方端点（key 只存在本机）:");
+  print("    harness reviewer set <名称> --client claude --model <模型> [--base-url <地址> --api-key-stdin] [--effort high]");
+  print("  评审用与日常任务不同的模型，更不容易和实现一起漏掉同样的问题；默认会把与当前会话同模型的评审者排到后面。");
 }
 
 async function cmdReview(argv) {
@@ -619,6 +642,8 @@ function cmdInit(argv) {
     print("  接入分支就会以 PR/MR 提交：确认后运行 harness submit --branch <接入分支>，平台合入后运行 harness sync。");
   }
   print("");
+  printReviewerHint();
+  print("");
   print("下一步");
   print("  接入流程由 Agent 按项目规则接续处理，用户只需在需要时做决定或亲自操作，不必重复提醒验证、评审和交付要求。");
   print("  Agent 按项目规则准备任务分支与需要的 Worktree；下面的命令由 Agent 执行，标明由人的除外。");
@@ -846,6 +871,8 @@ export async function main(argv) {
         return cmdEscalate(rest);
       case "key":
         return cmdKey(rest);
+      case "reviewer":
+        return reviewerCommand(rest, { print });
       default:
         process.stderr.write(`未知命令: ${command}\n\n${USAGE}`);
         return 2;

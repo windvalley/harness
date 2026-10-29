@@ -314,6 +314,7 @@ describe("harness submit", () => {
     assert.ok(body.includes(base), "描述写明目标主分支提交");
     assert.match(body, /验证/);
     assert.match(body, /approve/);
+    assert.match(body, /- 评审者: 未记录/, "评审记录里没有评审者信息时写未记录");
     assert.match(result.stdout, /https:\/\/github\.example\/acme\/demo\/pull\/1/);
     for (const call of platform.calls()) assert.equal(call.args.includes("merge"), false, JSON.stringify(call));
     assert.match(result.stderr, /\[submit\]/);
