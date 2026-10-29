@@ -47,7 +47,7 @@
 - 已接入的项目，配置里写死的 `"maxBudgetUsd": 2` 不会自动去掉，仍然生效；要改成不限，在任务分支上删掉这个字段。
 - 本机评审者文件允许 Agent 通过 `harness reviewer` 修改，key 明文存放在里面。
   评审的强弱因此在本机可调，harness 只负责如实记录，由人在记录、`harness status` 和 PR/MR 描述里核对；详见参考手册“信任模型与已知限制”。
-- `upgrade` 会刷新 `.harness/rules/harness.md` 与 `AGENTS.md` 托管块，其中新增了“不要直接读取或改写 reviewers.json、评审失败时不要换更弱的评审者”的规则。
+- `upgrade` 会刷新 `.harness/rules/harness.md` 与 `AGENTS.md` 托管块，其中新增了“不要直接读取或改写 reviewers.json、评审失败时不要换更弱的评审者、不要把评审用的端点域名写进提交说明和 PR/MR 描述”的规则。
 
 ## [0.9.4] - 2026-10-29
 
