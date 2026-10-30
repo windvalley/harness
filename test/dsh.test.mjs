@@ -261,6 +261,25 @@ test("doctor：profile 注册了本机插件时报告已注册，并列出还没
   assert.ok(line.includes(`dsh plugin --profile web add ${pluginDir(repo)}`), line);
 });
 
+test("doctor：本机插件内容落后于当前版本时提示刷新，不算失败；刷新后不再提示", () => {
+  const repo = setup();
+  const dir = pluginDir(repo);
+  dshProfile(repo, "desktop", { dependencies: { "harness-guard": `link:${relative(join(repo.env.DSH_HOME, "profiles", "desktop"), dir)}` }, bundles: ["harness-guard"] });
+  const fresh = repo.cli("doctor");
+  assert.equal(fresh.status, 0, fresh.stdout);
+  assert.doesNotMatch(fresh.stdout, /内容落后/);
+
+  writeFileSync(join(dir, "index.mjs"), "// 旧模板\n");
+  const stale = repo.cli("doctor");
+  assert.equal(stale.status, 0, stale.stdout);
+  const line = stale.stdout.split("\n").find((item) => item.includes("client:dsh"));
+  assert.match(line, /\[ok\]|\[\?\]/);
+  assert.match(line, /内容落后.*install --local/);
+
+  assert.equal(repo.cli("install", "--local").status, 0);
+  assert.doesNotMatch(repo.cli("doctor").stdout, /内容落后/);
+});
+
 test("doctor：profile 注册的是旧版的项目插件时要求改为注册本机插件", () => {
   const repo = setup();
   const legacy = join(repo.root, ".harness/dsh-plugin");

@@ -15,6 +15,7 @@ import { describeRegistration, dshRegistrations } from "./dsh.mjs";
 import {
   currentHooksConfig,
   dshPluginDir,
+  dshPluginStale,
   gitHooksDir,
   HOOK_NAMES,
   hooksPathState,
@@ -128,6 +129,8 @@ function dshCheck() {
   }
   const pluginOk = existsSync(join(dir, "index.mjs"));
   const parts = [pluginOk ? `本机插件 ${dir}` : `本机插件 ${dir} 不存在，运行 harness install --local 生成`, ...registrations.map(describeRegistration)];
+  // 插件内容落后只是提示，不算失败：它只转发到项目锁定的版本，旧内容仍能工作。
+  if (pluginOk && dshPluginStale()) parts.push("本机插件内容落后于当前版本，在项目目录运行 harness install --local 刷新，之后重启 DeepSeek Harness");
   return {
     id: "client:dsh",
     ok: pluginOk && !registrations.some((item) => item.state === "other" || item.state === "unreadable"),

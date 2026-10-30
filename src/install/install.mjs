@@ -587,6 +587,40 @@ export function dshPluginDir() {
 
 const DSH_STORE_MARK = '"@@HARNESS_STORE@@"';
 
+/** 当前代码会写出的 DSH 插件文件内容，文件名到正文。 */
+function dshPluginFiles() {
+  const version = packageVersion();
+  const source = readFileSync(join(PACKAGE_ROOT, "assets", "dsh", "index.mjs"), "utf8");
+  if (!source.includes(DSH_STORE_MARK)) throw new Error("DSH 插件模板缺少版本目录占位");
+  const manifest = { name: "harness-guard", version, private: true, type: "module", main: "./index.mjs", dsh: { bundle: { patch: "./cordis.patch.yml" } } };
+  return {
+    "package.json": `${JSON.stringify(manifest, null, 2)}\n`,
+    "cordis.patch.yml": "- insert:\n    - id: harness-guard\n      name: harness-guard\n",
+    "index.mjs": source.split(DSH_STORE_MARK).join(JSON.stringify(storeRoot())),
+  };
+}
+
+/**
+ * 本机已有的 DSH 插件内容是否落后于当前代码会写出的内容：文件缺失或不同，且不是更新版本生成的。
+ * 只做判断不写文件；插件文件没变的版本升级不算落后，避免每次发版都提示。
+ */
+export function dshPluginStale() {
+  const dir = dshPluginDir();
+  const manifestFile = join(dir, "package.json");
+  if (!existsSync(manifestFile)) return false;
+  try {
+    const current = JSON.parse(readFileSync(manifestFile, "utf8")).version;
+    if (typeof current === "string" && current.localeCompare(packageVersion(), undefined, { numeric: true }) > 0) return false;
+  } catch {
+    return true;
+  }
+  const { "package.json": _manifest, ...rest } = dshPluginFiles();
+  return Object.entries(rest).some(([name, body]) => {
+    const file = join(dir, name);
+    return !existsSync(file) || readFileSync(file, "utf8") !== body;
+  });
+}
+
 /**
  * 写本机共用的 DSH 插件（Cordis 组合包），由用户在 DSH 里注册。
  * 插件按会话所在仓库锁定的版本导入门禁代码，与哪个项目、哪个版本生成它无关。
@@ -607,14 +641,7 @@ export function writeDshPlugin() {
       return { dir, version: current, updated: false };
     }
   }
-  const source = readFileSync(join(PACKAGE_ROOT, "assets", "dsh", "index.mjs"), "utf8");
-  if (!source.includes(DSH_STORE_MARK)) throw new Error("DSH 插件模板缺少版本目录占位");
-  const manifest = { name: "harness-guard", version, private: true, type: "module", main: "./index.mjs", dsh: { bundle: { patch: "./cordis.patch.yml" } } };
-  const files = {
-    "package.json": `${JSON.stringify(manifest, null, 2)}\n`,
-    "cordis.patch.yml": "- insert:\n    - id: harness-guard\n      name: harness-guard\n",
-    "index.mjs": source.split(DSH_STORE_MARK).join(JSON.stringify(storeRoot())),
-  };
+  const files = dshPluginFiles();
   mkdirSync(dir, { recursive: true });
   let updated = false;
   for (const [name, body] of Object.entries(files)) {

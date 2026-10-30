@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+## [0.10.2] - 2026-10-30
+
+这一版让 `harness doctor` 能发现本机 DeepSeek Harness 插件落后。
+
+### 新增
+
+- `harness doctor` 的 `client:dsh` 一项在本机插件文件内容与当前版本会生成的内容不同时，提示在项目目录运行 `harness install --local` 刷新并重启 DeepSeek Harness。
+  只比较文件内容，升版本号但插件模板没变时不提示；更新版本生成的插件不算落后；这只是提示，不算失败。
+  插件仍不随 `publish` 更新：它是整机共用的可变状态，与按版本号不可变的版本目录性质不同。
+
 ## [0.10.1] - 2026-10-30
 
 这一版只补 `harness help` 里 `check` 一行的参数说明。
