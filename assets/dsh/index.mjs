@@ -125,9 +125,10 @@ async function stopReason(ctx, agent, signal) {
 }
 
 // 与宿主 createUserMessage 的结果同形：带新编号、角色为 user、内容冻结。插件不依赖宿主的包，在这里自己构造。
+// 会话格式 v4 拒绝 kind 恰为 "plugin" 的来源，第三方插件要写成 "plugin:<插件名>"。
 function steerMessage(text) {
   const content = Object.freeze([Object.freeze({ type: "text", text })]);
-  return Object.freeze({ id: randomUUID(), role: "user", content, source: Object.freeze({ kind: "plugin", plugin: name }) });
+  return Object.freeze({ id: randomUUID(), role: "user", content, source: Object.freeze({ kind: `plugin:${name}` }) });
 }
 
 export function apply(ctx) {

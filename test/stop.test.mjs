@@ -321,7 +321,7 @@ describe("收尾检查的接入", () => {
     assert.equal(steered[0].id, "dsh-main");
     const message = steered[0].message;
     assert.equal(message.role, "user");
-    assert.deepEqual(message.source, { kind: "plugin", plugin: "harness-guard" });
+    assert.deepEqual(message.source, { kind: "plugin:harness-guard" });
     assert.match(message.content[0].text, /task\/a：还差 缺验证证据、缺独立评审/);
     assert.match(message.id, /^[0-9a-f-]{36}$/);
   });

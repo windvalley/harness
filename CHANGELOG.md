@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+## [0.10.3] - 2026-10-30
+
+这一版修复 DeepSeek Harness 插件在收尾检查要 Agent 接着做时，本轮因会话格式校验失败而中断的问题。
+
+### 修复
+
+- DSH 插件的收尾检查让 Agent 接着做时，构造的消息来源写成 `{kind: "plugin", plugin: "harness-guard"}`，会话格式 v4 拒绝 `kind` 恰为 `plugin` 的来源，本轮以 `format v4 message requires a producer-owned source kind` 失败。
+  现在写成 `{kind: "plugin:harness-guard"}`，与宿主迁移旧会话时对第三方插件使用的写法一致。
+- 升级后在项目目录运行 `harness install --local` 刷新本机插件并重启 DeepSeek Harness；`harness doctor` 会提示插件落后。
+
 ## [0.10.2] - 2026-10-30
 
 这一版让 `harness doctor` 能发现本机 DeepSeek Harness 插件落后。
