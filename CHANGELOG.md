@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+## [0.10.4] - 2026-10-30
+
+这一版让 `main-worktree` 预设的 `main-worktree-edit` 也拦住用 Shell 命令写主 Worktree 的绕过。
+
 ### 修复
 
 - `main-worktree` 预设的 `main-worktree-edit` 能被 Shell 绕过：Agent 用 `echo >`、`sed -i` 或 `python3 - <<EOF` 改主 Worktree 的文件不被拦，从 Linked Worktree 用绝对路径写回主 Worktree 也不被拦。
