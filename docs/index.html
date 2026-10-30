@@ -435,7 +435,7 @@ footer { border-top: 1px solid var(--line); color: var(--muted); font-size: .88r
     <div class="table-wrap"><table class="t-key">
       <thead><tr><th>层</th><th>何时生效</th><th>管什么</th><th>覆盖谁</th></tr></thead>
       <tbody>
-        <tr><td>① 实时拦截</td><td>Agent 每次调用工具之前</td><td>读取密钥、改写门禁入口、不可逆的 git 操作、绕过开关</td><td>Claude Code、Codex、DeepSeek Harness，其他 Agent 经通用入口接入</td></tr>
+        <tr><td>① 实时拦截</td><td>Agent 每次调用工具之前</td><td>读取密钥、改写门禁入口、不可逆的 git 操作、绕过开关</td><td>Claude Code、Codex、DeepSeek Harness，其他 Agent 经通用入口接入（仅拦截，无收尾检查）</td></tr>
         <tr><td>② git 钩子</td><td>每次提交与引用更新</td><td>提交信息、暂存的密钥文件、主分支的写入</td><td>所有客户端和人</td></tr>
         <tr><td>③ 受控合并</td><td>交付到主分支时（<code>merge</code> 或 <code>submit</code>）</td><td>验证证据、独立评审、门禁改动与交付设置变化的人工确认</td><td>所有客户端和人</td></tr>
       </tbody>
@@ -942,6 +942,7 @@ HARNESS_MAIN_BYPASS=1 git merge --ff-only origin/main</code></pre></div>
       <li><code>HARNESS_MAIN_BYPASS</code> 等环境变量与 <code>core.hooksPath</code> 能让门禁失效，只能由人使用，Agent 设置或读取会被拦截。</li>
       <li>路径规则只约束写文件、读文件类的工具调用；用 shell 命令读写同一个文件，要靠命令规则覆盖。</li>
       <li>Codex 没有信任钩子时没有实时拦截；DeepSeek Harness 的本机插件尚未在运行中的客户端里端到端实测；Claude 桌面版只做了静态确认。git 层对它们都生效。</li>
+      <li>经通用入口接入的 Agent 只有实时拦截，没有收尾检查，harness 也无法验证 Agent 是否真的因拒绝而不执行。</li>
       <li>任务分级与先红后绿仍由 Agent 判断，门禁只兜底能机械判定的部分；授权记录里的原话要靠你在合并输出或 <code>harness status</code> 里核对。</li>
     </ul>
 
@@ -952,8 +953,8 @@ HARNESS_MAIN_BYPASS=1 git merge --ff-only origin/main</code></pre></div>
     <div class="table-wrap"><table>
       <thead><tr><th>命令</th><th>用途</th></tr></thead>
       <tbody>
-        <tr><td><code>init [--dry-run] [--take-over]</code></td><td>接入当前项目，<code>--dry-run</code> 只预览</td></tr>
-        <tr><td><code>verify --branch &lt;分支&gt; [--plan]</code></td><td>验证并写签名证据；<code>--plan</code> 只列计划</td></tr>
+        <tr><td><code>init [--dry-run] [--take-over] [--force]</code></td><td>接入当前项目，<code>--dry-run</code> 只预览</td></tr>
+        <tr><td><code>verify --branch &lt;分支&gt; [--plan] [--no-reuse]</code></td><td>验证并写签名证据；<code>--plan</code> 只列计划，<code>--no-reuse</code> 不复用已有结果</td></tr>
         <tr><td><code>review --branch &lt;分支&gt;</code></td><td>独立评审</td></tr>
         <tr><td><code>status [--branch &lt;分支&gt;]</code></td><td>只读汇总还差哪几步才能交付</td></tr>
         <tr><td><code>confirm --branch &lt;分支&gt; [--yes]</code></td><td>查看门禁改动摘要；带 <code>--yes</code> 由人记录确认</td></tr>
@@ -961,11 +962,13 @@ HARNESS_MAIN_BYPASS=1 git merge --ff-only origin/main</code></pre></div>
         <tr><td><code>merge --branch &lt;分支&gt; [--dry-run]</code></td><td>受控合并到主分支（本地交付）</td></tr>
         <tr><td><code>submit --branch &lt;分支&gt;</code></td><td>推送核对过的提交并创建或更新 PR/MR（远程交付）</td></tr>
         <tr><td><code>sync [--remote &lt;远程&gt;]</code></td><td>把本地主分支快进到远程主分支；<code>--remote</code> 只在首次接入时使用</td></tr>
-        <tr><td><code>worktree clean [--yes]</code></td><td>预览并清理已合并的任务 Worktree</td></tr>
+        <tr><td><code>worktree clean [--yes] [--with-local-files]</code></td><td>预览并清理已合并的任务 Worktree；含本机文件的目录需加 <code>--with-local-files</code> 单独同意</td></tr>
         <tr><td><code>doctor</code></td><td>安装与接入自检</td></tr>
         <tr><td><code>rules</code>、<code>check --kind ...</code></td><td>列出生效规则；手工判定一次调用</td></tr>
         <tr><td><code>golden [--worktree]</code></td><td>重放黄金任务</td></tr>
-        <tr><td><code>install --local</code>、<code>upgrade</code></td><td>新机器安装；升级项目到当前版本</td></tr>
+        <tr><td><code>install --local</code>、<code>install --version &lt;版本&gt;</code>、<code>upgrade</code></td><td>新机器安装；只把指定版本装进版本目录；升级项目到当前版本</td></tr>
+        <tr><td><code>reviewer list</code>、<code>set</code>、<code>remove</code>、<code>prefer</code>、<code>test</code></td><td>管理本机评审者：客户端、模型、推理强度、端点与 key</td></tr>
+        <tr><td><code>key status</code>、<code>key rotate [--yes]</code></td><td>查看证据密钥；轮换由人执行</td></tr>
         <tr><td><code>uninstall [--dry-run] [--purge]</code></td><td>解除接入</td></tr>
       </tbody>
     </table></div>

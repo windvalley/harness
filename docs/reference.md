@@ -88,7 +88,7 @@ Agent 调用工具 ----> [1] 实时拦截：读写文件、执行命令之前按
 | `~/.local/share/harness/versions/<版本>/` | 按版本安装的门禁代码，本机所有项目共用 | 否 |
 | `~/.local/share/harness/evidence.key` | 签名密钥，权限 600 | 否 |
 | `~/.local/share/harness/dsh-plugin/` | DeepSeek Harness 插件，本机所有项目共用，按项目锁定的版本转发 | 否 |
-| `~/.cache/harness/checkouts/<哈希>/work` | verify 的固定检出，以分离头指针的 Linked Worktree 出现在 `git worktree list` 里 | 否 |
+| `~/.cache/harness/checkouts/<哈希>/work` | verify 的固定检出，以分离头指针的 Linked Worktree 出现在 `git worktree list` 里；设置环境变量 `HARNESS_CACHE_DIR` 时位于 `$HARNESS_CACHE_DIR/checkouts/` | 否 |
 
 ## 安装
 
@@ -417,7 +417,7 @@ timeout = 10
 
 Agent 开始任务前先判断分级，规则写在 `.harness/rules/core.md`，要点同时写进了 `AGENTS.md` 的托管块：
 
-- 直接实施：小优化、小迭代或缺陷修复，不改库表与迁移，不改接口契约、权限与数据兼容性，代码改动少于 `intent.plan.maxLines`（默认 500 行，测试、文档与锁文件不计）。
+- 直接实施：小优化、小迭代或缺陷修复，不改库表与迁移，不改接口契约、权限与数据兼容性，代码改动不超过 `intent.plan.maxLines`（默认 500 行，测试、文档与锁文件不计）。
 - 先方案后实施：其余任务，以及拿不准的任务。
 
 先方案后实施的节奏：
@@ -508,7 +508,7 @@ harness merge  --branch feat/login   # 本地交付：核对证据与评审，�
 
 - 验证失败、评审拒绝、`review_stale`、合并冲突、`bad_commit_message`、`branch_moved`、`main_moved` 这类拒绝，由 Agent 按原因修改后重新 verify、review，再交付，不需要你安排。
 - 修复只能改实现、测试或提交本身：任务分支放宽不了门禁，删测试、弱化断言、跳过检查也被项目规范禁止。
-- 常见的需要人的情况只有两种：改动涉及门禁本身（`gate_change_unconfirmed`），由人看过摘要后亲自确认；同一个问题连续三轮没有解决，Agent 说明情况后由人决定。
+- 常见的需要人的情况只有两种：改动涉及门禁本身（`merge` 与 `sync` 的拒绝码是 `gate_change_unconfirmed`，`status` 里同一件事显示为 `gate_unconfirmed`），由人看过摘要后亲自确认；同一个问题连续三轮没有解决，Agent 说明情况后由人决定。
 - 其余需要人的拒绝少见，出现时 Agent 停下说明对象和做法：
   - `plan_unapproved`：大任务被当成小任务直接实施，交付时按改动行数或库表文件识别出来，需要补方案并取得同意；按流程先出方案、获同意再实施的任务不会遇到。
   - `platform_missing`、`platform_failed`：远程交付时本机的 `gh` 或 `glab` 没安装或登录已失效，由人安装或运行 `gh auth login`、`glab auth login`；本地交付不会遇到。
@@ -606,7 +606,7 @@ git -C <主 Worktree> worktree unlock <Worktree 路径>
   任务分支自带、未经确认的清单评成 `partial` 不阻断。
 - 没有清单时需求符合度记为 `unknown`，评审只评工程质量，合并时打印提示。
 - `config.json` 的 `intent.mode` 设为 `required` 时，没有清单不能合并；设为 `off` 时不再提示。
-- `harness status` 的 `acceptance` 一项给出清单的实际路径和有没有：有清单标 `ok`，没有清单标 `!!`，`required` 下没有清单标 `FAIL` 并算作阻塞。
+- `harness status` 的 `acceptance` 一项给出清单的实际路径和有没有：有清单标 `ok`，没有清单标 `!!`，`required` 下没有清单标 `FAIL` 并算作阻塞，`off` 时标 `-`，表示未启用清单要求。
 
 ### 评审结论
 
@@ -657,7 +657,7 @@ Agent 按“正确做法”改道即可，实时拦截每次都会记进账本�
 
 以下文件属于门禁，改动它们的分支合并前要由人确认：
 
-- `.harness/config.json`、`policy.json`、`verify.json`、`golden/**`、`rules/**`、`bin/**`。
+- `.harness/config.json`、`VERSION`、`policy.json`、`verify.json`、`golden/**`、`rules/**`、`bin/**`。
 - `.claude/settings.json`、`.codex/hooks.json`、`.githooks/**`、`.husky/**`（包括子目录里的 `.husky/`）、配置的 `git.hooksDir`。
 - `governance.gatePaths` 里追加的路径。
 
@@ -962,6 +962,7 @@ node ~/github/harness/bin/harness.mjs install --local   # 按新锁定的版本�
   把 `cmd` 改成项目实际的 lint 命令，`tier` 改为 `gate`。
 - `harness-golden`：`.harness/**` 有改动时，在任务分支的检出里按它自己的配置重放黄金任务，改坏规则的分支在验证阶段就被拦下。
 - `manual-check`、`visual-hint` 是 `extended` 与 `advisory` 的示例，按项目实际替换或删除。
+- 另按仓库内容探测生成 `gate` 检查：有 `go.mod` 时生成 `go-test` 与 `go-build`，有 `frontend/package.json` 时生成 `frontend-typecheck`，有 `Cargo.toml` 或 `rust/Cargo.toml` 时生成 `cargo-test`，声明了 pytest 配置（`pytest.ini`、`setup.cfg`、`conftest.py`、`tests/conftest.py`，或 `pyproject.toml` 里的 `[tool.pytest]`）时生成 `pytest`。
 
 改了这几项后，要同步修改 `golden/tasks.json` 里引用它们的起始用例 `g11` 到 `g14`，否则 `harness-golden` 检查失败。
 例如 `lint` 配成真实命令后，把 `g11`、`g13`、`g14` 里 `expectNotExecuted` 中的 `lint` 移到 `expectChecks`；删掉两个示例检查时，去掉 `g12`，并从 `g11` 的 `expectNotExecuted` 里去掉 `manual-check`。
@@ -1001,7 +1002,7 @@ node ~/github/harness/bin/harness.mjs install --local   # 按新锁定的版本�
 | `commit-forbid` | 能否在当前位置提交 | `when` | `pre-commit` |
 
 - 路径字段是相对仓库根的 glob；`patterns`、`pattern` 是 JavaScript 正则，写在 JSON 里反斜杠要写两次。
-- `when` 取 `main-worktree`、`linked-worktree`、`on-main` 或 `not-on-main`，只在条件成立时适用。
+- `when` 取 `main-worktree`、`linked-worktree`、`on-main`、`not-on-main` 或 `plan-pending`，只在条件成立时适用；`plan-pending` 表示当前任务已有方案但还没有实施授权记录，由 `plan-first` 预设使用，项目规则一般不需要手写。
 - `layer: "agent"` 表示只约束 Agent 的实时调用。
   git 层看不出是谁写的，入口由 `harness install` 生成后要能提交，所以 `protect-executor-entry` 带这个标记。
 - `shell-forbid` 默认逐段判定，引号里的文字不参与匹配，提交信息里提到被禁命令不会误拦；`scope: "whole"` 对整条命令的原文判定。
@@ -1287,7 +1288,7 @@ harness reviewer set mine --client command --command-json '["my-reviewer","--jso
 
 | 命令 | 用途 |
 | --- | --- |
-| `verify --branch <分支> [--plan] [--no-reuse]` | 验证并写签名证据；`--plan` 只列计划，`--no-reuse` 不复用已有结果 |
+| `verify [--branch <分支>] [--head <ref>] [--base <ref>] [--plan] [--no-reuse] [--json]` | 验证并写签名证据；`--plan` 只列计划，`--no-reuse` 不复用已有结果，`--json` 输出 JSON |
 | `review --branch <分支>` | 独立评审 |
 | `reviewer list`、`set`、`remove`、`prefer`、`test` | 管理本机评审者：客户端、模型、推理强度、端点与 key，见“独立评审的后端” |
 | `status [--branch <分支>]` | 只读汇总还差哪几步才能交付，默认看当前分支 |
@@ -1299,7 +1300,7 @@ harness reviewer set mine --client command --command-json '["my-reviewer","--jso
 | `worktree clean [--yes] [--with-local-files]` | 预览已合并的任务 Worktree；`--yes` 删除 Worktree 与分支 |
 | `doctor` | 安装与接入自检 |
 | `rules` | 列出解析后的生效规则 |
-| `check --kind <shell\|write\|read\|search\|commit> ...` | 手工判定一次调用，可加 `--on-main`、`--linked-worktree`、`--ignored` 指定位置 |
+| `check --kind <shell\|write\|read\|search\|commit> ...` | 手工判定一次调用：`shell` 用 `--command <命令>`，其余用 `--path <路径>`，可加 `--content`、`--glob`，以及 `--on-main`、`--linked-worktree`、`--ignored` 指定位置 |
 | `golden [--worktree]` | 重放黄金任务 |
 | `metrics [--days <n>]` | 按周统计合并次数、验证首过率、复用检查数、评审拒绝率、策略拦截、门禁确认与黄金任务通过率 |
 | `conformance` | 逐项判定 L3 判据，样本不足的项标 `PEND`，不计为完成 |
@@ -1310,9 +1311,10 @@ harness reviewer set mine --client command --command-json '["my-reviewer","--jso
 | `upgrade` | 把项目升级到运行它的 harness 版本 |
 | `uninstall [--dry-run] [--purge]` | 解除接入 |
 | `versions`、`prune [--keep <v,...>] [--dry-run]` | 列出、清理本机安装的版本 |
-| `publish`、`version` | 把当前代码装进版本目录；打印版本号 |
+| `publish [--version <v>]`、`version` | 把当前代码装进版本目录，`--version` 只能是当前代码的版本；打印版本号 |
 
-`githook` 与 `hook` 由 git 钩子和客户端钩子调用，不需要手工运行。
+`githook` 由 git 钩子调用，不需要手工运行。
+`hook` 对 claude、codex、dsh 由生成的客户端配置调用；`--client generic` 需要在其他 Agent 里自行配置，且只支持 `pre-tool-use`，见“接入其他编码 Agent”。
 
 ## 信任模型与已知限制
 
@@ -1399,7 +1401,7 @@ harness uninstall --dry-run   # 先看会删什么
 harness uninstall             # 删除生成物，保留 .harness/ 下的配置、规则、用例与验收清单
 harness uninstall --purge     # 连 .harness/ 一起删
 harness versions              # 列出本机已安装的版本
-harness install --version 0.9.0   # 只装这个版本，不改项目文件（sync 遇到版本没装时用它）
+harness install --version <版本>   # 只装这个版本，不改项目文件（sync 遇到版本没装时用它）
 harness prune --dry-run       # 预览清理旧版本，默认只保留当前版本
 ```
 

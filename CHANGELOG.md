@@ -41,6 +41,8 @@
   实测里不清的话，配错的 key 照样成功，分不清这次用的是哪一把；会话跑在云提供商上时，不清开关请求不会走指定的端点。
 - 评审进程的报错擦掉本机文件里所有评审者的 key 和继承来的令牌，`harness reviewer test` 同样处理；本机文件有 JSON 语法错误时报错不显示原文片段，因为那里可能正是 key 的开头。
 - 本机评审者文件里的 `claude` 评审者设置 `CLAUDE_CODE_MAX_RETRIES=2`：此前 key 失效要等四分多钟才报错，回退会被拖住。
+- 文档与实现对齐：README 与教程页写明通用入口只有实时拦截、没有收尾检查；参考手册与教程页的命令速查补全参数，修正“少于 500 行”的边界（实际是不超过）、门禁文件清单补 `.harness/VERSION`、`when` 取值补 `plan-pending`、`status` 的 `acceptance` 在 `intent.mode` 为 `off` 时显示 `-`、`hook` 不再一律标为无需手工运行，示例版本号改为占位。
+- 删除已过期的 `docs/changes/remote-delivery/`，现行行为以参考手册为准。
 
 ### 修复
 
