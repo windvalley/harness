@@ -73,7 +73,7 @@ const USAGE = `harness <命令> [参数]
 客户端与钩子入口
   githook  <pre-commit|commit-msg|reference-transaction>   由 git 钩子调用
   hook     --client <claude|codex|dsh|generic> [--event <pre-tool-use|stop>]   由客户端钩子调用，读 stdin；stop 是收尾检查
-  check    --kind <shell|write|read|search|commit> ... [--on-main] [--linked-worktree] [--ignored]   手工判定一次调用
+  check    --kind <shell|write|read|search|commit> [--command <命令>] [--path <路径>] [--content <内容>] [--glob <模式>] [--on-main] [--linked-worktree] [--ignored]   手工判定一次调用；shell 用 --command，其余用 --path
 
 人用
   escalate <open|list|show|answer|resume>             例外上报
