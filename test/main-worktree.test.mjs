@@ -271,4 +271,35 @@ describe("主 Worktree 只用来合并", () => {
     assert.match(codex(linked, script(join(root, "README.md"))).stdout, /main-worktree-edit/);
     assert.equal(codex(linked, script("README.md")).stdout.trim(), "", "写自己的 Worktree 放行");
   });
+
+  test("未启用 main-worktree 时 Shell 写入照常放行；自定义 write-protect 不带 includeShell 仍只管写文件工具", () => {
+    const repo = makeRepo({
+      project: {
+        ".harness/policy.json": {
+          version: 1,
+          presets: ["secrets", "git-safety", "gate-self"],
+          disabled: [],
+          rules: [{ id: "no-docs-edit", kind: "write-protect", paths: ["docs/**"], reason: "文档只读", fix: "换个位置" }],
+        },
+      },
+    });
+    repos.push(repo);
+    const root = realpathSync(repo.root);
+    const fine = [
+      "echo x > README.md",
+      "echo x > docs/a.md",
+      "sed -i 's/a/b/' README.md",
+      "cp a.txt b.txt && mv b.txt c.txt && touch d.txt && rm d.txt",
+      "python3 -c \"open('README.md','w')\"",
+      `python3 - <<'PY'\nopen('README.md', 'w').write('x')\nPY`,
+      'echo x > "$OUT"',
+    ];
+    for (const command of fine) {
+      const result = claudeHook(repo, bashCall(root, command));
+      assert.equal(result.status, 0, `${command}\n${result.stderr}`);
+    }
+    const refused = claudeHook(repo, writeCall(root, join(root, "docs/a.md")));
+    assert.equal(refused.status, 2, "写文件工具仍受自定义写保护约束");
+    assert.match(refused.stderr, /no-docs-edit/);
+  });
 });
