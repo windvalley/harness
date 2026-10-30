@@ -1124,7 +1124,7 @@ node ~/github/harness/bin/harness.mjs install --local   # 按新锁定的版本�
 
 ### 本机评审者文件
 
-文件是 `~/.config/harness/reviewers.json`，不进仓库。
+文件是 `~/.config/harness/reviewers.json`，不进仓库；设置环境变量 `HARNESS_REVIEWERS_FILE` 可以改用别的路径。
 它按顺序列出评审者，由 `harness reviewer` 命令管理，创建时权限为 600。
 
 ```json
