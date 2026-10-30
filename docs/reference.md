@@ -326,7 +326,92 @@ Agent 应结合诊断和当前客户端的实际调用给出证据，不能把�
 - 钩子脚本应在本仓库的 `.harness/bin/harness` 上调用，这样跟随项目锁定的版本。
 
 限制：通用入口只负责判定，Agent 自己必须在工具执行前调用钩子，并且真的因拒绝而不执行；harness 无法验证这一点，`harness doctor` 也不检查通用客户端是否接上。
-harness 没有内置也没有实测这类 Agent 的钩子协议，接入后需要自己用一条应被拒绝的调用（例如写 `config/server.pem`）确认拦截生效。
+harness 没有内置这类 Agent 的钩子协议，下面的 Kimi Code 示例做过实测，其他 Agent 接入后需要自己用一条应被拒绝的调用（例如写 `config/server.pem`）确认拦截生效。
+
+#### 示例：Kimi Code
+
+Kimi Code 2.0.2 的 `PreToolUse` 钩子可以接上通用入口，下面是实测过的接法。
+
+- Kimi Code 的钩子只能写在用户级的 `~/.kimi-code/config.toml`，没有项目级配置，所以每台机器配一次，所有项目共用。
+- 钩子从 stdin 收到 JSON，用到的字段是 `tool_name`、`tool_input`、`cwd`、`session_id`。
+  Bash 的命令在 `tool_input.command`，Write 与 Read 的路径在 `tool_input.path`，Write 的内容在 `tool_input.content`。
+- 退出码 0 放行，2 拒绝，stderr 的内容会原样交给模型作为反馈。
+- Kimi Code 对退出码 2 以外的失败、超时和崩溃一律放行。
+  所以桥接脚本把除放行外的所有情况都转成退出码 2，只有当前目录不在 Git 仓库里、仓库没有 `.harness/bin/harness` 入口、或者工具不在映射表里时才放行。
+
+先把桥接脚本存成 `~/.kimi-code/hooks/harness-bridge.mjs`：
+
+```js
+// kimi 的 PreToolUse 载荷 -> harness 通用载荷。
+// 项目没有接入 harness 时放行；其余任何失败都按拒绝处理，因为 kimi 对退出码 2 以外的失败一律放行。
+import { existsSync, readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { join } from "node:path";
+
+function deny(text) {
+  process.stderr.write(`[harness] ${text}\n`);
+  process.exit(2);
+}
+
+let event;
+try {
+  event = JSON.parse(readFileSync(0, "utf8"));
+} catch {
+  deny("钩子载荷不是有效 JSON，按失败处理");
+}
+const input = event.tool_input ?? {};
+const path = input.path ?? input.file_path;
+const calls = {
+  Bash: { kind: "shell", command: input.command ?? "" },
+  Write: { kind: "write", path, content: input.content },
+  Edit: { kind: "write", path, content: input.new_string },
+  Read: { kind: "read", path },
+  Grep: { kind: "search", path: input.path, glob: input.glob },
+};
+const call = calls[event.tool_name];
+if (!call) process.exit(0);
+
+const top = spawnSync("git", ["rev-parse", "--show-toplevel"], { cwd: event.cwd, encoding: "utf8" });
+if (top.status !== 0) process.exit(0);
+const entry = join(top.stdout.trim(), ".harness/bin/harness");
+if (!existsSync(entry)) process.exit(0);
+
+const result = spawnSync(entry, ["hook", "--client", "generic"], {
+  input: JSON.stringify({ ...call, cwd: event.cwd, session_id: event.session_id }),
+  encoding: "utf8",
+  cwd: event.cwd,
+});
+if (result.stderr) process.stderr.write(result.stderr);
+process.exit(result.status === 0 ? 0 : 2);
+```
+
+再在 `~/.kimi-code/config.toml` 里加一段，`command` 里的 node 与脚本都写绝对路径（实测用的就是这种写法）：
+
+```toml
+[[hooks]]
+event = "PreToolUse"
+command = "/绝对路径/node /绝对路径/harness-bridge.mjs"
+timeout = 10
+```
+
+实测结果：
+
+- 在接入了 harness 的临时仓库里让 Kimi Code 真实执行三步。
+  写 `config/server.pem` 被 `secrets-write` 拒绝，文件没有生成。
+  写 `ok.txt` 成功。
+  用 shell 运行 `cat config/server.pem` 被 `secrets-shell` 拒绝。
+- 拒绝原文原样出现在模型的回复里，客户端显示为 `generic`。
+- 桥接脚本另用手工构造的载荷核对过：`Read` 私钥被拒绝，载荷不是 JSON 时拒绝，入口异常退出时拒绝，目录不在 Git 仓库里时放行。
+
+没有实测的部分：
+
+- `Edit` 与 `Grep` 的工具名和字段是按推测映射的，Kimi Code 的文档只列出了 `Bash`。
+  接入后用一次真实的编辑和搜索确认，映射不对时在脚本里改。
+- 没有映射的工具（网页搜索、子任务等）一律放行，不经过 harness 判定。
+- 收尾检查没有接，通用入口不支持。
+
+自己验证时不要动日常配置：给 Kimi Code 设环境变量 `KIMI_CODE_HOME` 指向一个临时目录，在里面放一份只含登录凭据和上面 `[[hooks]]` 的 `config.toml`，用 `kimi -p "<提示>"` 非交互地跑一次。
+`-p` 不能和 `--yolo`、`--auto` 同时使用。
 
 ### 任务分级与实施授权
 
