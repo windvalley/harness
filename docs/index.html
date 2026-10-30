@@ -359,7 +359,7 @@ footer { border-top: 1px solid var(--line); color: var(--muted); font-size: .88r
     <p>一次改动从 Agent 调用工具开始，到写进主分支为止，要依次经过三层检查。前两层在过程中纠正，第三层在结果上把关。</p>
     <figure>
       <div class="diagram">
-        <svg viewBox="0 0 900 345" role="img" aria-label="三层防线：Agent 的工具调用先经过实时拦截；提交经过 git 钩子；任务分支依次经过 verify、review、confirm，再由 merge 带着合并令牌写入主分支，其他对主分支的写入被 reference-transaction 钩子拒绝。">
+        <svg viewBox="0 0 900 345" role="img" aria-label="三层防线：Agent 的工具调用先经过实时拦截；提交经过 git 钩子；任务分支依次经过 verify、review、confirm，再由 merge 带着合并令牌写入主分支（远程交付时由 submit 推送并创建 PR/MR，平台合并后 sync 快进），其他对主分支的写入被 reference-transaction 钩子拒绝。">
           <!-- 第一层 -->
           <path class="d-line deny" d="M350,58 C350,22 95,22 95,58" marker-end="url(#ar-deny)"/>
           <text class="d-l deny" x="222" y="22" text-anchor="middle">拒绝：原因 + 正确做法，Agent 改道</text>
@@ -422,14 +422,14 @@ footer { border-top: 1px solid var(--line); color: var(--muted); font-size: .88r
           <text class="d-s" x="545" y="321" text-anchor="middle">仅门禁改动</text>
           <line class="d-line" x1="600" y1="306" x2="626" y2="306" marker-end="url(#ar)"/>
           <rect class="d-box accent" x="630" y="280" width="110" height="52" rx="8"/>
-          <text class="d-t" x="685" y="303" text-anchor="middle">③ merge</text>
-          <text class="d-s" x="685" y="321" text-anchor="middle">带令牌写入</text>
+          <text class="d-t" x="685" y="303" text-anchor="middle">③ 交付</text>
+          <text class="d-s" x="685" y="321" text-anchor="middle">merge / submit</text>
           <line class="d-line accent" x1="740" y1="306" x2="776" y2="306" marker-end="url(#ar-accent)"/>
           <rect class="d-box allow" x="780" y="280" width="100" height="52" rx="8"/>
           <text class="d-t" x="830" y="311" text-anchor="middle">main</text>
         </svg>
       </div>
-      <figcaption>图 1　三层防线。①② 在过程中当场纠正，③ 在结果上把关；能写本地主分支的只有 <code>harness merge</code> 与 <code>harness sync</code>。图中是本地交付，远程交付把 merge 换成 <code>harness submit</code> 提交 PR/MR，平台合并后由 sync 快进本地主分支。</figcaption>
+      <figcaption>图 1　三层防线。①② 在过程中当场纠正，③ 在结果上把关；能写本地主分支的只有 <code>harness merge</code> 与 <code>harness sync</code>。本地交付由 merge 带令牌写入主分支；远程交付改用 <code>harness submit</code> 提交 PR/MR，平台合并后由 sync 带令牌快进本地主分支，生命周期见图 3。</figcaption>
     </figure>
 
     <div class="table-wrap"><table class="t-key">
@@ -520,7 +520,7 @@ footer { border-top: 1px solid var(--line); color: var(--muted); font-size: .88r
     <p>每一步都会留下一条签名记录，并且<strong>绑定到具体的内容</strong>上。内容一变，对应的记录就作废，需要重跑那一步。这样合并时核对的永远是“这一份代码”的证据，而不是“某个时候跑过一次”。</p>
     <figure>
       <div class="diagram">
-        <svg viewBox="0 18 900 222" role="img" aria-label="任务生命周期：approve（大任务）、实现并提交、verify、review、confirm（仅门禁改动）、merge、main；每一步的记录绑定到具体内容，评审被拒后修复再提交，证据与评审重新生成；主分支前进时 merge 只重跑被波及的检查。">
+        <svg viewBox="0 18 900 312" role="img" aria-label="任务生命周期：approve（大任务）、实现并提交、verify、review、confirm（仅门禁改动）、merge、main，远程交付时 merge 换成 submit，经 PR/MR 在平台合并后由 sync 快进主分支；每一步的记录绑定到具体内容，评审被拒后修复再提交，证据与评审重新生成；主分支前进时 merge 只重跑被波及的检查。">
           <path class="d-line dash" d="M455,96 C455,40 197,40 197,96" marker-end="url(#ar)"/>
           <text class="d-l" x="326" y="36" text-anchor="middle">被拒或再提交：证据与评审作废，重新 verify、review</text>
           <path class="d-line dash" d="M680,98 C680,58 735,58 735,98" marker-end="url(#ar)"/>
@@ -558,11 +558,24 @@ footer { border-top: 1px solid var(--line); color: var(--muted); font-size: .88r
           <text class="d-tag" x="455" y="180" text-anchor="middle">绑定分支提交</text>
           <text class="d-tag" x="580" y="180" text-anchor="middle">绑定合并结果 tree</text>
           <text class="d-tag" x="707" y="180" text-anchor="middle">令牌绑定新旧提交</text>
-          <line class="d-line dash" x1="10" y1="200" x2="890" y2="200"/>
-          <text class="d-l" x="450" y="226" text-anchor="middle">虚线框表示按条件出现的步骤；每一条记录都用本机密钥签名，存进 .git/harness/</text>
+          <text class="d-l" x="10" y="216">远程交付：前面的步骤相同，merge 换成 submit</text>
+          <rect class="d-box accent" x="180" y="228" width="130" height="50" rx="8"/>
+          <text class="d-t" x="245" y="250" text-anchor="middle">submit</text>
+          <text class="d-s" x="245" y="268" text-anchor="middle">推送并建 PR/MR</text>
+          <line class="d-line" x1="310" y1="253" x2="356" y2="253" marker-end="url(#ar)"/>
+          <rect class="d-box" x="360" y="228" width="130" height="50" rx="8"/>
+          <text class="d-t" x="425" y="250" text-anchor="middle">平台合并</text>
+          <text class="d-s" x="425" y="268" text-anchor="middle">由平台执行</text>
+          <line class="d-line" x1="490" y1="253" x2="536" y2="253" marker-end="url(#ar)"/>
+          <rect class="d-box accent" x="540" y="228" width="130" height="50" rx="8"/>
+          <text class="d-t" x="605" y="250" text-anchor="middle">sync</text>
+          <text class="d-s" x="605" y="268" text-anchor="middle">快进本地主分支</text>
+          <path class="d-line accent" d="M670,253 L840,253 L840,160" marker-end="url(#ar-accent)"/>
+          <line class="d-line dash" x1="10" y1="296" x2="890" y2="296"/>
+          <text class="d-l" x="450" y="322" text-anchor="middle">虚线框表示按条件出现的步骤；每一条记录都用本机密钥签名，存进 .git/harness/</text>
         </svg>
       </div>
-      <figcaption>图 3　每条记录绑定什么。分支上再提交，证据与评审作废；主分支前进导致合并结果变化，确认也要重做。</figcaption>
+      <figcaption>图 3　每条记录绑定什么。分支上再提交，证据与评审作废；主分支前进导致合并结果变化，确认也要重做。下方一行是远程交付的路径。</figcaption>
     </figure>
     <ul>
       <li><strong>verify</strong> 在固定检出里检出分支提交，只验证已提交的内容；工作区里没提交的改动不算。</li>
@@ -579,7 +592,7 @@ footer { border-top: 1px solid var(--line); color: var(--muted); font-size: .88r
     <p>主分支的保护不靠“约定不要直接提交”，而是由 git 自己的 <code>reference-transaction</code> 钩子执行：每次更新 <code>refs/heads/main</code> 时，钩子都要求环境里带着合并令牌。</p>
     <figure>
       <div class="diagram">
-        <svg viewBox="0 0 900 250" role="img" aria-label="合并令牌：harness merge 核对记录后，用密钥对旧提交和新提交签名得到令牌，带着令牌更新主分支，reference-transaction 钩子重算并比对后放行；在主分支上直接 commit、pull、reset 没有令牌，被钩子拒绝。">
+        <svg viewBox="0 0 900 250" role="img" aria-label="合并令牌：harness merge 核对记录后，用密钥对旧提交和新提交签名得到令牌，带着令牌更新主分支（远程交付时由 harness sync 生成同样的令牌），reference-transaction 钩子重算并比对后放行；在主分支上直接 commit、pull、reset 没有令牌，被钩子拒绝。">
           <rect class="d-box accent" x="20" y="30" width="190" height="60" rx="8"/>
           <text class="d-t" x="115" y="55" text-anchor="middle">harness merge</text>
           <text class="d-s" x="115" y="75" text-anchor="middle">先核对证据、评审、确认</text>
@@ -589,6 +602,7 @@ footer { border-top: 1px solid var(--line); color: var(--muted); font-size: .88r
           <text class="d-m" x="385" y="75" text-anchor="middle">HMAC(密钥, 旧提交, 新提交)</text>
           <line class="d-line accent" x1="500" y1="60" x2="556" y2="60" marker-end="url(#ar-accent)"/>
           <text class="d-l accent" x="528" y="52" text-anchor="middle">带令牌</text>
+          <text class="d-l" x="385" y="112" text-anchor="middle">远程交付时由 harness sync 生成同样的令牌</text>
 
           <rect class="d-box deny" x="20" y="160" width="190" height="60" rx="8"/>
           <text class="d-t" x="115" y="185" text-anchor="middle">直接写 main</text>
