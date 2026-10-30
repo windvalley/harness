@@ -175,4 +175,100 @@ describe("主 Worktree 只用来合并", () => {
     assert.equal(certain.status, 2);
     assert.doesNotMatch(certain.stderr, /无法确定/, "确定在主 Worktree 时不附加说明");
   });
+  test("用 Shell 重定向与常见写文件命令改主 Worktree 同样被拒，按实际写入目标判定", () => {
+    const { repo, root, linked } = setup();
+    const inRoot = [
+      "echo x > README.md",
+      "echo x >> src/app.js",
+      "printf x | tee README.md",
+      "sed -i 's/a/b/' README.md",
+      "cp /etc/hosts README.md",
+      "mv a.txt b.txt",
+      "touch new.txt",
+      "rm README.md",
+      "mkdir -p src/new",
+      "dd if=/dev/zero of=README.md count=1",
+      "find . -name '*.js' -delete",
+      "git apply fix.patch",
+      `cd ${root}/src && echo x > app.js`,
+    ];
+    for (const command of inRoot) {
+      const refused = claudeHook(repo, bashCall(root, command));
+      assert.equal(refused.status, 2, command);
+      assert.match(refused.stderr, /main-worktree-edit/, command);
+    }
+    const fromLinked = [
+      `echo x > ${root}/README.md`,
+      `cp a.txt ${root}/README.md`,
+      `cd ${root} && touch x.txt`,
+      `echo x > ${root}/.claude/../README.md`,
+    ];
+    for (const command of fromLinked) {
+      const refused = claudeHook(repo, bashCall(linked, command));
+      assert.equal(refused.status, 2, command);
+      assert.match(refused.stderr, /main-worktree-edit/, command);
+    }
+  });
+
+  test("Shell 写入的正常任务、忽略文件与仓库之外的位置照常放行", () => {
+    const { repo, root, linked } = setup();
+    const fine = [
+      [linked, "echo x > README.md"],
+      [linked, `echo x >> src/app.js && sed -i 's/a/b/' src/app.js && cp a.txt b.txt`],
+      [linked, "ls 2>&1 >/dev/null"],
+      [linked, "echo x > /tmp/harness-scratch.txt"],
+      [linked, "cat <<EOF > notes.txt\na > b\nEOF"],
+      [root, `echo x > ${root}/.harness/dsh-plugin/x.json`],
+      [root, `cd ${linked} && echo x > README.md`],
+      [root, `echo x > ${linked}/README.md`],
+      [root, "echo x > ../scratch.txt"],
+      [root, "git status && ls -la"],
+      [root, "python3 tools/gen.py"],
+      [root, "python3 -m pytest -q"],
+      [root, "python3 --version"],
+      [root, `cd ${linked} && python3 -c "print(1)"`],
+      [linked, `python3 - <<'PY'\nopen('a.txt','w').write('x')\nPY`],
+      [linked, `node -e "console.log(1)"`],
+    ];
+    for (const [cwd, command] of fine) {
+      const result = claudeHook(repo, bashCall(cwd, command));
+      assert.equal(result.status, 0, `${command}\n${result.stderr}`);
+    }
+  });
+
+  test("解释器行内脚本无法确定写入目标：在主 Worktree 里一律拒，在别处引用主 Worktree 路径时拒", () => {
+    const { repo, root, linked } = setup();
+    const script = (target) => `python3 - <<'PY'\nopen('${target}', 'w').write('x')\nPY`;
+    const inRoot = [script("README.md"), `python3 -c "open('README.md','w')"`, `node -e "require('fs').writeFileSync('README.md','x')"`, `ruby -e 'File.write("README.md","x")'`, `echo "print(1)" | python3`, `python3 <<EOF\nprint(1)\nEOF`];
+    for (const command of inRoot) {
+      const refused = claudeHook(repo, bashCall(root, command));
+      assert.equal(refused.status, 2, command);
+      assert.match(refused.stderr, /main-worktree-edit/, command);
+      assert.match(refused.stderr, /无法确定写入目标/, command);
+    }
+    const refused = claudeHook(repo, bashCall(linked, script(join(root, "README.md"))));
+    assert.equal(refused.status, 2, "从 Linked Worktree 用绝对路径写回主 Worktree");
+    assert.match(refused.stderr, /main-worktree-edit/);
+    assert.equal(claudeHook(repo, bashCall(linked, script(join(linked, "README.md")))).status, 0, "写自己的 Worktree 放行");
+    assert.equal(claudeHook(repo, bashCall(linked, script(join(root, ".harness/dsh-plugin/x.json")))).status, 0, "引用主 Worktree 里被忽略的文件放行");
+  });
+
+  test("写入目标无法静态确定时：停在主 Worktree 按最严格处理，Linked Worktree 里放行", () => {
+    const { repo, root, linked } = setup();
+    const refused = claudeHook(repo, bashCall(root, 'echo x > "$OUT"'));
+    assert.equal(refused.status, 2);
+    assert.match(refused.stderr, /main-worktree-edit/);
+    assert.equal(claudeHook(repo, bashCall(linked, 'echo x > "$OUT"')).status, 0);
+    assert.equal(claudeHook(repo, bashCall(linked, 'cd "$X" && echo x > a.txt')).status, 2, "目录不确定时按最严格");
+  });
+
+  test("Codex 的 exec_command 走同一套判定", () => {
+    const { repo, root, linked } = setup();
+    const codex = (cwd, cmd) =>
+      sh(repo.root, join(repo.root, ".harness/bin/harness"), ["hook", "--client", "codex"], repo.env, JSON.stringify({ tool_name: "exec_command", tool_input: { cmd }, cwd }));
+    const script = (target) => `python3 - <<'PY'\nopen('${target}', 'w').write('x')\nPY`;
+    assert.match(codex(root, script("README.md")).stdout, /main-worktree-edit/);
+    assert.match(codex(linked, script(join(root, "README.md"))).stdout, /main-worktree-edit/);
+    assert.equal(codex(linked, script("README.md")).stdout.trim(), "", "写自己的 Worktree 放行");
+  });
 });

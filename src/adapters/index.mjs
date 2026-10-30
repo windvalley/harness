@@ -33,6 +33,7 @@ function locatedKinds(resolved) {
     if (!rule.when && !rule.allowIgnored) continue;
     if (rule.kind === "read-protect") kinds.add("read");
     if (rule.kind === "shell-forbid" || rule.kind === "shell-secret-access") kinds.add("shell");
+    if (rule.kind === "write-protect" && rule.includeShell) kinds.add("shell");
   }
   return kinds;
 }
@@ -67,6 +68,15 @@ function shellLocator(root, base) {
       cache.set(dir, exists ? placeContext(base, locatePath(root, dir)) : null);
     }
     return cache.get(dir);
+  };
+}
+
+/** 命令的写入目标落在哪个 Worktree：与显式编辑工具共用同一套落点判定，含被忽略文件的例外。 */
+function shellTargetLocator(root, base) {
+  return (abs) => {
+    const place = locatePath(root, abs, { checkIgnore: true });
+    if (place.outsideRepo) return { outsideRepo: true };
+    return { root: place.root, path: place.path, context: { ...placeContext(base, place), ignored: place.ignored } };
   };
 }
 
@@ -110,6 +120,7 @@ export function guard({ adapter, payload, log = () => {} }) {
 
   // Agent 常用 cd <目录> && ... 或 git -C <目录> 在别的 Worktree 里执行命令，带条件的规则按每段实际所在的目录判定。
   const locate = kinds.has("shell") ? shellLocator(project.root, context) : undefined;
+  const locateTarget = kinds.has("shell") ? shellTargetLocator(project.root, context) : undefined;
   // 方案待授权只约束写入：按落点所在 Worktree 的分支与工作区判断，只有启用了相应规则才多花这几次 git 调用。
   const planRule = resolved.rules.some((rule) => rule.when === "plan-pending");
   // 带会话标识的客户端顺带记下这次调用涉及的任务分支，供收尾检查使用；Claude Code 与 Codex 的载荷都有 session_id。
@@ -122,7 +133,7 @@ export function guard({ adapter, payload, log = () => {} }) {
       located.context = { ...located.context, planPending: worktreePlanPending({ root: located.root, branch: located.context.branch, project }) };
     }
     if (session) noteBranches(touched, { root: project.root, call: located.call, context: located.context, cwd: resolve(cwd) });
-    result = evaluateCall({ policy: resolved, root: located.root, call: located.call, context: located.context, cwd: resolve(cwd), locate });
+    result = evaluateCall({ policy: resolved, root: located.root, call: located.call, context: located.context, cwd: resolve(cwd), locate, locateTarget });
     if (result.decision === "deny") break;
   }
   if (session && touched.size > 0) {

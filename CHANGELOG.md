@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+### 修复
+
+- `main-worktree` 预设的 `main-worktree-edit` 能被 Shell 绕过：Agent 用 `echo >`、`sed -i` 或 `python3 - <<EOF` 改主 Worktree 的文件不被拦，从 Linked Worktree 用绝对路径写回主 Worktree 也不被拦。
+  现在 `write-protect` 规则可用 `includeShell` 把 Shell 命令纳入判定，按写入目标实际落在哪个 Worktree 判定；`main-worktree-edit` 已开启。
+  能静态认出目标的写法（重定向、`tee`、`cp`、`mv`、`rm`、`touch`、`mkdir`、`sed -i`、`dd of=`、`find -delete`、`git apply`）直接判定；解释器行内脚本在主 Worktree 里一律拒，在别处引用主 Worktree 绝对路径时拒。
+- 这仍是命令文本层面的静态检查：执行文件里的脚本、脚本内拼出的路径、间接写入的构建工具不在拦截范围，完整的写入前隔离需要宿主沙箱或文件系统权限。
+
 ## [0.10.3] - 2026-10-30
 
 这一版修复 DeepSeek Harness 插件在收尾检查要 Agent 接着做时，本轮因会话格式校验失败而中断的问题。

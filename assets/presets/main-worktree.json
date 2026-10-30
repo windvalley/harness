@@ -9,8 +9,9 @@
       "layer": "agent",
       "paths": ["**"],
       "allowIgnored": true,
+      "includeShell": true,
       "reason": "主 Worktree 只用来合并与运行固定环境，在这里改文件会让所有任务的 harness merge 因主 Worktree 不洁净而失败",
-      "fix": "在独立的 Linked Worktree 里修改：git worktree add -b <任务分支> <路径> <主分支>，之后在那个目录里工作；被 .gitignore 忽略的本机文件不受这条限制"
+      "fix": "在独立的 Linked Worktree 里修改：git worktree add -b <任务分支> <路径> <主分支>，之后在那个目录里工作；命令与脚本也要在那个目录里执行，写主 Worktree 的绝对路径同样会被拦；被 .gitignore 忽略的本机文件不受这条限制"
     },
     {
       "id": "main-worktree-leave-main",

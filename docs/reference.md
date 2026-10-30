@@ -993,7 +993,7 @@ node ~/github/harness/bin/harness.mjs install --local   # 按新锁定的版本�
 | kind | 判定什么 | 主要字段 | 在哪一层 |
 | --- | --- | --- | --- |
 | `read-protect` | 读取、搜索的路径 | `paths`、`allow` | 实时拦截 |
-| `write-protect` | 写入的路径 | `paths`、`allow`、`allowIgnored` | 实时拦截；没有 `layer: "agent"` 时 `pre-commit` 也按暂存的路径判定 |
+| `write-protect` | 写入的路径 | `paths`、`allow`、`allowIgnored`、`includeShell` | 实时拦截；没有 `layer: "agent"` 时 `pre-commit` 也按暂存的路径判定 |
 | `content-forbid` | 写入的内容 | `paths`、`patterns` | 实时拦截；没有 `layer: "agent"` 时 `pre-commit` 也按新增行判定 |
 | `generated-header` | 文件头带生成标记的文件不许手改 | `paths`、`headerPatterns` | 实时拦截 |
 | `shell-forbid` | 命令 | `patterns`、`scope` | 实时拦截 |
@@ -1006,7 +1006,7 @@ node ~/github/harness/bin/harness.mjs install --local   # 按新锁定的版本�
 - `layer: "agent"` 表示只约束 Agent 的实时调用。
   git 层看不出是谁写的，入口由 `harness install` 生成后要能提交，所以 `protect-executor-entry` 带这个标记。
 - `shell-forbid` 默认逐段判定，引号里的文字不参与匹配，提交信息里提到被禁命令不会误拦；`scope: "whole"` 对整条命令的原文判定。
-- `write-protect` 只约束写文件类的工具调用，用 shell 命令写同一个文件不经过它；需要时再配一条 `shell-forbid`。
+- `write-protect` 默认只约束写文件类的工具调用；`includeShell: true` 让它也按写入目标判定 Shell 命令里能静态认出的写法（`main-worktree` 预设已开启），只对声明了的规则生效。
 
 规则改动在任务分支上不生效：git 钩子与实时拦截读的都是主分支的配置，合入后才生效。
 合入之前用 `harness golden --worktree` 按工作区的配置重放，确认新规则的判定符合预期。
@@ -1060,7 +1060,7 @@ node ~/github/harness/bin/harness.mjs install --local   # 按新锁定的版本�
 只要有一个 Agent 在主 Worktree 里切走分支或留下改动，所有任务的合并都会被挡住。
 多个 Agent 或会话并行的项目，建议在 `.harness/policy.json` 的 `presets` 里加上 `main-worktree`：
 
-- `main-worktree-edit`：Agent 不能改主 Worktree 里的文件，被 `.gitignore` 忽略的本机文件除外。
+- `main-worktree-edit`：Agent 不能改主 Worktree 里的文件（显式编辑工具与能认出目标的 Shell 写入，见下），被 `.gitignore` 忽略的本机文件除外。
 - `main-worktree-leave-main`：Agent 不能在主 Worktree 里 `git switch`、`git checkout` 到主分支以外。
 - `main-worktree-commit`：git 的 `pre-commit` 拒绝主 Worktree 里的提交，对所有客户端和人都生效，Codex 没有信任钩子时也能兜底。
 
@@ -1069,7 +1069,14 @@ node ~/github/harness/bin/harness.mjs install --local   # 按新锁定的版本�
 目录无法静态确定的段（`cd "$变量"`、`cd -`、`popd`、管道里的 `cd`、`GIT_DIR` 与 `--git-dir`）按最严格处理，带条件的规则都适用。
 `harness merge` 用 `commit-tree` 和快进更新主分支，不经过 `pre-commit`，不受影响。
 需要由人在主 Worktree 手工提交的项目，在 `disabled` 里关掉 `main-worktree-commit`，其余两条照常。
-用命令写文件（例如 `echo > 文件`、构建产物）不在拦截范围内，靠 `harness status` 与 `harness doctor` 提前提示主 Worktree 不洁净来兜底。
+`main-worktree-edit` 也看 Shell 命令，按写入目标实际落在哪个 Worktree 判定，不看当前目录：
+重定向（`>`、`>>`、`tee`）、`cp`、`mv`、`rm`、`touch`、`mkdir`、`sed -i`、`dd of=`、`find -delete`、`git apply` 这类能静态认出目标的写法，从 Linked Worktree 用绝对路径写回主 Worktree 同样被拒，被忽略的本机文件照旧放行。
+解释器（`python`、`node`、`ruby`、`perl`、`php`、`deno`、`bun`）执行行内脚本（`-c`、`-e`、heredoc、管道喂入）时写到哪里取决于脚本，静态看不出来：
+在主 Worktree 里一律拒；在别处执行时，命令文本引用了主 Worktree 里的绝对路径才拒。
+这是静态检查，不是对任意程序写入的完整限制，下面几种仍可能写进主 Worktree：
+执行文件里的脚本（`python3 tools/x.py`、`bash x.sh`）、脚本里拼出来的路径、`xargs` 或构建工具间接写入。
+需要写入前的完整隔离，要靠宿主的沙箱或文件系统权限（例如只把任务 Worktree 设为可写目录），harness 的实时拦截只能看到命令文本。
+`harness status` 与 `harness doctor` 提示主 Worktree 不洁净属于事后检测，用来发现漏网的写入，不能替代写入前拦截。
 起始黄金任务里的 `g16-main-worktree-merge-only` 只在启用这个预设时重放，未启用时记为跳过。
 
 ### 由 harness 接管 git 钩子目录：git.hooksDir
