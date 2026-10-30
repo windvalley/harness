@@ -10,6 +10,7 @@ import { guard, renderDenial } from "./adapters/index.mjs";
 import { claude } from "./adapters/claude.mjs";
 import { codex } from "./adapters/codex.mjs";
 import { dsh } from "./adapters/dsh.mjs";
+import { generic } from "./adapters/generic.mjs";
 import { planChecks, verify } from "./verify/verify.mjs";
 import { MergeError, mergeTask } from "./merge/merge.mjs";
 import { submitTask } from "./delivery/submit.mjs";
@@ -35,7 +36,7 @@ import { conformance, formatConformance } from "./conformance.mjs";
 import { cleanWorktrees, formatCleanPlan, formatCleanResult, planCleanup } from "./worktree/clean.mjs";
 import { packageVersion } from "./install/managed.mjs";
 
-const ADAPTERS = { claude, codex, dsh };
+const ADAPTERS = { claude, codex, dsh, generic };
 
 const USAGE = `harness <命令> [参数]
 
@@ -71,7 +72,7 @@ const USAGE = `harness <命令> [参数]
 
 客户端与钩子入口
   githook  <pre-commit|commit-msg|reference-transaction>   由 git 钩子调用
-  hook     --client <claude|codex|dsh> [--event <pre-tool-use|stop>]   由客户端钩子调用，读 stdin；stop 是收尾检查
+  hook     --client <claude|codex|dsh|generic> [--event <pre-tool-use|stop>]   由客户端钩子调用，读 stdin；stop 是收尾检查
   check    --kind <shell|write|read|search|commit> ... [--on-main] [--linked-worktree] [--ignored]   手工判定一次调用
 
 人用
@@ -408,6 +409,10 @@ function cmdHook(argv) {
     process.stderr.write(`未知客户端: ${values.client ?? "(缺失)"}\n`);
     return 2;
   }
+  if (values.event === "stop" && !adapter.supportsStop && adapter.validate) {
+    process.stderr.write("generic 客户端只支持 pre-tool-use，不支持收尾检查\n");
+    return 2;
+  }
   if (values.event === "stop") return cmdStopHook(adapter);
   if (values.event !== "pre-tool-use") {
     process.stderr.write(`未知钩子事件: ${values.event}，可选 pre-tool-use 或 stop\n`);
@@ -418,6 +423,11 @@ function cmdHook(argv) {
     payload = JSON.parse(readFileSync(0, "utf8"));
   } catch {
     process.stderr.write("[harness] 钩子输入不是有效 JSON，按失败处理\n");
+    return 2;
+  }
+  const invalid = adapter.validate?.(payload);
+  if (invalid) {
+    process.stderr.write(`[harness] ${adapter.name} 载荷不合约定，按失败处理: ${invalid}\n`);
     return 2;
   }
   const outcome = guard({ adapter, payload });

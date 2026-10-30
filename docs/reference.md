@@ -297,6 +297,37 @@ Agent 应结合诊断和当前客户端的实际调用给出证据，不能把�
 
 ## 日常使用
 
+
+### 接入其他编码 Agent
+
+内置适配的只有 Claude Code、Codex 与 DeepSeek Harness，其他编码 Agent 按下面三层接入，不需要改 harness 源码。
+
+| 层 | 做法 |
+| --- | --- |
+| git 钩子与合并门禁 | 与 Agent 无关，本来就生效，不需要适配 |
+| 独立评审 | 用 `command` 评审者接入：提示从 stdin 读入，输出符合结构的 JSON，约定见“独立评审的后端” |
+| 实时拦截 | 该 Agent 支持“工具调用前钩子”时，用 `harness hook --client generic` 接入；不支持时只有 git 层生效 |
+
+通用入口从 stdin 读一个统一载荷，钩子脚本负责把 Agent 自己的工具调用转成它：
+
+```json
+{ "kind": "shell", "command": "git push origin main" }
+{ "kind": "write", "path": "config/server.pem", "content": "..." }
+{ "kind": "read", "path": "config/server.pem" }
+{ "kind": "search", "path": "src", "glob": "**/*.js" }
+```
+
+- `kind` 取 `shell`、`write`、`read`、`search`。
+  `write` 一次改多个文件时可以用 `paths` 数组，任一被拒即拒。
+- 可选 `cwd`（工具调用所在目录，默认是钩子进程的目录）与 `session_id`。
+- 放行时退出码 0 且没有输出；拒绝时退出码 2，原因写在 stderr，应交给模型作为反馈。
+- 载荷不是 JSON、`kind` 不认识、缺必填字段时同样退出码 2，不会当作放行。
+- 只支持 `pre-tool-use`，不支持收尾检查（`--event stop` 报错）。
+- 钩子脚本应在本仓库的 `.harness/bin/harness` 上调用，这样跟随项目锁定的版本。
+
+限制：通用入口只负责判定，Agent 自己必须在工具执行前调用钩子，并且真的因拒绝而不执行；harness 无法验证这一点，`harness doctor` 也不检查通用客户端是否接上。
+harness 没有内置也没有实测这类 Agent 的钩子协议，接入后需要自己用一条应被拒绝的调用（例如写 `config/server.pem`）确认拦截生效。
+
 ### 任务分级与实施授权
 
 Agent 开始任务前先判断分级，规则写在 `.harness/rules/core.md`，要点同时写进了 `AGENTS.md` 的托管块：
