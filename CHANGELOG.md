@@ -9,6 +9,7 @@
 - 通用客户端入口 `harness hook --client generic`：没有内置适配的编码 Agent 只需把工具调用转成统一载荷（`kind` 取 `shell`、`write`、`read`、`search`）就能接上实时拦截，拒绝时退出码 2；载荷不合约定同样按失败处理。
   参考手册新增“接入其他编码 Agent”，说明 git 层、`command` 评审者与通用入口三层各自怎么接，以及限制：只支持拦截，不支持收尾检查，harness 无法验证 Agent 真的因拒绝而不执行。
   手册附 Kimi Code 的接入示例（桥接脚本与 `[[hooks]]` 配置），在 Kimi Code 2.0.2 上实测了 `Bash`、`Write`、`Read` 的拦截；`Edit` 与 `Grep` 的字段映射没有实测。
+- 教程页的图不再只列三个客户端：组件关系图写“Claude Code、Codex、DSH 等”，三层防线图第一层写“客户端钩子 / DSH 插件”，表格注明其他 Agent 经通用入口接入。
 - 本机评审者文件 `~/.config/harness/reviewers.json`，用 `harness reviewer` 管理。
   每个评审者指定客户端（`claude`、`codex` 或任意命令）、模型和推理强度，`claude` 还可以指定第三方端点和 key。
   评审用什么模型是各机器自己的事，换模型不再需要提交，也不触发门禁确认。
