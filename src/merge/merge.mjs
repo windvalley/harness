@@ -202,7 +202,7 @@ export async function checkGates({ project, root, branch, log = console.error, d
   const resultPaths = changedPaths(root, mainCommit, newHead);
 
   // 提交信息规则写坏的合并结果不能进主分支：合入后钩子会拒绝所有提交。放在人工确认之前，不让人确认一份不能用的配置。
-  const ruleError = commitRuleErrorAt(root, newHead);
+  const ruleError = commitRuleErrorAt(root, newHead, { baseRef: mainCommit });
   if (ruleError) {
     throw new MergeError(
       `合并结果里的提交信息规则不能用，合入后所有提交都会被拒绝；在任务分支修正后重新 verify、review:\n  ${ruleError}`,

@@ -8,7 +8,7 @@ import { mainWorktreeProblems } from "../merge/merge.mjs";
 import { commandExists, describePlan, maxDiffChars, planReviewers, resolveBackend } from "../review/review.mjs";
 import { loadLocalReviewers } from "../review/reviewers.mjs";
 import { resolvePolicy } from "../policy/resolve.mjs";
-import { findCommitRule, isStructuredRule, legacyConfigFields, resolveCommitRule } from "../policy/commit-message.mjs";
+import { findCommitRule, isStructuredRule, legacyConfigFields, resolveCommitRule, unknownRuleFields } from "../policy/commit-message.mjs";
 import { packageVersion, MARK_START } from "./managed.mjs";
 import { leftoverWorktrees } from "../worktree/clean.mjs";
 import { platformStatus } from "../delivery/platform.mjs";
@@ -155,10 +155,14 @@ export function commitMessageCheck(project) {
   const rule = findCommitRule(resolved);
   if (rule && !isStructuredRule(rule)) legacy.unshift(`.harness/policy.json 的 ${rule.id} 只写了 pattern`);
   if (legacy.length === 0) return null;
+  // 结构化规则里有不认识的字段会在上面直接报错，走到这里的只会是旧写法。
+  const unknown = rule ? unknownRuleFields(rule) : [];
   return {
     id: "project:commit-message",
     ok: true,
-    detail: `提交信息规范还在用旧写法（${legacy.join("、")}），按两处的并集判定；迁移时改写成 policy.json 里的结构化字段并删掉 config.json 的旧字段，写法见参考手册的“提交信息”`,
+    detail:
+      `提交信息规范还在用旧写法（${legacy.join("、")}），按两处的并集判定；迁移时改写成 policy.json 里的结构化字段并删掉 config.json 的旧字段，写法见参考手册的“提交信息”` +
+      (unknown.length > 0 ? `；规则里有不认识的字段 ${unknown.join("、")}，不起作用，改动这条规则时要删掉或改正` : ""),
   };
 }
 

@@ -673,9 +673,12 @@ git -C <主 Worktree> worktree unlock <Worktree 路径>
 | `example` | 无 | 被拒时一并展示的示例 |
 | `reason`、`fix` | 必填 | 被拒时展示的原因与正确做法 |
 
+字段名拼错、`true`/`false` 写成字符串这类错误一律报错，不按默认值悄悄放宽或收紧。
+只写 `pattern` 的旧规则在主分支上早就带着其他字段时照旧可用，`harness doctor` 会指出这些字段不起作用；改动这条规则的分支才按同样的标准检查字段名。
+
 语言只看描述：类型前缀天然是英文，`feat(login): 支持短信验证码登录` 不会被判成混合语言。
 反引号里的代码、路径与命令不参与语言判定。
-合并提交不检查；`fixup!`、`squash!` 会随分支原样进入主分支，照常检查。
+合并提交不检查，对合并提交 `--amend` 也一样；`fixup!`、`squash!` 会随分支原样进入主分支，照常检查。
 
 几个常见的项目约定：
 
@@ -688,7 +691,7 @@ git -C <主 Worktree> worktree unlock <Worktree 路径>
 ```
 
 规则属于门禁配置，在任务分支改完经人确认后合入主分支才生效。
-规则写错（字段取值非法、正则无效，或与 `config.json` 的旧字段并存）的分支进不了主分支：`verify`、`review` 以 `branch_commit_rule_invalid` 拒绝，`status` 列出 `commit-rule` 一项，合并按合并结果再查一次，都在要求人工确认之前。
+规则写错（字段取值或类型不对、字段名不认识、正则无效，或与 `config.json` 的旧字段并存）的分支进不了主分支：`verify`、`review` 以 `branch_commit_rule_invalid` 拒绝，`status` 列出 `commit-rule` 一项，合并按合并结果再查一次，都在要求人工确认之前。
 主分支上的规则已经不能用时（例如绕过门禁写进去的），钩子会拒绝所有提交，合并也会报错，`harness doctor` 的 `project:commit-message` 一项会指出问题，需要由人修正主分支。
 
 被拒时在任务分支改写提交信息，再重新 verify、review：

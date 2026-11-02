@@ -11,7 +11,7 @@
   被拒时逐条列出不符合的地方，附上 `example` 与 `fix`。
 - 同一份判定用在 `commit-msg` 钩子、`harness verify --branch` 与 `harness review --branch` 的前置检查、`harness status`、`merge` 与 `submit` 上，结论一致。
   verify、review 发现提交信息不合规时以 `bad_commit_message` 拒绝，不跑检查、不调用评审者、不写记录。
-- 任务分支里改坏的提交信息规则（字段取值非法、正则无效，或与 `config.json` 的旧字段并存）进不了主分支：verify、review 与合并以 `branch_commit_rule_invalid` 拒绝，`status` 列出 `commit-rule` 一项，都在要求人工确认之前。
+- 任务分支里改坏的提交信息规则（字段取值或类型不对、字段名不认识、正则无效，或与 `config.json` 的旧字段并存）进不了主分支：verify、review 与合并以 `branch_commit_rule_invalid` 拒绝，`status` 列出 `commit-rule` 一项，都在要求人工确认之前。
 - `harness status` 新增 `commit-message` 一项，与合并同码；收尾检查把 `bad_commit_message` 与 `branch_commit_rule_invalid` 当作 Agent 自己能修的阻塞，提示先改写提交信息或修正规则。
 - `harness doctor` 新增 `project:commit-message`：主分支的规则不能用时报失败，还在用旧写法时提示迁移。
 
@@ -36,6 +36,7 @@
 - `upgrade` 会刷新 `.harness/rules/harness.md`、`core.md` 与 `method-review.md`，规则改动在合并前由人确认。
 - `upgrade` 不改写项目的 `policy.json` 与 `config.json`，旧写法继续有效，判定取两处的并集：交付结果与以前一致，只是不合规的提交在提交当场就被拒。
 - 任务分支上已有的不合规提交，升级后 verify、review 会直接拒绝，先在任务分支改写提交信息。
+- 只写 `pattern` 的旧规则里带着其他字段时，钩子与合并照旧可用，`harness doctor` 会指出这些字段不起作用；改动这条规则的分支要先删掉或改正它们，否则以 `branch_commit_rule_invalid` 拒绝。
 - 要统一到一处时，在任务分支把 `commit-message` 规则改写成结构化字段，同时删掉 `config.json` 的两个旧字段，经人确认后合入；只改规则、不删旧字段会以 `branch_commit_rule_invalid` 拒绝。
 
 ## [0.10.4] - 2026-10-30

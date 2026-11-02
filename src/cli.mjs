@@ -100,7 +100,7 @@ function messageGate({ cwd, branch, label = "验证" }) {
   let ruleError;
   try {
     problems = branchMessageProblems({ project, root: project.root, branch });
-    ruleError = commitRuleErrorAt(project.root, branch);
+    ruleError = commitRuleErrorAt(project.root, branch, { baseRef: mainBranch(project) });
   } catch (error) {
     process.stderr.write(`${label}前置检查失败: ${error.message}\n`);
     return 1;

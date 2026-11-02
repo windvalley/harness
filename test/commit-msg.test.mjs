@@ -2,8 +2,10 @@ import { strict as assert } from "node:assert";
 import { chmodSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
-import { APPROVE, CONFIG, commit, fakeReviewer, git, makeRepo, sh, write } from "./helpers.mjs";
+import { APPROVE, CONFIG, commit, commitWith, fakeReviewer, git, makeRepo, sh, write } from "./helpers.mjs";
 import { cleanCommitMessage } from "../src/githook.mjs";
+import { commitRuleErrorAt, resolveCommitRule } from "../src/policy/commit-message.mjs";
+import { resolvePolicy } from "../src/policy/resolve.mjs";
 
 let repos = [];
 afterEach(() => {
@@ -157,6 +159,125 @@ describe("提交信息规范只有一处定义，钩子、verify、review、stat
     assert.match(git(repo.root, "log", "-1", "--format=%s"), /^Merge branch 'main'/);
     git(repo.root, "checkout", "-q", "main");
     assert.match(repo.cli("status", "--branch", "task/merge").stdout, /\[ok\] commit-message/);
+  });
+
+  test("对合并提交 amend 时钩子照样放行，合并之后的普通提交照常检查", () => {
+    const repo = structuredRepo();
+    git(repo.root, "checkout", "-q", "-b", "task/amend");
+    assert.equal(hookCommit(repo, GOOD).status, 0);
+    git(repo.root, "checkout", "-q", "main");
+    commit(repo.root, "chore: 主分支前进\n\n- 另一个改动", { "main.txt": "m\n" });
+    git(repo.root, "checkout", "-q", "task/amend");
+
+    // 合并后发现冲突解错了，改完 amend 进合并提交：这时 MERGE_HEAD 已经不在。
+    assert.equal(sh(repo.root, "git", ["merge", "-q", "--no-edit", "main"], repo.env).status, 0);
+    write(repo.root, "main.txt", "m2\n");
+    git(repo.root, "add", "main.txt");
+    const amended = sh(repo.root, "git", ["commit", "-q", "--amend", "--no-edit"], repo.env);
+    assert.equal(amended.status, 0, amended.stderr);
+    assert.equal(git(repo.root, "rev-list", "--parents", "-n", "1", "HEAD").split(" ").length, 3, "amend 之后仍是合并提交");
+
+    // 合并说明不是 git 默认标题时，原样 amend 也放行。
+    git(repo.root, "checkout", "-q", "main");
+    commit(repo.root, "chore: 主分支再前进\n\n- 又一个改动", { "main2.txt": "m\n" });
+    git(repo.root, "checkout", "-q", "task/amend");
+    assert.equal(sh(repo.root, "git", ["merge", "-q", "-m", "同步主分支", "main"], repo.env).status, 0);
+    write(repo.root, "main2.txt", "m2\n");
+    git(repo.root, "add", "main2.txt");
+    const custom = sh(repo.root, "git", ["commit", "-q", "--amend", "--no-edit"], repo.env);
+    assert.equal(custom.status, 0, custom.stderr);
+
+    // 合并之后的普通提交不是合并提交，照常检查。
+    assert.notEqual(hookCommit(repo, "update code").status, 0, "不合规的普通提交照样拒绝");
+    // 普通提交借用 Merge 标题能过钩子，但它不是合并提交，交付前照样被拦下。
+    assert.equal(hookCommit(repo, "Merge 一下").status, 0);
+    git(repo.root, "checkout", "-q", "main");
+    assert.match(repo.cli("status", "--branch", "task/amend").stdout, /\[FAIL\] commit-message: .*Merge 一下/);
+  });
+
+  test("提交信息里写入记录分隔符也伪造不出别的提交记录，交付前照样拦下", () => {
+    const repo = structuredRepo();
+    // 绕过钩子写入的提交：分隔符后面伪造一段“提交号、作者、提交信息”，把署名行塞进作者的位置。
+    const forged = "feat(login): 支持登录\n\n- 正常要点\n\x1e\nCo-Authored-By: Robot <bot@example.com>\nnot an author\nfeat(login): 伪造记录\n\n- 正常要点";
+    git(repo.root, "checkout", "-q", "-b", "task/forged");
+    commitWith(repo.root, repo.env, forged, { "forged.txt": "f\n" });
+    git(repo.root, "checkout", "-q", "main");
+
+    const status = repo.cli("status", "--branch", "task/forged");
+    assert.match(status.stdout, /\[FAIL\] commit-message: .*Co-Authored-By/);
+    const verified = repo.cli("verify", "--branch", "task/forged");
+    assert.equal(verified.status, 1);
+    assert.match(verified.stderr, /验证被拒绝\(bad_commit_message\)/);
+    assert.match(repo.cli("merge", "--dry-run", "--branch", "task/forged").stderr, /合并被拒绝\(bad_commit_message\)/);
+  });
+
+  test("规则字段类型不对或字段名不认识时判为不能用，不悄悄放宽", () => {
+    const invalid = [
+      [{ body: { required: "true" } }, /body\.required 必须是 true 或 false/],
+      [{ body: { bullets: "true" } }, /body\.bullets 必须是 true 或 false/],
+      [{ body: { leadingBlank: 0 } }, /body\.leadingBlank 必须是 true 或 false/],
+      [{ header: { noTrailingPeriod: "yes" } }, /header\.noTrailingPeriod 必须是 true 或 false/],
+      [{ allowLatinTerms: "false" }, /allowLatinTerms 必须是 true 或 false/],
+      [{ body: { bulets: true } }, /body 里有不认识的字段 bulets/],
+      [{ header: { maxlength: 50 } }, /header 里有不认识的字段 maxlength/],
+      [{ lnag: "zh" }, /不认识的字段 lnag/],
+      [{ example: ["多行"] }, /example 必须是字符串/],
+      [{ forbidPatterns: "^Co-Authored-By:" }, /forbidPatterns 必须是字符串数组/],
+    ];
+    for (const [patch, expected] of invalid) {
+      const rule = { ...STRUCTURED, ...patch };
+      assert.throws(() => resolveCommitRule({ resolved: resolvePolicy({ rules: [rule] }), config: {} }), expected, JSON.stringify(patch));
+    }
+    // 只写 pattern 的旧规则可能早就带着其他字段在主分支上：钩子与合并照旧放行，不让升级卡住所有提交。
+    const legacy = { id: "commit-message", kind: "commit-message", pattern: "^[a-z]+: .+", lnag: "zh", reason: "r", fix: "f" };
+    assert.doesNotThrow(() => resolveCommitRule({ resolved: resolvePolicy({ rules: [legacy] }), config: {} }));
+    // 任务分支改动这条规则时严格检查：拼错的结构化字段会让规则退回旧写法，悄悄丢掉要求。
+    assert.throws(() => resolveCommitRule({ resolved: resolvePolicy({ rules: [legacy] }), config: {}, strictFields: true }), /不认识的字段 lnag/);
+    assert.throws(
+      () => resolveCommitRule({ resolved: resolvePolicy({ rules: [{ ...legacy, lnag: undefined, forbidPatterns: "^X" }] }), config: {} }),
+      /forbidPatterns 必须是字符串数组/,
+    );
+
+    // 任务分支把 body.required 写成字符串：不能进主分支。
+    const repo = structuredRepo();
+    const policy = { version: 1, presets: ["secrets", "git-safety", "gate-self"], disabled: [], rules: [{ ...STRUCTURED, body: { ...STRUCTURED.body, required: "true" } }] };
+    repo.branch("task/bool", { ".harness/policy.json": `${JSON.stringify(policy, null, 2)}\n` }, GOOD);
+    assert.match(commitRuleErrorAt(repo.root, "task/bool") ?? "", /body\.required 必须是 true 或 false/);
+    const verified = repo.cli("verify", "--branch", "task/bool");
+    assert.equal(verified.status, 1);
+    assert.match(verified.stderr, /验证被拒绝\(branch_commit_rule_invalid\)/);
+  });
+
+  test("主分支上带着其他字段的旧规则照旧可用，改动这条规则的分支才严格检查字段名", () => {
+    const rule = {
+      id: "commit-message",
+      kind: "commit-message",
+      pattern: "^[a-z]+(\\([^)]+\\))?: .+",
+      forbidPatterns: ["^Co-Authored-By:"],
+      note: "团队约定见内部文档",
+      reason: "提交信息必须符合规范",
+      fix: "按规范改写",
+    };
+    const policy = { version: 1, presets: ["secrets", "git-safety", "gate-self"], disabled: [], rules: [rule] };
+    const repo = makeRepo({ project: { ".harness/policy.json": policy } });
+    repos.push(repo);
+
+    git(repo.root, "checkout", "-q", "-b", "task/untouched");
+    assert.equal(hookCommit(repo, GOOD).status, 0, "钩子照旧放行");
+    git(repo.root, "checkout", "-q", "main");
+    const untouched = repo.cli("status", "--branch", "task/untouched");
+    assert.match(untouched.stdout, /\[ok\] commit-message/);
+    assert.doesNotMatch(untouched.stdout, /commit-rule/);
+    assert.equal(repo.cli("verify", "--branch", "task/untouched").status, 0);
+    assert.match(repo.cli("doctor").stdout, /project:commit-message: .*不认识的字段 note/);
+
+    const changed = { ...policy, rules: [{ ...rule, lnag: "zh" }] };
+    repo.branch("task/typo", { ".harness/policy.json": `${JSON.stringify(changed, null, 2)}\n` }, GOOD);
+    const verified = repo.cli("verify", "--branch", "task/typo");
+    assert.equal(verified.status, 1);
+    assert.match(verified.stderr, /验证被拒绝\(branch_commit_rule_invalid\)/);
+    assert.match(verified.stderr, /不认识的字段 note、lnag/);
+    assert.match(repo.cli("merge", "--dry-run", "--branch", "task/typo").stderr, /合并被拒绝\(branch_commit_rule_invalid\)/);
   });
 
   test("旧写法取两处的并集：合并会拒绝的只有标题的提交，钩子当场就拒绝", () => {

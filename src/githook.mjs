@@ -92,13 +92,27 @@ function commentCharOf(root) {
   return value && value !== "auto" ? value : "#";
 }
 
+/**
+ * 正在写的这个提交是不是合并提交。
+ * git merge 时 MERGE_HEAD 还在；对合并提交执行 --amend 时 MERGE_HEAD 已经不在，
+ * 只能看 HEAD 本身是不是合并提交，并且新信息要么沿用原说明、要么仍是 Merge 主题，才算在重写那个合并提交。
+ */
+function rewritesMergeCommit(root, message) {
+  if (git(root, ["rev-parse", "--verify", "--quiet", "MERGE_HEAD"]).status === 0) return true;
+  if (git(root, ["rev-parse", "--verify", "--quiet", "HEAD^2"]).status !== 0) return false;
+  if (/^Merge\b/.test(message.split("\n")[0] ?? "")) return true;
+  const headMessage = normalizeMessage(cleanCommitMessage(git(root, ["log", "-1", "--format=%B", "HEAD"]).stdout, commentCharOf(root)));
+  return headMessage !== "" && message === headMessage;
+}
+
 export function checkCommitMessage({ root, resolved, config = {}, messageFile }) {
   const spec = resolveCommitRule({ resolved, config });
   if (!spec) return { decision: "allow" };
-  // 合并提交（git merge 时 MERGE_HEAD 存在）只是同步分支，与合并时 --no-merges 的口径一致，不按标题判断。
-  if (git(root, ["rev-parse", "--verify", "--quiet", "MERGE_HEAD"]).status === 0) return { decision: "allow" };
   const raw = readFileSync(resolve(root, messageFile), "utf8");
   const message = normalizeMessage(cleanCommitMessage(raw, commentCharOf(root)));
+  // 合并提交只是同步分支，与合并时 --no-merges 的口径一致。
+  // 手写一个 Merge 标题的普通提交能过钩子，但它不是合并提交，交付前仍会被 status 与 merge 拦下。
+  if (rewritesMergeCommit(root, message)) return { decision: "allow" };
   const author = git(root, ["var", "GIT_AUTHOR_IDENT"]).stdout.replace(/>.*$/s, ">").trim();
 
   const problems = messageProblems({ spec, message, author });
