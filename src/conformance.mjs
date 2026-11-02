@@ -5,7 +5,7 @@ import { isLinkedWorktree, repoRoot } from "./lib/git.mjs";
 import { readLedger } from "./lib/store.mjs";
 import { evaluateCall } from "./policy/engine.mjs";
 import { resolvePolicy } from "./policy/resolve.mjs";
-import { planChecks } from "./verify/verify.mjs";
+import { checkConfigProblem } from "./verify/verify.mjs";
 import { doctor } from "./install/doctor.mjs";
 import { computeMetrics } from "./golden/metrics.mjs";
 
@@ -53,15 +53,31 @@ function checkHarness(cwd) {
   };
 }
 
-function checkExecution(project, cwd) {
-  // 同一批改动路径在三个客户端下必须选出相同检查集：计划只由 verify 配置与路径决定，与客户端无关。
-  const sample = [["internal/x/y.go"], ["frontend/src/a.vue"], ["docs/a.md"], ["manifest/db/x.sql"]];
-  const results = sample.map((changed) => planChecks({ project, cwd, changed }).plan.map((item) => item.id).sort().join(","));
-  const stable = new Set(results).size === results.length || results.every((value) => typeof value === "string");
+function checkExecution(project) {
+  // 检查计划只由 verify 配置与改动路径决定，客户端不参与；这里判定的是配置里会自动执行的检查能否真正执行。
+  const checks = project.verify?.checks ?? [];
+  const auto = checks.filter((check) => check.tier !== "extended" && check.tier !== "advisory");
+  const invalid = auto.map((check) => ({ id: check.id, problem: checkConfigProblem(check) })).filter((item) => item.problem);
+  if (invalid.length > 0) {
+    return {
+      id: "execution",
+      ok: false,
+      detail: `写错的自动检查: ${invalid.map((item) => `${item.id}(${item.problem.reason})`).join("；")}`,
+    };
+  }
+  if (auto.length === 0) {
+    return {
+      id: "execution",
+      ok: true,
+      pending: true,
+      detail: "没有会自动执行的检查，源码改动不会得到任何实际验证，先在 .harness/verify.json 声明项目的测试命令",
+    };
+  }
+  const manual = checks.length - auto.length - checks.filter((check) => check.tier === "advisory").length;
   return {
     id: "execution",
-    ok: stable,
-    detail: `检查计划只依赖路径与 verify 配置，客户端不参与判定：${results.length} 组样例均生成计划`,
+    ok: true,
+    detail: `${auto.length} 项自动检查命令可执行${manual > 0 ? `，${manual} 项需人工补验` : ""}`,
   };
 }
 
@@ -116,7 +132,7 @@ export function conformance({ cwd = process.cwd() } = {}) {
     checkIntent(project, root),
     checkContext(project, root),
     checkHarness(cwd),
-    checkExecution(project, root),
+    checkExecution(project),
     checkEval(project, root, resolved),
     checkGovernance(project),
     checkStability(root),

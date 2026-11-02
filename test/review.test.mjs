@@ -329,6 +329,19 @@ describe("L3 判据", () => {
     assert.match(result.stdout, /样本不足/);
   });
 
+  test("自动检查写错时 execution 判据失败，没有自动检查时标 PEND", () => {
+    const verify = (checks) => ({ ".harness/verify.json": { version: 1, docOnly: { match: ["docs/**"], exclude: [] }, checks, fullSuiteTriggers: { doc: "", paths: [] } } });
+    const broken = setup({ project: verify([{ id: "unit", tier: "gate", when: ["src/**"], cmd: "npm test" }]) });
+    const failed = broken.cli("conformance");
+    assert.notEqual(failed.status, 0);
+    assert.match(failed.stdout, /FAIL execution: 写错的自动检查: unit/);
+
+    const empty = setup({ project: verify([]) });
+    const pending = empty.cli("conformance");
+    assert.equal(pending.status, 0, pending.stderr);
+    assert.match(pending.stdout, /PEND execution: 没有会自动执行的检查/);
+  });
+
   test("关闭必要条件时 governance 判据失败", () => {
     const repo = setup({
       project: {

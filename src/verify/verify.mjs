@@ -78,7 +78,7 @@ const SELECTORS = new Set(["go-packages"]);
  * 会自动执行的检查（tier 不是 extended、advisory）写得不对时返回原因与改法，否则返回 null。
  * 这样的检查被选中时记为失败而不是跳过：跳过既不执行也不进未执行清单，证据会显示通过。
  */
-function checkConfigProblem(check) {
+export function checkConfigProblem(check) {
   if (check.tier === "extended" || check.tier === "advisory") return null;
   const selector = check.selector ?? null;
   if (selector === "vitest") {
