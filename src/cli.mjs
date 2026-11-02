@@ -172,22 +172,24 @@ function cmdVerifyPlan({ cwd, branch, base, json }) {
   const deleted = new Set(
     gitOk(root, ["diff", "--name-only", "--diff-filter=D", "--no-renames", baseOfHead, head]).split("\n").filter(Boolean),
   );
-  const { plan, notExecuted, advisory, docOnly, invalid } = planChecks({
+  const { plan, notExecuted, advisory, docOnly, invalid, uncovered, requiredUncovered } = planChecks({
     project,
     cwd: root,
     changed,
     exists: (path) => !deleted.has(path) && existsSync(join(root, path)),
   });
   // 有写错的检查时这份计划验证不会通过，非零退出让调用方察觉。
-  const status = invalid.length > 0 ? 1 : 0;
+  const status = invalid.length > 0 || requiredUncovered.length > 0 ? 1 : 0;
   if (json) {
-    print(JSON.stringify({ base: mainRef, head, changed, docOnly, plan, notExecuted, advisory, invalid }, null, 2));
+    print(JSON.stringify({ base: mainRef, head, changed, docOnly, plan, notExecuted, advisory, invalid, uncovered, requiredUncovered }, null, 2));
     return status;
   }
   print(`相对 ${mainRef} 变更 ${changed.length} 个文件${docOnly ? "（仅文档）" : ""}`);
   for (const item of invalid) print(`  ERR  ${item.id}  ${item.reason}；${item.fix}`);
   for (const item of plan) print(`  RUN  ${item.id}  ${item.cmd.join(" ")}${item.cwd && item.cwd !== "." ? `  (cwd ${item.cwd})` : ""}`);
   for (const item of notExecuted) print(`  TODO ${item.id}  ${item.reason}`);
+  if (requiredUncovered.length > 0) print(`  ERR  required-paths  ${requiredUncovered.length} 个必验路径没有自动检查覆盖: ${requiredUncovered.slice(0, 10).join(", ")}`);
+  else if (uncovered.length > 0) print(`  WARN uncovered  ${uncovered.length} 个改动路径没有任何检查覆盖: ${uncovered.slice(0, 10).join(", ")}`);
   for (const item of advisory) print(`  HINT ${item.id}  ${item.hint}`);
   return status;
 }

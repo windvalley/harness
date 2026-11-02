@@ -1027,6 +1027,9 @@ node ~/github/harness/bin/harness.mjs install --local   # 按新锁定的版本�
 | `reason`、`howToVerify`、`hint` | 给人看的说明 |
 
 `docOnly` 只用来在证据里标注“仅文档”，检查是否执行仍由各自的 `when` 决定。
+`requiredPaths` 可选，写法与 `docOnly` 相同（`match` 与 `exclude`）：命中 `match` 的改动路径必须落在某项会自动执行的检查（`gate`）的 `when` 范围内，否则证据状态为 `incomplete`，并在未执行清单里列出这些路径，不能评审与合并。
+`exclude` 是显式豁免，例如 `{ "match": ["src/**"], "exclude": ["src/**/*.md"] }`。
+没配置 `requiredPaths` 时，没有任何检查声明会管的非文档改动只记入证据的 `uncovered`，并在验证输出里提示，不阻断。
 `fullSuiteTriggers.paths` 命中时，`go-packages` 扩大为 `./...`。
 命令不存在时证据里单独标出“未找到命令”，说明要装工具，不是代码有问题。
 

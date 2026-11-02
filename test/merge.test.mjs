@@ -186,6 +186,43 @@ describe("验证与证据", () => {
     assert.equal(existsSync(join(repo.env.HARNESS_DATA_DIR, "evidence", `${key}.json`)), false, "plan 不应写证据");
   });
 
+  test("必验路径没有自动检查覆盖时证据为 incomplete，豁免与覆盖后通过", () => {
+    const unit = { id: "unit", tier: "gate", when: ["src/**"], cmd: ["node", "-e", "process.exit(0)"] };
+    const withRequired = (requiredPaths) => ({ ...verifyWith([unit]), requiredPaths });
+    const repo = setup({ project: { ".harness/verify.json": withRequired({ match: ["lib/**", "src/**"], exclude: ["lib/gen/**"] }) } });
+
+    repo.branch("task/gap", { "lib/a.js": "x\n", "src/a.js": "y\n" });
+    const gap = repo.cli("verify", "--branch", "task/gap");
+    assert.equal(gap.status, 1, gap.stderr);
+    assert.match(gap.stderr, /验证结果: incomplete/);
+    assert.match(gap.stderr, /NOT_EXECUTED required-paths: 1 个必验路径没有自动检查覆盖: lib\/a\.js/);
+    assert.equal(evidenceOf(repo, "task/gap").status, "incomplete");
+    const plan = repo.cli("verify", "--plan", "--branch", "task/gap");
+    assert.equal(plan.status, 1);
+    assert.match(plan.stdout, /ERR {2}required-paths/);
+
+    repo.branch("task/exempt", { "lib/gen/a.js": "x\n", "src/a.js": "y\n" });
+    const exempt = repo.cli("verify", "--branch", "task/exempt");
+    assert.equal(exempt.status, 0, exempt.stderr);
+    assert.equal(evidenceOf(repo, "task/exempt").status, "passed");
+  });
+
+  test("没配置 requiredPaths 时未覆盖的改动只记录不阻断；requiredPaths 写错形状按配置错误处理", () => {
+    const repo = setup({ project: { ".harness/verify.json": verifyWith([{ id: "unit", tier: "gate", when: ["src/**"], cmd: ["node", "-e", "process.exit(0)"] }]) } });
+    repo.branch("task/loose", { "lib/a.js": "x\n", "src/a.js": "y\n" });
+    const loose = repo.cli("verify", "--branch", "task/loose");
+    assert.equal(loose.status, 0, loose.stderr);
+    assert.deepEqual(evidenceOf(repo, "task/loose").uncovered, ["lib/a.js"]);
+
+    const broken = setup({
+      project: { ".harness/verify.json": { ...verifyWith([{ id: "unit", tier: "gate", when: ["src/**"], cmd: ["node", "-e", "process.exit(0)"] }]), requiredPaths: ["src/**"] } },
+    });
+    broken.branch("task/a", { "src/a.js": "y\n" });
+    const result = broken.cli("verify", "--branch", "task/a");
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /requiredPaths 必须是/);
+  });
+
   test("命令不存在时说明是环境问题，与检查失败区分", () => {
     const repo = setup({
       project: {

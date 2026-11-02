@@ -67,7 +67,7 @@ export function checkFingerprint(check, env = {}) {
 /** 整份检查配置的指纹：新增、删除或改动任何检查都会改变它，合并据此判断旧证据是否还代表当前的检查集。 */
 export function verifyConfigDigest(project) {
   const map = project.verify ?? {};
-  return digest({ checks: map.checks ?? [], docOnly: map.docOnly ?? null, fullSuiteTriggers: map.fullSuiteTriggers ?? null, env: project.config?.env ?? {} });
+  return digest({ checks: map.checks ?? [], docOnly: map.docOnly ?? null, fullSuiteTriggers: map.fullSuiteTriggers ?? null, requiredPaths: map.requiredPaths ?? null, env: project.config?.env ?? {} });
 }
 
 const cmdText = (cmd) => (Array.isArray(cmd) ? cmd.join(" ") : cmd);
@@ -103,10 +103,26 @@ export function checkConfigProblem(check) {
 
 /** 整份检查配置里写错的检查，不论这次会不会被选中；doctor 据此提前报出。 */
 export function verifyConfigProblems(verify) {
-  return (verify?.checks ?? []).flatMap((check) => {
+  const problems = (verify?.checks ?? []).flatMap((check) => {
     const problem = checkConfigProblem(check);
     return problem ? [{ id: check.id, ...problem }] : [];
   });
+  const problem = requiredPathsProblem(verify?.requiredPaths);
+  return problem ? [...problems, { id: "requiredPaths", ...problem }] : problems;
+}
+
+const isGlobList = (value) => Array.isArray(value) && value.every((item) => typeof item === "string");
+
+/** requiredPaths 写成数组等错误形状时会被当成“没配置”而静默失效，必须当配置错误。 */
+function requiredPathsProblem(rule) {
+  if (rule === undefined || rule === null) return null;
+  if (typeof rule === "object" && !Array.isArray(rule) && isGlobList(rule.match) && (rule.exclude === undefined || isGlobList(rule.exclude))) {
+    return null;
+  }
+  return {
+    reason: "requiredPaths 必须是 { match: [glob...], exclude: [glob...] } 形式",
+    fix: '写成 "requiredPaths": { "match": ["src/**"], "exclude": [] }，exclude 是显式豁免',
+  };
 }
 
 /**
@@ -125,6 +141,15 @@ export function planChecks({ project, cwd, changed, exists = (path) => existsSyn
   const invalid = [];
   const full = changed.some((path) => matchAny(path, map.fullSuiteTriggers?.paths ?? []));
   const env = project.config?.env ?? {};
+  const docOnlyRule = map.docOnly ?? { match: [], exclude: [] };
+  const anyCovered = (path) => map.checks.some((check) => matchAny(path, check.when));
+  const gateCovered = (path) =>
+    map.checks.some((check) => check.tier !== "extended" && check.tier !== "advisory" && matchAny(path, check.when));
+  // 没有任何检查声明会管它的非文档改动；必验路径要求更严：必须落在会自动执行的检查范围内，exclude 就是显式豁免。
+  const uncovered = changed.filter((path) => !matches(path, docOnlyRule) && !anyCovered(path));
+  const requiredProblem = requiredPathsProblem(map.requiredPaths);
+  if (requiredProblem) invalid.push({ id: "requiredPaths", def: digest(map.requiredPaths), ...requiredProblem });
+  const requiredUncovered = map.requiredPaths && !requiredProblem ? changed.filter((path) => matches(path, map.requiredPaths) && !gateCovered(path)) : [];
 
   for (const check of map.checks) {
     const hit = changed.filter((path) => matchAny(path, check.when));
@@ -187,7 +212,7 @@ export function planChecks({ project, cwd, changed, exists = (path) => existsSyn
   const deduped = [...unique.values()];
   const hasAll = deduped.some((item) => item.cmd.join(" ") === "make test");
   const finalPlan = hasAll ? deduped.filter((item) => !(item.cmd[0] === "go" && item.cmd[1] === "test")) : deduped;
-  return { plan: finalPlan, notExecuted, advisory, docOnly, invalid };
+  return { plan: finalPlan, notExecuted, advisory, docOnly, invalid, uncovered, requiredUncovered };
 }
 
 /**
@@ -346,7 +371,7 @@ export async function verify({
   const results = [];
 
   try {
-    const { plan, notExecuted, advisory, docOnly, invalid } = planChecks({ project, cwd: checkout, changed });
+    const { plan, notExecuted, advisory, docOnly, invalid, uncovered, requiredUncovered } = planChecks({ project, cwd: checkout, changed });
     const { reuse: reusable, rerun } = reuse
       ? reusableChecks({ previous: previous.ok ? previous.record : null, plan, mainDelta: priorMainDelta })
       : { reuse: new Map(), rerun: plan.map((item) => item.id) };
@@ -364,6 +389,19 @@ export async function verify({
     }
 
     let blocked = false;
+    if (requiredUncovered.length > 0) {
+      const shown = requiredUncovered.slice(0, 10).join(", ");
+      notExecuted.push({
+        id: "required-paths",
+        reason: `${requiredUncovered.length} 个必验路径没有自动检查覆盖: ${shown}${requiredUncovered.length > 10 ? " 等" : ""}`,
+        impact: "这些改动没有被任何会自动执行的检查验证，不能证明通过",
+        howToVerify: "在 .harness/verify.json 为这些路径增加 gate 检查；确实无需验证的路径写进 requiredPaths.exclude",
+      });
+      blocked = true;
+      log(`[verify] 必验路径未被检查覆盖: ${shown}`);
+    } else if (uncovered.length > 0) {
+      log(`[verify] 注意: ${uncovered.length} 个改动路径没有任何检查覆盖，证据只记录不阻断（配置 verify.requiredPaths 可强制）`);
+    }
     for (const item of invalid.length > 0 && config.failFast !== false ? [] : plan) {
       if (reusable.has(item.id)) {
         const prior = reusable.get(item.id);
@@ -425,6 +463,7 @@ export async function verify({
       changedCount: changed.length,
       changed: changed.slice(0, 500),
       docOnly,
+      uncovered: uncovered.slice(0, 200),
       checks: results,
       notExecuted,
       advisory,
