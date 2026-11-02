@@ -10,6 +10,8 @@ function weekKey(iso) {
 function emptyBucket() {
   return {
     merges: 0,
+    submits: 0,
+    syncs: 0,
     verifyRuns: 0,
     verifyReused: 0,
     reviews: 0,
@@ -42,6 +44,12 @@ export function computeMetrics(events, { sinceDays } = {}) {
       switch (event.event) {
         case "merge":
           bucket.merges += 1;
+          break;
+        case "submit.ready":
+          bucket.submits += 1;
+          break;
+        case "sync":
+          bucket.syncs += 1;
           break;
         case "verify":
           bucket.verifyRuns += 1;
@@ -105,12 +113,14 @@ export function metrics(root, options) {
 
 export function formatMetrics(result) {
   const pct = (value) => (value === null ? "-" : `${(value * 100).toFixed(0)}%`);
-  const lines = ["周起始      合并 验证首过率 复用检查 评审拒绝率 策略拦截 门禁确认 黄金通过率"];
+  const lines = ["周起始      合并 提交 同步 验证首过率 复用检查 评审拒绝率 策略拦截 门禁确认 黄金通过率"];
   for (const week of result.weeks) {
     lines.push(
       [
         week.week.padEnd(11),
         String(week.merges).padStart(4),
+        String(week.submits).padStart(4),
+        String(week.syncs).padStart(4),
         pct(week.verifyFirstPassRate).padStart(9),
         String(week.verifyReused).padStart(8),
         pct(week.reviewRejectRate).padStart(9),
@@ -122,7 +132,7 @@ export function formatMetrics(result) {
   }
   const t = result.total;
   lines.push(
-    `合计: 合并 ${t.merges}，验证 ${t.verifyRuns} 次(复用检查 ${t.verifyReused} 项)，评审拒绝率 ${pct(t.reviewRejectRate)}，` +
+    `合计: 本地合并 ${t.merges}，PR/MR 提交 ${t.submits}，同步 ${t.syncs}，验证 ${t.verifyRuns} 次(复用检查 ${t.verifyReused} 项)，评审拒绝率 ${pct(t.reviewRejectRate)}，` +
       `策略拦截 ${t.policyDenials}，上报 ${t.escalationsOpened}(已答复 ${t.escalationsAnswered})，` +
       `门禁确认 ${t.confirmations}，评审花费 $${t.reviewCostUsd}`,
   );

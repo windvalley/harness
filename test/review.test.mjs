@@ -310,6 +310,22 @@ describe("度量", () => {
     assert.equal(metrics.total.verifyFirstPassRate, null);
   });
 
+  test("本地合并、PR/MR 提交与同步分别统计", () => {
+    const events = [
+      { at: at(5), event: "merge" },
+      { at: at(5), event: "submit.push" },
+      { at: at(5), event: "submit.ready" },
+      { at: at(6), event: "submit.ready" },
+      { at: at(14), event: "sync" },
+    ];
+    const metrics = computeMetrics(events);
+    assert.deepEqual([metrics.total.merges, metrics.total.submits, metrics.total.syncs], [1, 2, 1]);
+    assert.deepEqual(metrics.weeks.map((week) => [week.merges, week.submits, week.syncs]), [[1, 2, 0], [0, 0, 1]]);
+    const text = formatMetrics(metrics);
+    assert.match(text, /本地合并 1，PR\/MR 提交 2，同步 1/);
+    assert.match(text, /提交 同步/);
+  });
+
   test("表格包含门禁确认与复用列", () => {
     const text = formatMetrics(computeMetrics([{ at: at(5), event: "verify", status: "passed", tree: "t", reused: 1 }]));
     assert.match(text, /复用检查/);

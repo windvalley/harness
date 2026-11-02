@@ -1431,7 +1431,7 @@ harness reviewer set mine --client command --command-json '["my-reviewer","--jso
 | `rules` | 列出解析后的生效规则 |
 | `check --kind <shell\|write\|read\|search\|commit> ...` | 手工判定一次调用：`shell` 用 `--command <命令>`，其余用 `--path <路径>`，可加 `--content`、`--glob`，以及 `--on-main`、`--linked-worktree`、`--ignored` 指定位置 |
 | `golden [--worktree]` | 重放黄金任务 |
-| `metrics [--days <n>]` | 按周统计合并次数、验证首过率、复用检查数、评审拒绝率、策略拦截、门禁确认与黄金任务通过率 |
+| `metrics [--days <n>]` | 按周统计本地合并、PR/MR 提交与同步次数、验证首过率、复用检查数、评审拒绝率、策略拦截、门禁确认与黄金任务通过率 |
 | `conformance` | 按“配置就位、行为已验证、运行稳定”三层逐项判定 L3 判据，缺证据的项标 `PEND`，不计为完成：行为层看自动检查能否执行、策略判定、黄金任务最近一次结果与客户端链路是否实测；稳定层要求受控合并至少 20 次、合并后验证失败率不超过 5%，且黄金任务最近一次全部通过 |
 | `key status`、`key rotate [--yes]` | 查看证据密钥；轮换由人执行 |
 | `escalate <open\|list\|show\|answer\|resume>` | 例外上报 |
