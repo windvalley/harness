@@ -269,6 +269,17 @@ describe("多个评审者的回退", () => {
     assert.match(review.stderr, /由备选 sonnet 完成/);
   });
 
+  test("缺少需求符合度或工程质量结论的输出按失败处理，不生成通过记录", () => {
+    const repo = setup();
+    const { name } = readyBranch(repo);
+    const claude = fakeClaudes(repo, { "deepseek/deepseek-v4.1-flash": { structured: { verdict: "approve", findings: [] } } });
+    writeReviewers(repo, { reviewers: [FLASH, SONNET] });
+    const review = repo.cli("review", "--branch", name);
+    assert.equal(review.status, 0, review.stderr);
+    assert.equal(claude.calls().length, 2);
+    assert.match(review.stderr, /由备选 sonnet 完成/);
+  });
+
   test("跳过的评审者不启动进程；全部不可用时逐条列出原因，错误里没有 key", () => {
     const repo = setup();
     const { name } = readyBranch(repo);

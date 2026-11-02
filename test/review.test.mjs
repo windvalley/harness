@@ -43,6 +43,20 @@ describe("评审", () => {
     assert.doesNotThrow(() => parseVerdict(APPROVE));
   });
 
+  test("parseVerdict 要求两个维度的结论与完整的发现结构", () => {
+    const { requirementFit, ...noRequirement } = APPROVE;
+    assert.throws(() => parseVerdict(noRequirement), /requirementFit/);
+    const { engineeringQuality, ...noQuality } = APPROVE;
+    assert.throws(() => parseVerdict(noQuality), /engineeringQuality/);
+    assert.throws(() => parseVerdict({ ...APPROVE, requirementFit: { rating: "great", evidence: "x" } }), /rating/);
+    assert.throws(() => parseVerdict({ ...APPROVE, engineeringQuality: { rating: "good", evidence: " " } }), /evidence/);
+    const finding = { severity: "high", file: "a.txt", summary: "问题", scenario: "输入 x 时崩溃" };
+    assert.doesNotThrow(() => parseVerdict({ ...APPROVE, findings: [finding] }));
+    assert.throws(() => parseVerdict({ ...APPROVE, findings: [{ ...finding, severity: undefined }] }), /severity/);
+    assert.throws(() => parseVerdict({ ...APPROVE, findings: [{ ...finding, scenario: "" }] }), /scenario/);
+    assert.throws(() => parseVerdict({ ...APPROVE, findings: [null] }), /findings\[0\]/);
+  });
+
   test("提示里区分清单来源，没有清单时明确说明", () => {
     const fromMain = buildPrompt({ acceptance: { source: "main", text: "验收 1" }, evidence: "e", diff: "d", branch: "b" });
     assert.match(fromMain, /主分支已确认/);

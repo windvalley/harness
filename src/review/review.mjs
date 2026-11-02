@@ -462,10 +462,39 @@ export function runReviewer({ cwd, prompt, config = {}, log = () => {}, plan = p
   throw new Error(`没有评审者给出结论：\n${lines.join("\n")}\n用 harness reviewer list 查看本机评审者，harness reviewer set 新增或补全`);
 }
 
+const REQUIREMENT_RATINGS = ["met", "partial", "unmet", "unknown"];
+const QUALITY_RATINGS = ["good", "acceptable", "poor"];
+const SEVERITIES = ["critical", "high", "medium", "low"];
+
+function nonEmptyString(value) {
+  return typeof value === "string" && value.trim() !== "";
+}
+
+function checkRating(value, name, ratings) {
+  if (!value || typeof value !== "object") throw new Error(`评审输出缺少 ${name}`);
+  if (!ratings.includes(value.rating)) throw new Error(`评审输出 ${name}.rating 非法`);
+  if (!nonEmptyString(value.evidence)) throw new Error(`评审输出 ${name}.evidence 缺失`);
+}
+
+/** 命令评审者不受 schema 约束，本地必须按 REVIEW_SCHEMA 完整校验，缺任何一项都按评审失败处理。 */
 export function parseVerdict(structured) {
   if (!structured || typeof structured !== "object") throw new Error("评审输出缺少结构化结果");
   if (structured.verdict !== "approve" && structured.verdict !== "reject") throw new Error("评审输出 verdict 非法");
+  checkRating(structured.requirementFit, "requirementFit", REQUIREMENT_RATINGS);
+  checkRating(structured.engineeringQuality, "engineeringQuality", QUALITY_RATINGS);
   if (!Array.isArray(structured.findings)) throw new Error("评审输出 findings 非法");
+  structured.findings.forEach((item, index) => {
+    const label = `findings[${index}]`;
+    if (!item || typeof item !== "object") throw new Error(`评审输出 ${label} 非法`);
+    if (!SEVERITIES.includes(item.severity)) throw new Error(`评审输出 ${label}.severity 非法`);
+    for (const field of ["file", "summary", "scenario"]) {
+      if (!nonEmptyString(item[field])) throw new Error(`评审输出 ${label}.${field} 缺失`);
+    }
+    if (item.dimension !== undefined && !["requirement", "engineering"].includes(item.dimension)) {
+      throw new Error(`评审输出 ${label}.dimension 非法`);
+    }
+    if (item.line !== undefined && !Number.isInteger(item.line)) throw new Error(`评审输出 ${label}.line 非法`);
+  });
   return structured;
 }
 
