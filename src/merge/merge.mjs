@@ -12,6 +12,7 @@ import {
   mainBranch,
 } from "../lib/config.mjs";
 import { matchAny } from "../lib/glob.mjs";
+import { environmentDigests, environmentItems } from "../verify/environment.mjs";
 import {
   changedPaths,
   git,
@@ -146,7 +147,12 @@ export function reuseDecision({ project, root, evidence, mainCommit }) {
     return { evidenceReusable: false, rerunChecks: [], configChanged: true, mainDelta };
   }
   const plan = (project.verify.checks ?? []).filter((check) => evidence.checks?.some((item) => item.id === check.id));
-  const touched = plan.filter((check) => mainDelta.some((path) => matchAny(path, check.when ?? [])));
+  // 代码没变而依赖或工具链变了，旧结果同样不可信；证据里没有环境指纹的旧记录按不一致处理。
+  const environment = environmentDigests({ items: environmentItems(plan), mainRoot: mainWorktreeRoot(root), cwd: root, env: project.config?.env ?? {} });
+  const envChanged = plan.filter((check) => evidence.checks.find((item) => item.id === check.id)?.envDigest !== environment.get(check.id));
+  const touched = plan.filter(
+    (check) => mainDelta.some((path) => matchAny(path, check.when ?? [])) || envChanged.includes(check),
+  );
   return { evidenceReusable: touched.length === 0, rerunChecks: touched.map((check) => check.id), configChanged: false, mainDelta };
 }
 

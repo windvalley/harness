@@ -18,6 +18,7 @@ import {
   treeOf,
 } from "../lib/git.mjs";
 import { appendLedger, canonical, dataDir, readRecord, writeRecord } from "../lib/store.mjs";
+import { environmentDigests } from "./environment.mjs";
 import { selectGoPackages } from "./selectors/go-packages.mjs";
 
 export const EVIDENCE_KIND = "evidence";
@@ -217,11 +218,12 @@ export function planChecks({ project, cwd, changed, exists = (path) => existsSyn
 
 /**
  * 判定哪些检查可以沿用已有证据。
+ * environment 是每项检查当前的运行环境指纹（id 到指纹）；给了就要求与上次记录一致，依赖或工具链变了必须重跑。
  * 只有当“主分支自上次验证以来新增的改动”与某项检查的触发范围没有交集时才复用：
  * 有交集说明该检查覆盖的文件被别人改过，原结果不再可信。
  * 检查的定义（指纹）或实际命令与上次不同也要重跑：同一个 ID 已经不是同一项检查。
  */
-export function reusableChecks({ previous, plan, mainDelta }) {
+export function reusableChecks({ previous, plan, mainDelta, environment }) {
   if (!previous || previous.status !== "passed") return { reuse: new Map(), rerun: plan.map((item) => item.id) };
   const priorById = new Map((previous.checks ?? []).map((item) => [item.id, item]));
   const reuse = new Map();
@@ -229,7 +231,11 @@ export function reusableChecks({ previous, plan, mainDelta }) {
   for (const item of plan) {
     const prior = priorById.get(item.id);
     const touched = mainDelta.some((path) => matchAny(path, item.when ?? []));
-    const same = prior && prior.def === item.def && cmdText(prior.cmd) === cmdText(item.cmd);
+    const same =
+      prior &&
+      prior.def === item.def &&
+      cmdText(prior.cmd) === cmdText(item.cmd) &&
+      (!environment || prior.envDigest === environment.get(item.id));
     if (same && prior.exit === 0 && !touched) reuse.set(item.id, prior);
     else rerun.push(item.id);
   }
@@ -372,8 +378,14 @@ export async function verify({
 
   try {
     const { plan, notExecuted, advisory, docOnly, invalid, uncovered, requiredUncovered } = planChecks({ project, cwd: checkout, changed });
+    const environment = environmentDigests({
+      items: plan.map((item) => ({ id: item.id, tool: item.cmd[0], requires: item.requires })),
+      mainRoot,
+      cwd: checkout,
+      env,
+    });
     const { reuse: reusable, rerun } = reuse
-      ? reusableChecks({ previous: previous.ok ? previous.record : null, plan, mainDelta: priorMainDelta })
+      ? reusableChecks({ previous: previous.ok ? previous.record : null, plan, mainDelta: priorMainDelta, environment })
       : { reuse: new Map(), rerun: plan.map((item) => item.id) };
 
     log(
@@ -435,6 +447,7 @@ export async function verify({
         cmd: item.cmd.join(" "),
         cwd: item.cwd,
         def: item.def,
+        envDigest: environment.get(item.id),
         exit: outcome.exit,
         spawnError: outcome.spawnError,
         durationMs: outcome.durationMs,

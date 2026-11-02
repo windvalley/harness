@@ -1,10 +1,11 @@
 import { strict as assert } from "node:assert";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
 import { APPROVE, commit, fakeReviewer, git, makeRepo, write, writeReview } from "./helpers.mjs";
 import { planChecks, reusableChecks, verifyConfigProblems } from "../src/verify/verify.mjs";
+import { environmentDigests } from "../src/verify/environment.mjs";
 
 let repos = [];
 afterEach(() => {
@@ -221,6 +222,54 @@ describe("验证与证据", () => {
     const result = broken.cli("verify", "--branch", "task/a");
     assert.equal(result.status, 1);
     assert.match(result.stderr, /requiredPaths 必须是/);
+  });
+
+  test("共享依赖变了而代码没变时，普通验证不再复用旧结果", () => {
+    const check = { id: "unit", tier: "gate", when: ["src/**"], cmd: ["node", "-e", "process.exit(0)"], requires: ["node_modules"] };
+    const repo = setup({ project: { ".harness/verify.json": verifyWith([check]) }, files: { ".gitignore": "node_modules/\n" } });
+    write(repo.root, "node_modules/.package-lock.json", '{"packages":{"a":{"version":"1.0.0"}}}\n');
+    write(repo.root, "node_modules/a/index.js", "module.exports = 1;\n");
+    repo.branch("task/a", { "src/a.js": "x\n" });
+
+    const first = repo.cli("verify", "--branch", "task/a");
+    assert.equal(first.status, 0, first.stderr);
+    const second = repo.cli("verify", "--branch", "task/a");
+    assert.match(second.stderr, /= unit 复用上次结果/, "依赖没变时照常复用");
+
+    write(repo.root, "node_modules/.package-lock.json", '{"packages":{"a":{"version":"2.0.0"}}}\n');
+    const third = repo.cli("verify", "--branch", "task/a");
+    assert.equal(third.status, 0, third.stderr);
+    assert.doesNotMatch(third.stderr, /复用上次结果/);
+    assert.match(third.stderr, /-> unit/);
+
+    // 合并前的证据复用判定同样看环境：依赖在验证之后又变了，合并按当前环境重新验证
+    assert.ok(evidenceOf(repo, "task/a").checks[0].envDigest);
+    writeReview(repo, git(repo.root, "rev-parse", "task/a"), "approve");
+    write(repo.root, "node_modules/b/index.js", "module.exports = 2;\n");
+    const merged = repo.cli("merge", "--branch", "task/a");
+    assert.equal(merged.status, 0, merged.stderr);
+    assert.match(merged.stderr, /主分支改动波及 unit，重新验证/);
+  });
+
+  test("环境指纹：工具链版本与依赖安装状态任何一项变化都会改变", () => {
+    const root = mkdtempSync(join(tmpdir(), "harness-env-"));
+    try {
+      write(root, "node_modules/.package-lock.json", "v1\n");
+      write(root, "node_modules/a/index.js", "1\n");
+      write(root, "node_modules/.cache/x", "noise\n");
+      const digest = (items) => environmentDigests({ items, mainRoot: root, cwd: root }).get("c");
+      const item = { id: "c", tool: "node", requires: ["node_modules"] };
+      const base = digest([item]);
+      assert.equal(digest([item]), base, "同一状态指纹稳定");
+      write(root, "node_modules/.cache/x", "more noise\n");
+      assert.equal(digest([item]), base, "点开头的缓存目录不参与");
+      write(root, "node_modules/.package-lock.json", "v2\n");
+      assert.notEqual(digest([item]), base, "安装清单变化");
+      assert.notEqual(digest([{ ...item, requires: ["missing_dir"] }]), digest([{ ...item, requires: [] }]), "依赖目录缺失与无依赖不同");
+      assert.notEqual(digest([{ ...item, tool: "go" }]), digest([{ ...item, tool: "node" }]), "工具不同");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   test("命令不存在时说明是环境问题，与检查失败区分", () => {
