@@ -656,9 +656,9 @@ git -C <主 Worktree> worktree unlock <Worktree 路径>
 | --- | --- | --- |
 | `pattern` | 无 | 整条提交信息的正则；结构化字段不够用时的兜底 |
 | `types` | 空，不校验 | 允许的类型；非空时标题必须写成 `类型(范围): 描述` 或 `类型: 描述` |
-| `lang` | `any` | `zh` 要求描述里有汉字，`en` 要求描述里没有汉字，`any` 不校验语言 |
+| `lang` | `any` | `zh` 要求有汉字，`en` 要求没有汉字，`any` 不校验语言；检查范围由 `langScope` 决定 |
 | `langScope` | `subject` | `subject` 只看描述，`all` 连正文一起看 |
-| `allowLatinTerms` | `true` | `lang` 为 `zh` 时是否允许夹杂英文术语 |
+| `allowLatinTerms` | `true` | `lang` 为 `zh` 时是否允许夹杂英文字母；设为 `false` 时按 `langScope` 的范围检查，`all` 时正文也不许出现 |
 | `header.maxLength` | `72` | 标题的字符上限，按 Unicode 字符计，一个汉字算一个；`0` 表示不限 |
 | `header.noTrailingPeriod` | `true` | 标题不得以句号或 `。` 结尾 |
 | `header.pattern` | 无 | 只作用于标题的正则 |

@@ -24,6 +24,7 @@
 - `init` 不再在 `config.json` 写 `merge.commitMessagePattern` 与 `merge.forbidMessagePatterns`，提交信息要求只写在 `policy.json` 的 `commit-message` 规则里。
   默认格式与以前合并时一致（`类型(范围): 描述`，空一行后每行一个 `- ` 开头的要点），另外限定了类型范围、标题不超过 72 个字符、标题结尾不用句号。
 - `harness.md` 写明钩子按 `commit-message` 规则校验、verify 与 review 动手前再判一次；Agent 自己修复的拒绝里加上 `branch_commit_rule_invalid`。
+- `git-safety` 预设拦下 `git stash` 时给出的替代命令改成 `git commit -m 'chore(wip): 暂存当前改动' -m '- ……'`：原来的 `wip: 暂存` 不在默认类型里也没有正文，照着执行会被提交钩子拒绝。
 
 ### 修复
 
