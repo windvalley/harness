@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { git, gitOk, hooksPlacement, refExists, repoRoot } from "../lib/git.mjs";
 import { PACKAGE_ROOT } from "../policy/resolve.mjs";
@@ -63,46 +63,13 @@ function starterPolicy({ mainBranch }) {
   };
 }
 
+/**
+ * 起始检查只按项目自己声明过的东西生成，探测根目录与一级子目录。
+ * 推断不出真实命令的一律不生成，由 Agent 接入时对照项目补上：猜错的 gate 检查必然失败，会挡住之后每一个相关任务。
+ */
 export function starterVerify({ cwd = process.cwd() } = {}) {
-  const hasGo = existsSync(join(cwd, "go.mod"));
-  const hasFrontend = existsSync(join(cwd, "frontend/package.json"));
-  const hasRust = existsSync(join(cwd, "Cargo.toml")) || existsSync(join(cwd, "rust/Cargo.toml"));
-  const rustDir = existsSync(join(cwd, "Cargo.toml")) ? "" : "rust";
-  const checks = [];
-  if (hasGo) {
-    checks.push(
-      {
-        id: "go-test",
-        tier: "gate",
-        when: ["**/*.go"],
-        cmd: ["go", "test", "-count=1", "./..."],
-      },
-      { id: "go-build", tier: "gate", when: ["**/*.go", "go.mod"], cmd: ["go", "build", "./..."] },
-    );
-  }
-  if (hasFrontend) {
-    checks.push({
-      id: "frontend-typecheck",
-      tier: "gate",
-      when: ["frontend/src/**", "frontend/*.ts", "frontend/package.json"],
-      cwd: "frontend",
-      cmd: ["pnpm", "typecheck"],
-      requires: ["frontend/node_modules"],
-    });
-  }
-  if (hasRust) {
-    // 不写 requires: cargo 自己会创建 target，要求它先存在会让全新克隆永远跳过这项检查。
-    checks.push({
-      id: "cargo-test",
-      tier: "gate",
-      when: rustDir ? ["rust/**/*.rs", "rust/Cargo.toml", "rust/Cargo.lock"] : ["**/*.rs", "Cargo.toml", "Cargo.lock"],
-      ...(rustDir ? { cwd: rustDir } : {}),
-      cmd: ["cargo", "test", "--all-targets"],
-    });
-  }
-  if (hasPytestConfig(cwd)) {
-    checks.push({ id: "pytest", tier: "gate", when: ["**/*.py"], cmd: ["python3", "-m", "pytest", "-q"] });
-  }
+  const dirs = projectDirs(cwd);
+  const checks = [...goChecks(cwd, dirs), ...nodeChecks(cwd, dirs), ...rustChecks(cwd, dirs), ...pytestChecks(cwd, dirs)];
   // 通用起始检查：只匹配常见源码扩展名，避免文档改动也触发，从而保留仅文档的轻量路径。
   checks.push({
     id: "lint",
@@ -114,9 +81,6 @@ export function starterVerify({ cwd = process.cwd() } = {}) {
   });
   // 改了规则或用例的分支，在它自己的检出里按它自己的配置重放黄金任务，退化当场暴露。
   checks.push({ id: "harness-golden", tier: "gate", when: [".harness/**"], cmd: [".harness/bin/harness", "golden", "--worktree"] });
-  // 两个示例档位，接入后按项目实际替换：extended 记未执行并给补验方式，advisory 只提示。
-  checks.push({ id: "manual-check", tier: "extended", when: ["src/**"], reason: "需要人工确认的检查，示例项", howToVerify: "按项目实际情况填写补验命令" });
-  checks.push({ id: "visual-hint", tier: "advisory", when: ["src/**"], hint: "界面类改动建议人工过一眼，示例项" });
   return {
     version: 1,
     docOnly: { match: ["docs/**", "**/*.md"], exclude: [] },
@@ -125,14 +89,166 @@ export function starterVerify({ cwd = process.cwd() } = {}) {
   };
 }
 
-/** 只有项目自己声明了 pytest 配置时才生成 pytest 检查，避免在没装 pytest 的仓库里凭空失败。 */
-function hasPytestConfig(cwd = process.cwd()) {
-  for (const rel of ["pytest.ini", "setup.cfg", "tests/conftest.py", "conftest.py"]) {
-    if (existsSync(join(cwd, rel))) return true;
+/**
+ * 参与探测的位置：根目录（""）与一级子目录。
+ * 跳过隐藏目录、node_modules、被 .gitignore 忽略的目录（构建产物里常带 package.json），以及名字里有 glob 字符、写不进 when 的目录。
+ */
+function projectDirs(root) {
+  const names = readdirSync(root, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && !entry.name.startsWith(".") && entry.name !== "node_modules" && !/[*?{},\\]/.test(entry.name))
+    .map((entry) => entry.name)
+    .sort();
+  if (names.length === 0) return [""];
+  const probe = git(root, ["check-ignore", "-z", "--stdin"], { input: names.map((name) => `${name}/`).join("\0") });
+  const ignored = new Set(probe.stdout.split("\0").filter(Boolean).map((rel) => rel.replace(/\/$/, "")));
+  return ["", ...names.filter((name) => !ignored.has(name))];
+}
+
+const under = (dir, rel) => (dir ? `${dir}/${rel}` : rel);
+
+/** 位于 dir 的一项 gate 检查：子目录的检查名带目录前缀，when 按 dir 改写成相对仓库根的路径；requires 由调用方给出相对仓库根的路径。 */
+function located(dir, name, { when, cmd, requires }) {
+  return {
+    id: dir ? `${dir}-${name}` : name,
+    tier: "gate",
+    when: when.map((rel) => under(dir, rel)),
+    ...(dir ? { cwd: dir } : {}),
+    cmd,
+    ...(requires ? { requires } : {}),
+  };
+}
+
+/** 每个 go.mod 是一个独立模块，根目录的 ./... 不会进入子目录里的模块，所以各自生成。 */
+function goChecks(root, dirs) {
+  const when = ["**/*.go", "go.mod", "go.sum"];
+  return dirs
+    .filter((dir) => existsSync(join(root, dir, "go.mod")))
+    .flatMap((dir) => [
+      located(dir, "go-test", { when, cmd: ["go", "test", "-count=1", "./..."] }),
+      located(dir, "go-build", { when, cmd: ["go", "build", "./..."] }),
+    ]);
+}
+
+// 常见的类型检查脚本名：typecheck、create-vue 的 type-check、Turborepo 的 check-types，以及带冒号的写法。
+const TYPECHECK_SCRIPTS = ["typecheck", "type-check", "check-types", "check:types", "types:check"];
+const LOCKFILES = [
+  ["pnpm-lock.yaml", "pnpm"],
+  ["yarn.lock", "yarn"],
+  ["bun.lock", "bun"],
+  ["bun.lockb", "bun"],
+  ["package-lock.json", "npm"],
+  ["npm-shrinkwrap.json", "npm"],
+];
+const NODE_SOURCES = "**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs,vue,svelte}";
+
+/** 只为 scripts 里声明了类型检查脚本的 package.json 生成，命令用项目自己的包管理器执行这个脚本。 */
+function nodeChecks(root, dirs) {
+  const rootManifest = readPackageJson(join(root, "package.json"));
+  const workspace = Boolean(rootManifest?.workspaces) || existsSync(join(root, "pnpm-workspace.yaml"));
+  // 工作区根目录有类型检查脚本时由它统管各个成员，再为成员生成会把同一批代码查两遍。
+  const rootCovers = workspace && Boolean(typecheckScript(rootManifest));
+  const checks = [];
+  for (const dir of dirs) {
+    // 工作区成员不会有自己的锁文件；自带锁文件的子目录是独立项目。
+    const member = workspace && dir !== "" && !LOCKFILES.some(([file]) => existsSync(join(root, dir, file)));
+    if (member && rootCovers) continue;
+    const manifest = dir ? readPackageJson(join(root, dir, "package.json")) : rootManifest;
+    const script = typecheckScript(manifest);
+    if (!script) continue;
+    const scopes = dir ? [[dir, manifest], ["", rootManifest]] : [["", manifest]];
+    const manager = packageManager(root, scopes);
+    // Yarn PnP 没有 node_modules，按依赖目录判定的检查会一直记为未执行，不如不生成。
+    if (manager.name === "yarn" && yarnPnp(root, scopes)) continue;
+    const own = under(dir, "node_modules");
+    // 成员的依赖装在根目录：npm、yarn、bun 提升到根目录的 node_modules，
+    // pnpm 的成员目录里只有指向根目录 .pnpm 的链接，两处都要有，除非把 node-linker 改成了 hoisted。
+    const requires = !member ? [own] : manager.name === "pnpm" && !pnpmHoisted(root) ? ["node_modules", own] : ["node_modules"];
+    const check = located(dir, "typecheck", {
+      when: [NODE_SOURCES, "**/package.json", "**/tsconfig*.json"],
+      cmd: [manager.name, "run", script],
+      requires,
+    });
+    if (manager.lockfile) check.when.push(manager.lockfile);
+    checks.push(check);
   }
-  const pyproject = join(cwd, "pyproject.toml");
-  if (!existsSync(pyproject)) return false;
-  return /\[tool\.pytest/.test(readFileSync(pyproject, "utf8"));
+  return checks;
+}
+
+const typecheckScript = (manifest) => TYPECHECK_SCRIPTS.find((name) => typeof manifest?.scripts?.[name] === "string");
+
+/** pnpm 的 node-linker 可以写在 .npmrc，新版本也可以写在 pnpm-workspace.yaml。 */
+function pnpmHoisted(root) {
+  const read = (rel) => (existsSync(join(root, rel)) ? readFileSync(join(root, rel), "utf8") : "");
+  return /^\s*node-linker\s*=\s*hoisted\b/m.test(read(".npmrc")) || /^\s*nodeLinker:\s*["']?hoisted\b/m.test(read("pnpm-workspace.yaml"));
+}
+
+function readPackageJson(file) {
+  try {
+    return JSON.parse(readFileSync(file, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+const declaredManager = (manifest) => /^(npm|pnpm|yarn|bun)@/.exec(String(manifest?.packageManager ?? ""))?.[1];
+
+/**
+ * 依次看包自己、再看根目录：packageManager 字段优先，其次是锁文件；都没有时用 npm。
+ * lockfile 是相对仓库根的锁文件路径，依赖变化时也要触发检查。
+ */
+function packageManager(root, scopes) {
+  for (const [dir, manifest] of scopes) {
+    const declared = declaredManager(manifest);
+    const lock = LOCKFILES.map(([file, name]) => ({ rel: dir ? `${dir}/${file}` : file, name }))
+      .filter((item) => !declared || item.name === declared)
+      .find((item) => existsSync(join(root, item.rel)));
+    if (declared) return { name: declared, lockfile: lock?.rel ?? null };
+    if (lock) return { name: lock.name, lockfile: lock.rel };
+  }
+  return { name: "npm", lockfile: null };
+}
+
+/** Yarn 2 起默认 Plug'n'Play：有 .pnp.cjs，或者 .yarnrc.yml 没把 nodeLinker 改成别的；没有 .yarnrc.yml 时看声明的版本。 */
+function yarnPnp(root, scopes) {
+  for (const [dir] of scopes) {
+    if (existsSync(join(root, dir, ".pnp.cjs")) || existsSync(join(root, dir, ".pnp.js"))) return true;
+    const rc = join(root, dir, ".yarnrc.yml");
+    if (existsSync(rc)) return (/^\s*nodeLinker:\s*["']?([\w-]+)/m.exec(readFileSync(rc, "utf8"))?.[1] ?? "pnp") === "pnp";
+  }
+  const major = scopes.map(([, manifest]) => /^yarn@(\d+)/.exec(String(manifest?.packageManager ?? ""))?.[1]).find(Boolean);
+  return Number(major) >= 2;
+}
+
+/** 根目录是 Cargo workspace 时成员由根目录的 cargo test 统一测试；否则每个 Cargo.toml 各自生成。 */
+function rustChecks(root, dirs) {
+  const manifest = join(root, "Cargo.toml");
+  const workspace = existsSync(manifest) && /^\s*\[workspace[\].]/m.test(readFileSync(manifest, "utf8"));
+  // 不写 requires: cargo 自己会创建 target，要求它先存在会让全新克隆永远跳过这项检查。
+  return (workspace ? [""] : dirs)
+    .filter((dir) => existsSync(join(root, dir, "Cargo.toml")))
+    .map((dir) => located(dir, "cargo-test", { when: ["**/*.rs", "**/Cargo.toml", "Cargo.lock"], cmd: ["cargo", "test", "--all-targets"] }));
+}
+
+/** 根目录的 pytest 会递归收集子目录里的测试，根目录有配置时不再为子目录单独生成。 */
+function pytestChecks(root, dirs) {
+  const found = hasPytestConfig(root) ? [""] : dirs.filter((dir) => dir && hasPytestConfig(join(root, dir)));
+  return found.map((dir) => located(dir, "pytest", { when: ["**/*.py"], cmd: ["python3", "-m", "pytest", "-q"] }));
+}
+
+/**
+ * 只认 pytest 自己会读的配置，避免在没装 pytest 的仓库里凭空失败。
+ * setup.cfg 与 tox.ini 常常只给别的工具用，里面有 pytest 的段落才算。
+ */
+function hasPytestConfig(dir) {
+  for (const rel of ["pytest.ini", ".pytest.ini", "pytest.toml", ".pytest.toml", "conftest.py", "tests/conftest.py"]) {
+    if (existsSync(join(dir, rel))) return true;
+  }
+  const sections = [
+    ["pyproject.toml", /^\s*\[tool\.pytest/m],
+    ["setup.cfg", /^\s*\[tool:pytest\]/m],
+    ["tox.ini", /^\s*\[pytest\]/m],
+  ];
+  return sections.some(([rel, pattern]) => existsSync(join(dir, rel)) && pattern.test(readFileSync(join(dir, rel), "utf8")));
 }
 
 /**
@@ -168,7 +284,7 @@ function plannedWrites(root, { force }) {
 }
 
 function stackOf(verify) {
-  const generic = new Set(["lint", "harness-golden", "manual-check", "visual-hint"]);
+  const generic = new Set(["lint", "harness-golden"]);
   return verify.checks.map((check) => check.id).filter((id) => !generic.has(id));
 }
 

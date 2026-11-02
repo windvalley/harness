@@ -127,16 +127,8 @@
       "title": "改源码时未配置的 lint 记入未执行项，不冒充通过",
       "kind": "verify-plan",
       "changed": ["src/app.js"],
-      "expectNotExecuted": ["lint", "manual-check"],
+      "expectNotExecuted": ["lint"],
       "expectDocOnly": false
-    },
-    {
-      "id": "g12-extended-and-advisory",
-      "title": "extended 进未执行项，advisory 只提示",
-      "kind": "verify-plan",
-      "changed": ["src/app.js"],
-      "expectNotExecuted": ["manual-check"],
-      "expectAdvisory": ["visual-hint"]
     },
     {
       "id": "g13-deletion-only",

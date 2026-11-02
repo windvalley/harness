@@ -99,7 +99,8 @@ const POLICY = {
 const VERIFY = {
   version: 1,
   docOnly: { match: ["docs/**", "**/*.md"], exclude: [] },
-  // 与 init 生成的起始检查保持一致，这样起始黄金任务在夹具里同样适用。
+  // lint 与 init 生成的起始检查一致，这样起始黄金任务在夹具里同样适用。
+  // manual-check、visual-hint 只在夹具里，用来测 extended 与 advisory 两个档位；init 不再生成示例检查。
   checks: [
     {
       id: "unit",

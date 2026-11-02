@@ -209,8 +209,8 @@ node ~/github/harness/bin/harness.mjs sync                                    # 
 
 1. `.harness/` 下的 `config.json`、`policy.json`、`verify.json`、`golden/tasks.json`、`rules/`、`templates/`、`VERSION` 和空的 `acceptance/`。
    已存在的 `config.json`、`policy.json`、`verify.json` 保持不动，加 `--force` 才覆盖；已有的黄金任务始终保留。
-2. 起始检查按技术栈生成：`go.mod` 对应 `go test` 与 `go build`，`frontend/package.json` 对应前端类型检查，`Cargo.toml` 或 `rust/Cargo.toml` 对应 `cargo test`，声明了 pytest 配置的项目对应 `pytest`。
-   另外还有通用的 `lint` 占位、`harness-golden` 规则回归检查和两个示例检查，见“verify.json：检查映射”。
+2. 起始检查只按项目声明过的命令生成，探测根目录与一级子目录：`go.mod` 对应 `go test` 与 `go build`，`package.json` 里声明的类型检查脚本用项目自己的包管理器执行，`Cargo.toml` 对应 `cargo test`，声明了 pytest 配置的项目对应 `pytest`。
+   另外还有通用的 `lint` 占位与 `harness-golden` 规则回归检查，见“verify.json：检查映射”。
 3. 把当前版本的代码装进 `~/.local/share/harness/versions/<版本>/` 并写入内容哈希清单；本机还没有签名密钥时生成一把。
 4. 入口 `.harness/bin/harness`，锁定版本号。
 5. `pre-commit`、`commit-msg`、`reference-transaction` 三个 git 钩子。
@@ -1032,11 +1032,22 @@ node ~/github/harness/bin/harness.mjs install --local   # 按新锁定的版本�
 - `lint` 是 `extended` 占位，配置真实命令之前记入未执行项，不会冒充通过。
   把 `cmd` 改成项目实际的 lint 命令，`tier` 改为 `gate`。
 - `harness-golden`：`.harness/**` 有改动时，在任务分支的检出里按它自己的配置重放黄金任务，改坏规则的分支在验证阶段就被拦下。
-- `manual-check`、`visual-hint` 是 `extended` 与 `advisory` 的示例，按项目实际替换或删除。
-- 另按仓库内容探测生成 `gate` 检查：有 `go.mod` 时生成 `go-test` 与 `go-build`，有 `frontend/package.json` 时生成 `frontend-typecheck`，有 `Cargo.toml` 或 `rust/Cargo.toml` 时生成 `cargo-test`，声明了 pytest 配置（`pytest.ini`、`setup.cfg`、`conftest.py`、`tests/conftest.py`，或 `pyproject.toml` 里的 `[tool.pytest]`）时生成 `pytest`。
+- 另按仓库内容生成 `gate` 检查，只生成推断得出真实命令的项；推断不出的不生成，接入时由 Agent 对照项目补上。
+  探测根目录与一级子目录，跳过隐藏目录、`node_modules` 与被 `.gitignore` 忽略的目录。
+  子目录的检查名带目录前缀（例如 `web-typecheck`、`backend-go-test`），`cwd` 是那个子目录，`when` 只匹配那个子目录。
+- `go.mod`：生成 `go-test` 与 `go-build`。
+  每个 `go.mod` 是独立模块，根目录的 `./...` 不会进入子目录里的模块，所以各自生成。
+- `package.json`：`scripts` 里有类型检查脚本时生成 `typecheck`，依次认 `typecheck`、`type-check`、`check-types`、`check:types`、`types:check`，没有就不生成。
+  命令是 `<包管理器> run <脚本名>`；包管理器先看这个包的 `packageManager` 字段，再看它的锁文件，然后对根目录做同样的判断，都没有时用 `npm`。
+  `requires` 是这个包的 `node_modules`；Yarn Plug'n'Play 没有 `node_modules`，不生成。
+  根目录声明了 `workspaces` 或有 `pnpm-workspace.yaml` 时，没有自己锁文件的子目录算工作区成员：根目录有类型检查脚本就由它统管，不再为成员生成；根目录没有时为成员各自生成，`requires` 改成根目录的 `node_modules`，pnpm 另加成员自己的 `node_modules`（`node-linker` 为 `hoisted` 时除外）。
+- `Cargo.toml`：生成 `cargo-test`；根目录是 Cargo workspace 时只看根目录。
+- pytest 配置（`pytest.ini`、`.pytest.ini`、`pytest.toml`、`.pytest.toml`、`conftest.py`、`tests/conftest.py`、`pyproject.toml` 里的 `[tool.pytest]`、`setup.cfg` 里的 `[tool:pytest]`、`tox.ini` 里的 `[pytest]`）：生成 `pytest`；根目录有配置时只看根目录。
+- `init` 不写示例检查，`extended` 与 `advisory` 的写法见上面的示例。
 
-改了这几项后，要同步修改 `golden/tasks.json` 里引用它们的起始用例 `g11` 到 `g14`，否则 `harness-golden` 检查失败。
-例如 `lint` 配成真实命令后，把 `g11`、`g13`、`g14` 里 `expectNotExecuted` 中的 `lint` 移到 `expectChecks`；删掉两个示例检查时，去掉 `g12`，并从 `g11` 的 `expectNotExecuted` 里去掉 `manual-check`。
+改了 `lint` 后，要同步修改 `golden/tasks.json` 里引用它的起始用例 `g10`、`g11`、`g13`、`g14`，否则 `harness-golden` 检查失败。
+例如 `lint` 配成真实命令后，把 `g11`、`g13`、`g14` 里 `expectNotExecuted` 中的 `lint` 移到 `expectChecks`。
+`g10` 的 `forbidChecks` 要求只改文档时不选中 `lint`，配置真实命令时保持它的 `when` 不匹配文档。
 
 ### policy.json：拦截规则
 
@@ -1085,7 +1096,7 @@ node ~/github/harness/bin/harness.mjs install --local   # 按新锁定的版本�
 ### golden/tasks.json：黄金任务
 
 黄金任务是对规则本身的回归用例，`harness golden` 重放。
-`init` 自带 17 个起始用例，覆盖预设规则与起始检查。
+`init` 自带 16 个起始用例，覆盖预设规则与起始检查。
 只针对某个预设的用例在该预设未启用时跳过：`g16` 对应可选的 `main-worktree`，`g17` 对应 `plan-first`。
 
 给上面的规则加一个用例：

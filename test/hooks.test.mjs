@@ -1,10 +1,13 @@
 import { strict as assert } from "node:assert";
-import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
 import { commit, CONFIG, git, makeRepo, sh, write, writeReview } from "./helpers.mjs";
 import { PACKAGE_ROOT as PACKAGE_ROOT_TEST } from "./helpers.mjs";
+import { starterVerify } from "../src/install/init.mjs";
 import { packageVersion as currentVersion } from "../src/install/managed.mjs";
+import { matchAny } from "../src/lib/glob.mjs";
 
 let repos = [];
 afterEach(() => {
@@ -16,6 +19,24 @@ function setup(opts = {}) {
   repos.push(repo);
   return repo;
 }
+
+// 起始检查在临时 git 仓库里生成：被忽略的目录要按 .gitignore 判定。
+const GENERIC = ["lint", "harness-golden"];
+let stackDirs = [];
+afterEach(() => {
+  for (const dir of stackDirs) rmSync(dir, { recursive: true, force: true });
+  stackDirs = [];
+});
+function starterVerifyFor(files) {
+  const dir = mkdtempSync(join(tmpdir(), "harness-stack-"));
+  stackDirs.push(dir);
+  sh(dir, "git", ["init", "-q"]);
+  for (const [rel, content] of Object.entries(files)) write(dir, rel, content);
+  return starterVerify({ cwd: dir });
+}
+const starterChecks = (files) => Object.fromEntries(starterVerifyFor(files).checks.map((check) => [check.id, check]));
+const starterIds = (files) => starterVerifyFor(files).checks.map((check) => check.id);
+const pkg = (scripts, extra = {}) => JSON.stringify({ name: "demo", scripts, ...extra });
 
 const BASIC = "feat(demo): 增加示例\n\n- 增加一个文件\n- 补充说明";
 // 私钥类文件用常量拼出来，避免命令文本里出现完整扩展名而触发密钥保护规则。
@@ -198,41 +219,102 @@ describe("安装与自检", () => {
     assert.match(status.stderr, /只有 main/);
   });
 
-  test("起始检查按项目技术栈生成，未知技术栈不会被塞进不可用的检查", async () => {
-    const { starterVerify } = await import("../src/install/init.mjs");
-    const { mkdtempSync, mkdirSync } = await import("node:fs");
-    const { tmpdir } = await import("node:os");
-    const dirs = [];
-    const stack = (files) => {
-      const dir = mkdtempSync(join(tmpdir(), "harness-stack-"));
-      dirs.push(dir);
-      for (const [rel, content] of Object.entries(files)) {
-        mkdirSync(join(dir, rel, ".."), { recursive: true });
-        writeFileSync(join(dir, rel), content);
-      }
-      return starterVerify({ cwd: dir });
-    };
+  test("Node 起始检查只按项目声明的类型检查脚本与包管理器生成", () => {
+    // 根目录的项目：包管理器看锁文件，触发路径不依赖 src/ 布局，改文档不触发
+    const root = starterChecks({ "package.json": pkg({ typecheck: "tsc --noEmit" }), "pnpm-lock.yaml": "" }).typecheck;
+    assert.deepEqual(root.cmd, ["pnpm", "run", "typecheck"]);
+    assert.equal(root.tier, "gate");
+    assert.equal(root.cwd, undefined);
+    assert.deepEqual(root.requires, ["node_modules"]);
+    assert.ok(matchAny("app/page.tsx", root.when) && matchAny("pnpm-lock.yaml", root.when));
+    assert.equal(matchAny("docs/guide.md", root.when), false);
 
-    const rust = stack({ "rust/Cargo.toml": "[workspace]\n" });
-    const cargo = rust.checks.find((check) => check.id === "cargo-test");
+    // 一级子目录：检查名带目录前缀，frontend 仍叫 frontend-typecheck
+    const web = starterChecks({ "web/package.json": pkg({ "type-check": "vue-tsc --noEmit" }), "web/yarn.lock": "" })["web-typecheck"];
+    assert.equal(web.cwd, "web");
+    assert.deepEqual(web.cmd, ["yarn", "run", "type-check"]);
+    assert.deepEqual(web.requires, ["web/node_modules"]);
+    assert.ok(matchAny("web/components/App.vue", web.when) && matchAny("web/yarn.lock", web.when));
+    assert.equal(matchAny("api/main.ts", web.when), false);
+
+    // packageManager 字段优先于锁文件；子目录没有声明时沿用根目录的，都没有时用 npm
+    const declared = starterChecks({ "frontend/package.json": pkg({ typecheck: "tsc" }, { packageManager: "pnpm@9.0.0" }), "frontend/package-lock.json": "{}" });
+    assert.deepEqual(declared["frontend-typecheck"].cmd, ["pnpm", "run", "typecheck"]);
+    const inherited = starterChecks({ "package.json": pkg({}), "bun.lock": "", "frontend/package.json": pkg({ "check-types": "tsc" }) });
+    assert.deepEqual(inherited["frontend-typecheck"].cmd, ["bun", "run", "check-types"]);
+    assert.ok(matchAny("bun.lock", inherited["frontend-typecheck"].when));
+    assert.deepEqual(starterChecks({ "frontend/package.json": pkg({ typecheck: "tsc" }) })["frontend-typecheck"].cmd, ["npm", "run", "typecheck"]);
+
+    // 没有类型检查脚本不生成：生成了也必然失败，挡住每一个改前端的任务
+    assert.deepEqual(starterIds({ "frontend/package.json": pkg({ build: "vite build" }), "frontend/package-lock.json": "{}" }), GENERIC);
+    // Yarn PnP 没有 node_modules，按依赖目录判定会一直记为未执行，同样不生成
+    assert.deepEqual(starterIds({ "package.json": pkg({ typecheck: "tsc" }), "yarn.lock": "", ".yarnrc.yml": "enableTelemetry: false\n" }), GENERIC);
+    assert.deepEqual(starterIds({ "package.json": pkg({ typecheck: "tsc" }), "yarn.lock": "", ".yarnrc.yml": "nodeLinker: node-modules\n" }), ["typecheck", ...GENERIC]);
+
+    // 工作区根目录有类型检查脚本时由它统管各个包，避免同一批代码查两遍
+    const sub = { "web/package.json": pkg({ typecheck: "tsc" }) };
+    assert.deepEqual(starterIds({ "package.json": pkg({ typecheck: "tsc -b" }, { workspaces: ["web"] }), ...sub }), ["typecheck", ...GENERIC]);
+    assert.deepEqual(starterIds({ "package.json": pkg({ typecheck: "tsc -b" }), "pnpm-workspace.yaml": "packages: [web]\n", ...sub }), ["typecheck", ...GENERIC]);
+    assert.deepEqual(starterIds({ "package.json": pkg({ build: "x" }), ...sub }), ["web-typecheck", ...GENERIC]);
+    // 根目录没有时按成员各自生成：npm、yarn、bun 把依赖提升到根目录，成员目录常常没有自己的 node_modules
+    const npmMember = starterChecks({ "package.json": pkg({ build: "x" }, { workspaces: ["web"] }), "package-lock.json": "{}", ...sub })["web-typecheck"];
+    assert.deepEqual(npmMember.cmd, ["npm", "run", "typecheck"]);
+    assert.equal(npmMember.cwd, "web");
+    assert.deepEqual(npmMember.requires, ["node_modules"]);
+    assert.ok(matchAny("package-lock.json", npmMember.when) && matchAny("web/src/a.ts", npmMember.when));
+    // pnpm 的成员目录里只有指向根目录 .pnpm 的链接，两处都要有；node-linker=hoisted 时只有根目录
+    const pnpmRoot = { "package.json": pkg({ build: "x" }, { packageManager: "pnpm@9.0.0" }), "pnpm-lock.yaml": "", "pnpm-workspace.yaml": "packages:\n  - web\n" };
+    assert.deepEqual(starterChecks({ ...pnpmRoot, ...sub })["web-typecheck"].requires, ["node_modules", "web/node_modules"]);
+    assert.deepEqual(starterChecks({ ...pnpmRoot, ".npmrc": "node-linker=hoisted\n", ...sub })["web-typecheck"].requires, ["node_modules"]);
+    // 自带锁文件的子目录是独立项目，不是工作区成员，根目录统管成员时它照样生成
+    const standalone = starterChecks({ ...pnpmRoot, ...sub, "web/package-lock.json": "{}" })["web-typecheck"];
+    assert.deepEqual(standalone.cmd, ["npm", "run", "typecheck"]);
+    assert.deepEqual(standalone.requires, ["web/node_modules"]);
+    const covered = { "package.json": pkg({ typecheck: "tsc -b" }, { workspaces: ["web"] }), ...sub, "docs-site/package.json": pkg({ typecheck: "astro check" }), "docs-site/yarn.lock": "" };
+    assert.deepEqual(starterIds(covered), ["typecheck", "docs-site-typecheck", ...GENERIC]);
+
+    // 被 .gitignore 忽略的目录、隐藏目录与 node_modules 不参与探测
+    const declaredElsewhere = pkg({ typecheck: "tsc" });
+    assert.deepEqual(
+      starterIds({ ".gitignore": "dist/\n", "dist/package.json": declaredElsewhere, ".cache/package.json": declaredElsewhere, "node_modules/package.json": declaredElsewhere }),
+      GENERIC,
+    );
+  });
+
+  test("Go、Rust、pytest 起始检查同样探测根目录与一级子目录", () => {
+    const go = starterChecks({ "go.mod": "module x\n" });
+    assert.deepEqual(go["go-test"].cmd, ["go", "test", "-count=1", "./..."]);
+    assert.deepEqual(go["go-build"].cmd, ["go", "build", "./..."]);
+    assert.ok(matchAny("internal/a.go", go["go-test"].when) && matchAny("go.sum", go["go-test"].when));
+    const backend = starterChecks({ "backend/go.mod": "module x\n" })["backend-go-test"];
+    assert.equal(backend.cwd, "backend");
+    assert.ok(matchAny("backend/cmd/main.go", backend.when));
+    assert.equal(matchAny("tools/main.go", backend.when), false);
+
+    const cargo = starterChecks({ "rust/Cargo.toml": "[workspace]\n" })["rust-cargo-test"];
     assert.equal(cargo.cwd, "rust");
     assert.deepEqual(cargo.cmd, ["cargo", "test", "--all-targets"]);
     // target 由 cargo 自己创建，不能作为前置条件，否则全新克隆永远跳过这项检查
     assert.equal(cargo.requires, undefined);
+    assert.equal(starterChecks({ "Cargo.toml": "[package]\n" })["cargo-test"].cwd, undefined);
+    // 根目录是 Cargo workspace 时成员由根目录统一测试
+    assert.deepEqual(starterIds({ "Cargo.toml": '[workspace]\nmembers = ["core"]\n', "core/Cargo.toml": "[package]\n" }), ["cargo-test", ...GENERIC]);
 
-    const rootRust = stack({ "Cargo.toml": "[package]\n" });
-    assert.equal(rootRust.checks.find((check) => check.id === "cargo-test").cwd, undefined);
+    // 只认 pytest 自己会读的配置：只用来写元数据的 setup.cfg 不算
+    assert.deepEqual(starterIds({ "app/main.py": "print(1)\n" }), GENERIC);
+    assert.deepEqual(starterIds({ "setup.cfg": "[metadata]\nname = x\n" }), GENERIC);
+    assert.deepEqual(starterIds({ "setup.cfg": "[tool:pytest]\naddopts = -q\n" }), ["pytest", ...GENERIC]);
+    assert.deepEqual(starterIds({ "tox.ini": "[pytest]\n" }), ["pytest", ...GENERIC]);
+    assert.equal(starterChecks({ "pyproject.toml": "[tool.pytest.ini_options]\n" }).pytest.tier, "gate");
+    const api = starterChecks({ "api/tests/conftest.py": "" })["api-pytest"];
+    assert.equal(api.cwd, "api");
+    assert.ok(matchAny("api/app/main.py", api.when));
+    // 根目录的 pytest 会递归收集子目录，不再为子目录单独生成
+    assert.deepEqual(starterIds({ "pytest.ini": "[pytest]\n", "api/tests/conftest.py": "" }), ["pytest", ...GENERIC]);
+  });
 
-    // 没有 pytest 配置的 Python 项目不生成 pytest 检查
-    assert.equal(stack({ "app/main.py": "print(1)\n" }).checks.some((check) => check.id === "pytest"), false);
-    const pytest = stack({ "pyproject.toml": "[tool.pytest.ini_options]\n", "app/main.py": "print(1)\n" });
-    assert.equal(pytest.checks.find((check) => check.id === "pytest").tier, "gate");
-
-    // 只有文档的项目不生成语言检查，只保留通用项
-    const empty = stack({ "README.md": "demo\n" });
-    assert.deepEqual(empty.checks.map((check) => check.id), ["lint", "harness-golden", "manual-check", "visual-hint"]);
-
-    for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
+  test("只有文档的项目只保留通用检查，不再写入示例检查", () => {
+    assert.deepEqual(starterIds({ "README.md": "demo\n" }), GENERIC);
   });
 
   test("包内只有一份版本号，版本目录清单覆盖源码、资源与入口", () => {

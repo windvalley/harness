@@ -25,12 +25,27 @@
   默认格式与以前合并时一致（`类型(范围): 描述`，空一行后每行一个 `- ` 开头的要点），另外限定了类型范围、标题不超过 72 个字符、标题结尾不用句号。
 - `harness.md` 写明钩子按 `commit-message` 规则校验、verify 与 review 动手前再判一次；Agent 自己修复的拒绝里加上 `branch_commit_rule_invalid`。
 - `git-safety` 预设拦下 `git stash` 时给出的替代命令改成 `git commit -m 'chore(wip): 暂存当前改动' -m '- ……'`：原来的 `wip: 暂存` 不在默认类型里也没有正文，照着执行会被提交钩子拒绝。
+- `init` 的起始检查探测根目录与一级子目录，跳过隐藏目录、`node_modules` 与被 `.gitignore` 忽略的目录。
+  子目录的检查名带目录前缀（例如 `web-typecheck`、`backend-go-test`），`cwd` 是那个子目录，`when` 只匹配那个子目录。
+  Node 工作区的根目录有类型检查脚本时由它统管各个成员；没有时为成员各自生成，依赖目录按根目录的 `node_modules` 判定。
+  根目录是 Cargo workspace、根目录有 pytest 配置时，对应语言只看根目录，避免同一批代码查两遍。
+- `rust/Cargo.toml` 生成的检查从 `cargo-test` 改名为 `rust-cargo-test`；Go 检查的触发路径加上 `go.sum`。
+- `init` 不再在 `verify.json` 写示例检查 `manual-check` 与 `visual-hint`，起始黄金任务去掉对应的 `g12`，`g11` 不再期望 `manual-check`，起始用例从 17 个变为 16 个。
+  原来它们按 `src/**` 触发，每次改 `src/**` 都在证据、`status`、评审材料与 PR 正文里出现示例项。
 
 ### 修复
 
 - 默认配置下钩子只查 `policy.json` 的 `pattern`（只要求标题），合并才查 `config.json` 的 `merge.commitMessagePattern`（还要求要点正文）。
   只有标题的提交能提交，也能通过验证与评审，到合并才被拒，而 `status` 显示可以合并。
   现在两处取并集，提交当场就拒绝，`status` 与合并同码。
+- `init` 生成的前端检查固定是 `frontend/` 下的 `pnpm typecheck`。
+  用 npm、yarn 或 bun 的项目会报“未找到命令”或用错包管理器；没有 `typecheck` 脚本的项目这项 gate 检查必然失败，接入后第一个改前端的任务就不能评审与合并。
+  现在只在 `package.json` 的 `scripts` 声明了类型检查脚本（`typecheck`、`type-check`、`check-types`、`check:types`、`types:check`）时生成，命令是 `<包管理器> run <脚本名>`。
+  包管理器先看 `packageManager` 字段，再看锁文件，子目录没有声明时沿用根目录的，都没有时用 `npm`；Yarn Plug'n'Play 没有 `node_modules`，不生成。
+- Node 项目在根目录或 `web/` 这类子目录时不生成任何检查，改源码只有 `lint` 占位记为未执行；`frontend/` 的触发路径只认 `src/**`，`app/` 等布局下的改动选不中类型检查。
+  现在触发路径按源码扩展名匹配整个包，另含 `package.json`、`tsconfig*.json` 与锁文件。
+- 只写了元数据的 `setup.cfg` 也会生成 `pytest` 检查，没装 pytest 的仓库因此凭空失败。
+  现在 `setup.cfg` 里要有 `[tool:pytest]`，另外认 `tox.ini` 的 `[pytest]` 与 `pytest.toml`。
 
 ### 升级说明
 
@@ -39,6 +54,10 @@
 - 任务分支上已有的不合规提交，升级后 verify、review 会直接拒绝，先在任务分支改写提交信息。
 - 只写 `pattern` 的旧规则里带着其他字段时，钩子与合并照旧可用，`harness doctor` 会指出这些字段不起作用；改动这条规则的分支要先删掉或改正它们，否则以 `branch_commit_rule_invalid` 拒绝。
 - 要统一到一处时，在任务分支把 `commit-message` 规则改写成结构化字段，同时删掉 `config.json` 的两个旧字段，经人确认后合入；只改规则、不删旧字段会以 `branch_commit_rule_invalid` 拒绝。
+- `upgrade` 不改写已接入项目的 `verify.json` 与 `golden/tasks.json`，起始检查的改动只影响新接入的项目。
+- 已经生成 `frontend-typecheck` 的项目，对照 `frontend/package.json` 的 `scripts` 与锁文件核对：没有类型检查脚本就删掉这项检查；包管理器不是 pnpm 时把 `cmd` 改成 `["<包管理器>", "run", "<脚本名>"]`。
+  这些改动在任务分支进行，`verify.json` 是门禁文件，合并前要人工确认。
+- 要去掉示例检查时，删掉 `verify.json` 里的 `manual-check` 与 `visual-hint`，同时删掉 `golden/tasks.json` 的 `g12`，并从 `g11` 的 `expectNotExecuted` 里去掉 `manual-check`，否则 `harness-golden` 检查失败。
 
 ## [0.10.4] - 2026-10-30
 

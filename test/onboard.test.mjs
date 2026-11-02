@@ -218,6 +218,74 @@ describe("接入已有项目", () => {
   });
 });
 
+/** 一个还没接入 harness 的项目；dirs 是不入库的依赖目录，例如 node_modules。 */
+function freshProject(files, dirs = []) {
+  const repo = makeRepo({
+    install: false,
+    project: { ".harness/config.json": null, ".harness/policy.json": null, ".harness/verify.json": null },
+    files: { ".gitignore": "node_modules/\n", ...files },
+  });
+  repos.push(repo);
+  for (const dir of dirs) mkdirSync(join(repo.root, dir), { recursive: true });
+  return repo;
+}
+
+/** 接入分支顺带改一个源文件，按 init 生成的起始检查验证；接入分支本身只改 .harness/ 等文件，选不中语言检查。 */
+function verifyOnboarding(repo, source) {
+  write(repo.root, source, "export const changed = true;\n");
+  const init = onboard(repo);
+  const result = repo.rawCli("verify", "--branch", "chore/harness-onboard", "--json");
+  return {
+    init,
+    result,
+    record: result.stdout ? JSON.parse(result.stdout) : null,
+    generated: JSON.parse(git(repo.root, "show", "chore/harness-onboard:.harness/verify.json")),
+  };
+}
+
+describe("起始检查对应项目真实命令", () => {
+  test("前端没有类型检查脚本时不生成必然失败的检查，改前端的任务照常通过验证", () => {
+    const repo = freshProject(
+      {
+        "frontend/package.json": JSON.stringify({ name: "web", private: true, scripts: { build: "vite build" } }),
+        "frontend/package-lock.json": "{}\n",
+        "frontend/src/a.ts": "export const a = 1;\n",
+      },
+      ["frontend/node_modules"],
+    );
+    const { result, record, generated } = verifyOnboarding(repo, "frontend/src/a.ts");
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(record.status, "passed");
+    assert.deepEqual(generated.checks.map((check) => check.id), ["lint", "harness-golden"], "不生成猜出来的检查，也不写示例检查");
+    assert.ok(record.checks.some((check) => check.id === "harness-golden" && check.exit === 0));
+    assert.deepEqual(record.notExecuted.map((item) => item.id), ["lint"], "未配置的 lint 如实记为未执行");
+  });
+
+  test("子目录里声明的类型检查脚本按它自己的包管理器真实执行", (t) => {
+    if (sh(import.meta.dirname, "npm", ["--version"]).status !== 0) {
+      t.skip("本机没有 npm");
+      return;
+    }
+    const repo = freshProject(
+      {
+        "web/package.json": JSON.stringify({ name: "web", private: true, scripts: { typecheck: 'node -e "process.exit(0)"' } }),
+        "web/package-lock.json": "{}\n",
+        "web/src/main.ts": "export const a = 1;\n",
+      },
+      ["web/node_modules"],
+    );
+    const { init, result, record, generated } = verifyOnboarding(repo, "web/src/main.ts");
+    assert.match(init.stdout, /技术栈检查: web-typecheck/);
+    assert.deepEqual(generated.checks.map((check) => check.id), ["web-typecheck", "lint", "harness-golden"]);
+    assert.equal(result.status, 0, result.stderr);
+    const typecheck = record.checks.find((check) => check.id === "web-typecheck");
+    assert.ok(typecheck, `应执行 web-typecheck，实际: ${record.checks.map((check) => check.id).join(",")}`);
+    assert.equal(typecheck.cmd, "npm run typecheck");
+    assert.equal(typecheck.cwd, "web");
+    assert.equal(typecheck.exit, 0);
+  });
+});
+
 describe("另一台机器使用已接入的项目", () => {
   test("install --local 按项目锁定的版本装本机，不改动入库文件", () => {
     const repo = makeRepo();
