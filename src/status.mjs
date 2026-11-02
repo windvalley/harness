@@ -74,7 +74,8 @@ export function branchStatus({ cwd, branch }) {
       add("commit-message", "ok", "分支上的提交信息符合规范");
     }
     // 主分支的规则能用时，再看本分支改过的规则：写坏了合并会拒绝，这里提前报出来，由 Agent 在任务分支修正。
-    const branchRule = commitRuleErrorAt(root, branchCommit, { baseRef: mainCommit });
+    // 与共同基线比，而不是与当前主分支比：主分支在分叉之后清理旧字段不算本分支改过规则。
+    const branchRule = commitRuleErrorAt(root, branchCommit, { baseRef: gitOk(root, ["merge-base", mainCommit, branchCommit]) });
     if (branchRule) {
       add("commit-rule", "fail", `本分支里的提交信息规则不能用，合入后所有提交都会被拒绝：${branchRule}`);
       block("branch_commit_rule_invalid", "本分支的提交信息规则有误");

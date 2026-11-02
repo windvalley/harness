@@ -212,9 +212,10 @@ function languageProblems(spec, description, body) {
   for (const [part, text] of parts) {
     if (spec.lang === "zh" && !HAN.test(text)) problems.push(`${part}要用中文：没有找到汉字`);
     if (spec.lang === "en" && HAN.test(text)) problems.push(`${part}要用英文：出现了汉字`);
-  }
-  if (spec.lang === "zh" && !spec.allowLatinTerms && LATIN.test(parts[0][1])) {
-    problems.push("描述要用纯中文：出现了英文字母；允许夹杂英文术语时把 allowLatinTerms 设为 true");
+    // 纯中文限制与汉字检查覆盖同一范围：langScope 为 all 时正文同样不许出现英文字母。
+    if (spec.lang === "zh" && !spec.allowLatinTerms && LATIN.test(text)) {
+      problems.push(`${part}要用纯中文：出现了英文字母；允许夹杂英文术语时把 allowLatinTerms 设为 true`);
+    }
   }
   return problems;
 }
@@ -302,6 +303,8 @@ export function commitRangeProblems({ root, resolved, config, baseCommit, branch
  * 写错或与旧字段并存的规则一旦进了主分支，钩子会拒绝所有提交，连修复它的分支也合不进来，所以在它进主分支之前就拦下。
  * 给出 baseRef 时，只写 pattern 的旧规则只在相对 baseRef 改动过才严格检查字段名：
  * 主分支上早就带着其他字段的旧规则照旧可用，不让每个任务分支都卡在它上面。
+ * ref 是任务分支本身时 baseRef 取它与主分支的共同基线：主分支后来清理旧字段不算任务分支改过规则；
+ * ref 是合并结果时 baseRef 取当前主分支：合并结果沿用了主分支的规则，就不算这次改动引入的。
  */
 export function commitRuleErrorAt(root, ref, { baseRef } = {}) {
   const read = (at, name) => {

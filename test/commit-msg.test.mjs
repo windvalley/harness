@@ -2,9 +2,9 @@ import { strict as assert } from "node:assert";
 import { chmodSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
-import { APPROVE, CONFIG, commit, commitWith, fakeReviewer, git, makeRepo, sh, write } from "./helpers.mjs";
+import { APPROVE, CONFIG, PACKAGE_ROOT, commit, commitWith, fakeReviewer, git, makeRepo, sh, write } from "./helpers.mjs";
 import { cleanCommitMessage } from "../src/githook.mjs";
-import { commitRuleErrorAt, resolveCommitRule } from "../src/policy/commit-message.mjs";
+import { commitRuleErrorAt, messageProblems, resolveCommitRule } from "../src/policy/commit-message.mjs";
 import { resolvePolicy } from "../src/policy/resolve.mjs";
 
 let repos = [];
@@ -373,5 +373,65 @@ describe("提交信息规范只有一处定义，钩子、verify、review、stat
     git(repo.root, "checkout", "-q", "-b", "task/init");
     assert.equal(hookCommit(repo, rule.example).status, 0);
     assert.notEqual(hookCommit(repo, "feat(demo): 只有标题").status, 0);
+  });
+
+  test("主分支在分叉之后清理旧字段，只改业务代码的分支不受影响", () => {
+    const oldRule = { id: "commit-message", kind: "commit-message", pattern: "^[a-z]+(\\([^)]+\\))?: .+", forbidPatterns: ["^Co-Authored-By:"], note: "见内部文档", reason: "规范", fix: "改写" };
+    const policy = { version: 1, presets: ["secrets", "git-safety", "gate-self"], disabled: [], rules: [oldRule] };
+    const { commitMessagePattern, forbidMessagePatterns, ...merge } = CONFIG.merge;
+    const repo = makeRepo({ project: { ".harness/policy.json": policy, ".harness/config.json": { ...CONFIG, merge } } });
+    repos.push(repo);
+    repo.branch("task/biz", { "src/a.js": "export const a = 1;\n" }, GOOD);
+    // 主分支在任务分叉之后删掉不起作用的字段：三方合并会继承清理后的规则，本分支并没有改规则。
+    const cleaned = { ...policy, rules: [{ ...oldRule, note: undefined }] };
+    commitWith(repo.root, repo.env, "chore(policy): 清理旧字段\n\n- 删掉不起作用的 note", { ".harness/policy.json": `${JSON.stringify(cleaned, null, 2)}\n` });
+
+    const verified = repo.cli("verify", "--branch", "task/biz");
+    assert.equal(verified.status, 0, verified.stderr);
+    assert.doesNotMatch(repo.cli("status", "--branch", "task/biz").stdout, /commit-rule/);
+    assert.doesNotMatch(repo.cli("merge", "--dry-run", "--branch", "task/biz").stderr, /branch_commit_rule_invalid/);
+  });
+
+  test("内置的 stash 替代命令在 init 生成的默认规则下能提交", () => {
+    const repo = makeRepo({ install: false, project: { ".harness/config.json": null, ".harness/policy.json": null, ".harness/verify.json": null } });
+    repos.push(repo);
+    assert.equal(repo.rawCli("init").status, 0);
+    const policy = JSON.parse(readFileSync(join(repo.root, ".harness/policy.json"), "utf8"));
+    const config = JSON.parse(readFileSync(join(repo.root, ".harness/config.json"), "utf8"));
+    const spec = resolveCommitRule({ resolved: resolvePolicy(policy), config });
+
+    // 拦截说明里的“正确做法”要照着执行就能提交，不能又被提交信息规则拒绝。
+    const preset = JSON.parse(readFileSync(join(PACKAGE_ROOT, "assets/presets/git-safety.json"), "utf8"));
+    const stash = preset.rules.find((item) => item.id === "git-stash");
+    // 按建议里的 -m 段拼出提交信息：shell 与 git 都不解释单引号里的 \n，要点必须各自成段。
+    const segments = [...stash.fix.matchAll(/-m '([^']*)'/g)].map((match) => match[1]);
+    assert.ok(segments.length > 1, stash.fix);
+    assert.deepEqual(messageProblems({ spec, message: segments.join("\n\n") }), [], `fix 建议的提交信息应当能被接受: ${stash.fix}`);
+
+    // 照着这条建议真的提交一次，钩子也放行。
+    git(repo.root, "checkout", "-q", "-b", "chore/onboard");
+    commit(repo.root, "chore: 接入门禁\n\n- 写入配置与入口", {});
+    git(repo.root, "checkout", "-q", "main");
+    git(repo.root, "merge", "-q", "--ff-only", "chore/onboard");
+    git(repo.root, "checkout", "-q", "-b", "task/wip");
+    write(repo.root, "probe.txt", "p\n");
+    git(repo.root, "add", "probe.txt");
+    const committed = sh(repo.root, "git", ["commit", "-q", ...segments.flatMap((segment) => ["-m", segment])], repo.env);
+    assert.equal(committed.status, 0, committed.stderr);
+  });
+
+  test("纯中文限制按 langScope 覆盖正文", () => {
+    const strict = resolveCommitRule({ resolved: resolvePolicy({ rules: [{ ...STRUCTURED, lang: "zh", langScope: "all", allowLatinTerms: false }] }), config: {} });
+    assert.match(messageProblems({ spec: strict, message: "fix(文案): 修复问题\n\n- 修复 SQL 处理" }).join(), /正文要用纯中文/);
+    assert.match(messageProblems({ spec: strict, message: "fix(文案): 修复 SQL\n\n- 修复处理" }).join(), /描述要用纯中文/);
+    assert.deepEqual(messageProblems({ spec: strict, message: "fix(文案): 修复问题\n\n- 修复处理" }), []);
+
+    // 默认只看描述，正文不受纯中文限制。
+    const subjectOnly = resolveCommitRule({ resolved: resolvePolicy({ rules: [{ ...STRUCTURED, lang: "zh", allowLatinTerms: false }] }), config: {} });
+    assert.deepEqual(messageProblems({ spec: subjectOnly, message: "fix(文案): 修复问题\n\n- 修复 SQL 处理" }), []);
+
+    // 允许夹杂英文术语时，描述与正文都不按纯中文判定。
+    const loose = resolveCommitRule({ resolved: resolvePolicy({ rules: [{ ...STRUCTURED, lang: "zh", langScope: "all" }] }), config: {} });
+    assert.deepEqual(messageProblems({ spec: loose, message: "fix(文案): 修复 SQL\n\n- 修复 SQL 处理" }), []);
   });
 });

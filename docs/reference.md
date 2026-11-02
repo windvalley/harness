@@ -716,7 +716,7 @@ git rebase -i <主分支>                  # 改前面几个，编辑器里把�
 ```text
 [harness] 已拦截: stash 栈在所有 Worktree 间共享，静默 pop 会丢别人的未提交改动
 对象: git stash
-正确做法: 用临时 WIP 提交暂存: git add <具体文件> && git commit -m 'wip: 暂存'
+正确做法: 用临时 WIP 提交暂存: git add <具体文件> && git commit -m 'chore(wip): 暂存当前改动' -m '- 临时保存，交付前用 git commit --amend 或变基整理成符合项目规范的提交'
 规则: git-stash
 ```
 

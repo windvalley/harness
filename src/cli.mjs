@@ -100,7 +100,11 @@ function messageGate({ cwd, branch, label = "验证" }) {
   let ruleError;
   try {
     problems = branchMessageProblems({ project, root: project.root, branch });
-    ruleError = commitRuleErrorAt(project.root, branch, { baseRef: mainBranch(project) });
+    // 与共同基线比：主分支在分叉之后清理旧字段不算任务分支改过规则。
+    const root = project.root;
+    const head = gitOk(root, ["rev-parse", "--verify", `${branch}^{commit}`]);
+    const base = gitOk(root, ["merge-base", mainBranch(project), head]);
+    ruleError = commitRuleErrorAt(root, branch, { baseRef: base });
   } catch (error) {
     process.stderr.write(`${label}前置检查失败: ${error.message}\n`);
     return 1;
