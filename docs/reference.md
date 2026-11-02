@@ -485,6 +485,7 @@ git worktree add -b feat/login ../<项目>-login main
 cd ../<项目>-login
 # 可选：写验收清单 .harness/acceptance/feat-login.md
 # 实现并提交
+# 提交后按 .harness/rules/method-review.md 自审，发现问题先改完再提交一次
 harness verify --branch feat/login   # 选检查，在固定检出里执行，写签名证据
 harness review --branch feat/login   # 独立评审
 harness status --branch feat/login   # 只读：还差哪几步才能交付
@@ -495,6 +496,9 @@ harness merge  --branch feat/login   # 本地交付：核对证据与评审，�
 ```
 
 - `harness verify --plan --branch <分支>` 只列出会执行、记为未执行和仅提示的检查，不执行也不写证据。
+- 提交之后、`verify` 之前按 `.harness/rules/method-review.md` 自审：验收清单能逐条对上证据、提交说明与 diff 一致且格式合规、没有漏提交的文件与无关改动、diff 之外的调用方与文档已经一起改。
+  自审不是门禁，不留记录，结论也不交给独立评审。
+  自审改出的新提交会让证据与评审作废，所以它放在 `verify` 之前，不放在 `verify` 与 `review` 之间。
 - 分支上有新提交或改写过提交后，证据与评审随之失效，重新 verify、review。
 - `merge` 发现没有证据、主分支的新改动波及了某些检查，或检查配置变了时，会自己重跑需要的检查；评审不会自动重做，没有通过的评审直接拒绝合并。
 - 主分支在评审之后改了本分支也改过的文件时，`merge` 以 `review_stale` 拒绝，`status` 也会报出来；在任务分支上 `git merge main` 并提交，再重新 verify、review。
