@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import { chmodSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
 import { APPROVE, commit, CONFIG, fakeCodex, fakeReviewer, git, makeRepo, sh } from "./helpers.mjs";
@@ -322,11 +322,42 @@ describe("L3 判据", () => {
     const repo = setup();
     const result = repo.cli("conformance");
     assert.equal(result.status, 0, result.stderr);
-    for (const id of ["intent", "context", "harness", "execution", "eval", "governance", "stability"]) {
+    for (const id of ["intent", "context", "harness", "execution", "eval", "governance", "golden", "clients", "stability"]) {
       assert.match(result.stdout, new RegExp(id), id);
     }
     assert.match(result.stdout, /PEND/);
     assert.match(result.stdout, /样本不足/);
+  });
+
+  test("配置就位、行为已验证、运行稳定分层报告，缺证据的层保持待验证", () => {
+    const repo = setup();
+    const result = repo.cli("conformance");
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /^配置就位: 已达成$/m);
+    assert.match(result.stdout, /^行为已验证: 待验证$/m);
+    assert.match(result.stdout, /^运行稳定: 待验证$/m);
+    assert.match(result.stdout, /PEND golden: 还没有重放过黄金任务/);
+    assert.match(result.stdout, /clients: /);
+
+    assert.equal(repo.cli("golden").status, 0);
+    const after = repo.cli("conformance");
+    assert.match(after.stdout, /PASS golden: 共重放 1 次，最近一次通过率 100%/);
+  });
+
+  test("合并次数够了也要看合并后失败率与黄金任务，不能直接宣称稳定", () => {
+    const merges = (count) => Array.from({ length: count }, () => ({ at: new Date().toISOString(), event: "merge" }));
+    const golden = (passRate) => ({ at: new Date().toISOString(), event: "golden", passRate });
+    const repo = setup();
+    const status = (events) => {
+      mkdirSync(repo.env.HARNESS_DATA_DIR, { recursive: true });
+      writeFileSync(join(repo.env.HARNESS_DATA_DIR, "ledger.jsonl"), `${events.map((event) => JSON.stringify(event)).join("\n")}\n`);
+      return repo.cli("conformance").stdout.split("\n").find((line) => line.includes("stability:"));
+    };
+    assert.match(status([...merges(20), golden(1)]), /^ {2}PASS stability:/);
+    assert.match(status(merges(20)), /^ {2}PEND stability: .*从未重放过黄金任务/);
+    assert.match(status([...merges(20), golden(0.8)]), /^ {2}PEND stability: .*最近一次黄金任务没有全部通过/);
+    const failures = Array.from({ length: 2 }, () => ({ at: new Date().toISOString(), event: "merge.post_failed" }));
+    assert.match(status([...merges(20), golden(1), ...failures]), /^ {2}PEND stability: .*合并后验证失败 2\/20 次/);
   });
 
   test("自动检查写错时 execution 判据失败，没有自动检查时标 PEND", () => {
