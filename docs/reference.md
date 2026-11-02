@@ -1027,10 +1027,11 @@ node ~/github/harness/bin/harness.mjs install --local   # 按新锁定的版本�
 | `reason`、`howToVerify`、`hint` | 给人看的说明 |
 
 `docOnly` 只用来在证据里标注“仅文档”，检查是否执行仍由各自的 `when` 决定。
-`requiredPaths` 可选，写法与 `docOnly` 相同（`match` 与 `exclude`）：命中 `match` 的改动路径必须落在某项会自动执行的检查（`gate`）的 `when` 范围内，否则证据状态为 `incomplete`，并在未执行清单里列出这些路径，不能评审与合并。
+`requiredPaths` 可选，写法与 `docOnly` 相同（`match` 与 `exclude`）：命中 `match` 的改动路径必须被最终会执行的检查覆盖（`gate` 检查的 `when` 命中，且这次确实进入了执行计划；选择器没选出任何东西、命令被 `make test` 取代都不算覆盖），否则证据状态为 `incomplete`，并在未执行清单里列出这些路径，不能评审与合并。
 `exclude` 是显式豁免，例如 `{ "match": ["src/**"], "exclude": ["src/**/*.md"] }`。
 没配置 `requiredPaths` 时，没有任何检查声明会管的非文档改动只记入证据的 `uncovered`，并在验证输出里提示，不阻断。
-`fullSuiteTriggers.paths` 命中时，`go-packages` 扩大为 `./...`。
+`fullSuiteTriggers.paths` 命中时，`go-packages` 扩大为 `./...`，选择器没选出包时也一样。
+`go-packages` 还会在 `go.mod`、`go.sum`、`go.work`、`go.work.sum` 变化时自动扩大为全量，前提是这些文件在检查的 `when` 范围内。
 验证结果的复用同时看运行环境：每项检查的证据记录环境指纹，由命令用到的工具链版本（`node`、`npm`、`pnpm`、`yarn`、`bun`、`go`、`python`、`cargo`）和 `requires` 依赖目录的安装状态（安装清单文件内容与顶层条目的修改时间，点开头的缓存目录不算）组成。
 代码没变而依赖被重装、升降级，或工具链版本变了，普通验证与合并前的证据复用判定都会重跑这项检查，不再沿用旧的通过结果。
 没有环境指纹的旧证据按不一致处理，升级后第一次验证会重跑一遍。

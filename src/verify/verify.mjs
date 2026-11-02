@@ -144,13 +144,10 @@ export function planChecks({ project, cwd, changed, exists = (path) => existsSyn
   const env = project.config?.env ?? {};
   const docOnlyRule = map.docOnly ?? { match: [], exclude: [] };
   const anyCovered = (path) => map.checks.some((check) => matchAny(path, check.when));
-  const gateCovered = (path) =>
-    map.checks.some((check) => check.tier !== "extended" && check.tier !== "advisory" && matchAny(path, check.when));
-  // 没有任何检查声明会管它的非文档改动；必验路径要求更严：必须落在会自动执行的检查范围内，exclude 就是显式豁免。
+  // 没有任何检查声明会管它的非文档改动，只记录不阻断。
   const uncovered = changed.filter((path) => !matches(path, docOnlyRule) && !anyCovered(path));
   const requiredProblem = requiredPathsProblem(map.requiredPaths);
   if (requiredProblem) invalid.push({ id: "requiredPaths", def: digest(map.requiredPaths), ...requiredProblem });
-  const requiredUncovered = map.requiredPaths && !requiredProblem ? changed.filter((path) => matches(path, map.requiredPaths) && !gateCovered(path)) : [];
 
   for (const check of map.checks) {
     const hit = changed.filter((path) => matchAny(path, check.when));
@@ -181,8 +178,9 @@ export function planChecks({ project, cwd, changed, exists = (path) => existsSyn
 
     if (check.selector === "go-packages") {
       const selection = selectGoPackages({ cwd, changed: selectorInput, check });
-      if (selection.mode === "none") continue;
-      const packages = full ? ["./..."] : selection.packages;
+      // 选择器什么都没选出来时，全量触发条件仍然要生效。
+      if (selection.mode === "none" && !full) continue;
+      const packages = full || selection.mode === "full" ? ["./..."] : selection.packages;
       plan.push({
         id: check.id,
         cwd: ".",
@@ -213,6 +211,15 @@ export function planChecks({ project, cwd, changed, exists = (path) => existsSyn
   const deduped = [...unique.values()];
   const hasAll = deduped.some((item) => item.cmd.join(" ") === "make test");
   const finalPlan = hasAll ? deduped.filter((item) => !(item.cmd[0] === "go" && item.cmd[1] === "test")) : deduped;
+
+  // 必验覆盖按最终会执行的计划判定：只看 when 会漏掉“命中范围但选择器没选出任何东西”的情形。
+  // 去重时被合并掉的同命令项算同一次执行；被 make test 取代的 go test 不算。
+  const executed = new Set(finalPlan.map((item) => `${item.cwd}::${item.cmd.join(" ")}`));
+  const covering = plan.filter((item) => executed.has(`${item.cwd}::${item.cmd.join(" ")}`));
+  const requiredUncovered =
+    map.requiredPaths && !requiredProblem
+      ? changed.filter((path) => matches(path, map.requiredPaths) && !covering.some((item) => matchAny(path, item.when)))
+      : [];
   return { plan: finalPlan, notExecuted, advisory, docOnly, invalid, uncovered, requiredUncovered };
 }
 

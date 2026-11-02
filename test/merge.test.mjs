@@ -63,6 +63,61 @@ describe("检查计划", () => {
     assert.ok(mixed.plan.some((item) => item.id === "files"));
   });
 
+  describe("必验覆盖按最终计划判定", () => {
+    const goProject = ({ when = ["**/*.go", "go.mod", "go.sum"], triggers = [], required = { match: ["**/*.go", "go.mod", "go.sum"], exclude: [] }, extra = [] } = {}) => ({
+      verify: {
+        docOnly: { match: [], exclude: [] },
+        checks: [{ id: "go", tier: "gate", when, selector: "go-packages", sharedPrefixes: [] }, ...extra],
+        fullSuiteTriggers: { paths: triggers },
+        requiredPaths: required,
+      },
+    });
+    const planOf = (project, changed, exists = () => true) => planChecks({ project, cwd: "/tmp", changed, exists });
+
+    test("只改 go.mod 或 go.sum 时扩大为全量 go test，必验路径算已覆盖", () => {
+      for (const file of ["go.mod", "go.sum", "svc/go.mod"]) {
+        const result = planOf(goProject({ when: ["**/*.go", "**/go.mod", "go.mod", "go.sum"] }), [file]);
+        assert.deepEqual(result.plan.map((item) => item.cmd.join(" ")), ["go test -count=1 ./..."], file);
+        assert.deepEqual(result.requiredUncovered, [], file);
+      }
+    });
+
+    test("模块文件不在检查的 when 范围内时不被选中，必验路径报未覆盖", () => {
+      const result = planOf(goProject({ when: ["**/*.go"] }), ["go.mod"]);
+      assert.deepEqual(result.plan, []);
+      assert.deepEqual(result.requiredUncovered, ["go.mod"]);
+    });
+
+    test("选择器没选出任何包时，全量触发条件仍然生效", () => {
+      const project = goProject({ when: ["src/**", "conf/**"], triggers: ["conf/**"], required: { match: ["conf/**"], exclude: [] } });
+      const result = planOf(project, ["conf/app.yaml", "src/gone.go"], (path) => path === "conf/app.yaml");
+      assert.deepEqual(result.plan.map((item) => item.cmd.join(" ")), ["go test -count=1 ./..."]);
+      assert.deepEqual(result.requiredUncovered, []);
+    });
+
+    test("纯删除源码、选择器返回空时，必验路径报未覆盖而不是通过", () => {
+      const result = planOf(goProject({ when: ["src/**"], required: { match: ["src/**"], exclude: [] } }), ["src/gone.go"], () => false);
+      assert.deepEqual(result.plan, []);
+      assert.deepEqual(result.requiredUncovered, ["src/gone.go"]);
+    });
+
+    test("被 make test 取代的 go test 不算覆盖，去重合并掉的同命令检查算同一次执行", () => {
+      const make = { id: "all", tier: "gate", when: ["Makefile"], cmd: ["make", "test"] };
+      const replaced = planOf(goProject({ when: ["**/*.go"], required: { match: ["**/*.go"], exclude: [] }, extra: [make] }), ["Makefile", "a/b.go"]);
+      assert.deepEqual(replaced.plan.map((item) => item.id), ["all"]);
+      assert.deepEqual(replaced.requiredUncovered, ["a/b.go"]);
+
+      const twin = { id: "twin", tier: "gate", when: ["docs/**"], cmd: ["npm", "test"] };
+      const first = { id: "first", tier: "gate", when: ["src/**"], cmd: ["npm", "test"] };
+      const merged = planOf(
+        { verify: { docOnly: { match: [], exclude: [] }, checks: [first, twin], fullSuiteTriggers: { paths: [] }, requiredPaths: { match: ["docs/**", "src/**"], exclude: [] } } },
+        ["docs/a.md", "src/a.js"],
+      );
+      assert.equal(merged.plan.length, 1);
+      assert.deepEqual(merged.requiredUncovered, []);
+    });
+  });
+
   test("配置错误的 gate 检查被选中时进 invalid，不再静默跳过；没选中、不自动执行的检查不受影响", () => {
     const configured = {
       verify: {
@@ -206,6 +261,23 @@ describe("验证与证据", () => {
     const exempt = repo.cli("verify", "--branch", "task/exempt");
     assert.equal(exempt.status, 0, exempt.stderr);
     assert.equal(evidenceOf(repo, "task/exempt").status, "passed");
+  });
+
+  test("go.mod 作为必验路径时，verify --plan 显示全量 go test 且不报未覆盖", () => {
+    const verify = {
+      ...verifyWith([{ id: "go", tier: "gate", when: ["**/*.go", "go.mod", "go.sum"], selector: "go-packages", sharedPrefixes: [] }]),
+      requiredPaths: { match: ["go.mod", "go.sum"], exclude: [] },
+    };
+    const repo = setup({ project: { ".harness/verify.json": verify } });
+    repo.branch("task/deps", { "go.mod": "module example.com/x\n\ngo 1.22\n" });
+    // --plan 以当前工作区估算存在的文件，在任务分支的检出里运行才与真实验证一致
+    git(repo.root, "checkout", "-q", "task/deps");
+    const result = repo.cli("verify", "--plan", "--json", "--branch", "task/deps");
+    git(repo.root, "checkout", "-q", "main");
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    const plan = JSON.parse(result.stdout);
+    assert.deepEqual(plan.plan.map((item) => item.cmd.join(" ")), ["go test -count=1 ./..."]);
+    assert.deepEqual(plan.requiredUncovered, []);
   });
 
   test("没配置 requiredPaths 时未覆盖的改动只记录不阻断；requiredPaths 写错形状按配置错误处理", () => {

@@ -33,7 +33,14 @@ export function reverseDependents(cwd, importPaths) {
   return [...dependents];
 }
 
+// 模块依赖声明变了会影响所有包的编译与测试，不能只按 .go 文件选包。
+const MODULE_FILES = new Set(["go.mod", "go.sum", "go.work", "go.work.sum"]);
+
 export function selectGoPackages({ cwd, changed, check }) {
+  const moduleFiles = changed.filter((path) => MODULE_FILES.has(path.split("/").pop()) && matchAny(path, check.when));
+  if (moduleFiles.length > 0) {
+    return { mode: "full", packages: ["./..."], note: `模块依赖声明变化(${moduleFiles.join(", ")})，扩大为全量 go test` };
+  }
   const goFiles = changed.filter(
     (path) => path.endsWith(".go") && matchAny(path, check.when)
   );
