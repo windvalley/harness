@@ -2,9 +2,21 @@
 
 按 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 组织，版本号遵循语义化版本。
 
-## [Unreleased]
+## [0.12.0] - 2026-11-02
 
-内置黄金任务不再拷进项目：`harness golden` 直接读取当前版本自带的用例，`upgrade` 之后自动更新，不用再手工同步项目里的 `golden/tasks.json`。
+这一版收紧“通过”结论的可信度：评审输出在本地完整校验，必验路径与运行环境的变化不再产生假通过，`conformance` 按配置、行为、稳定三层报告。
+内置黄金任务也不再拷进项目：`harness golden` 直接读取当前版本自带的用例，`upgrade` 之后自动更新，不用再手工同步项目里的 `golden/tasks.json`。
+
+### 新增
+
+- `verify.json` 新增可选的 `requiredPaths`（`match` 与 `exclude`）：命中的改动路径必须被最终会执行的 `gate` 检查覆盖，否则证据状态为 `incomplete`，未执行清单里列出这些路径，不能评审与合并。
+  `exclude` 是显式豁免。
+  没配置时，没有任何检查声明会管的非文档改动只记入证据的 `uncovered`，并在验证输出里提示，不阻断。
+  写成错误形状（例如数组）按配置错误处理，不会被当成没配置。
+- 每项检查的证据记录环境指纹：命令用到的工具链版本（`node`、`npm`、`pnpm`、`yarn`、`bun`、`go`、`python`、`cargo`）加 `requires` 依赖目录的安装状态（安装清单文件内容与顶层条目的修改时间，点开头的缓存目录不算）。
+  代码没变而依赖被重装、升降级或工具链版本变了，普通验证与合并前的证据复用判定都会重跑这项检查。
+- `harness conformance` 新增 `golden`（最近一次黄金任务重放结果）与 `clients`（客户端链路是否实测）两项。
+- `harness metrics` 新增“提交”“同步”两列，合计行分别给出本地合并、PR/MR 提交与同步次数。
 
 ### 变更
 
@@ -15,6 +27,19 @@
   这两处都在 `.harness/golden/**` 里，仍是门禁改动，合并前要人确认。
 - `upgrade` 会移除 `golden/tasks.json` 里与当前内置用例完全相同的旧副本，并列出与内置同 id 但内容不同的用例。
   其余内容不改，项目自己的用例不会被覆盖。
+- `harness conformance` 按“配置就位、行为已验证、运行稳定”三层输出，缺证据的层保持“待验证”，不再把配置就位当成行为已验证。
+  `execution` 现在判定会自动执行的检查是否写对，没有任何自动检查时标 `PEND`。
+  `stability` 在受控合并满 20 次之外，还要求合并后验证失败率不超过 5%，且黄金任务最近一次全部通过，否则仍标 `PEND`。
+- `go-packages` 选择器在 `go.mod`、`go.sum`、`go.work`、`go.work.sum` 变化时扩大为全量 `go test ./...`，前提是这些文件在检查的 `when` 范围内。
+  这些文件名只出现在选择器内部，核心不含语言相关的判断。
+
+### 修复
+
+- 独立评审的输出在本地按 schema 完整校验：`requirementFit`、`engineeringQuality` 的评级与说明，以及每条发现的 `severity`、`file`、`summary`、`scenario` 缺失或非法时按评审失败处理，换下一个评审者。
+  以前命令评审者只返回 `verdict` 与 `findings` 也会生成通过记录。
+- `conformance` 的 `execution` 判断因为结果恒为字符串而恒为通过，已改为真实判定。
+- `fullSuiteTriggers` 命中时，`go-packages` 选择器没选出任何包也会扩大为全量；以前这种情况什么都不跑。
+- 必验覆盖按最终执行计划判定，选择器返回空、`go test` 被 `make test` 取代都不算覆盖。
 
 ### 升级说明
 
@@ -24,6 +49,10 @@
 - 之前改过 `lint` 或规则、为此改了起始用例的项目，改过的用例会作为覆盖保留，行为不变。
 - 内置用例对 `lint` 检查与四个起始预设有期望。
   项目没启用某个预设，或把 `lint` 配成了真实命令时，在 `golden/tasks.json` 里用同 id 的用例覆盖，或把 id 写进 `disableBuiltin`。
+- 没有环境指纹的旧证据按不一致处理，升级后第一次验证会重跑一遍。
+  环境指纹只能识别经安装器完成的依赖变化；原地改依赖文件（`patch-package`、`npm link`）后用 `harness verify --no-reuse`。
+  没有安装清单的依赖目录（例如 bun 的 `node_modules`）只靠顶层条目判断，同样遇到这类改动要用 `--no-reuse`。
+- 命令评审者必须返回完整结构：缺 `requirementFit` 或 `engineeringQuality` 的输出现在会被判为失败。
 
 ## [0.11.0] - 2026-11-02
 
