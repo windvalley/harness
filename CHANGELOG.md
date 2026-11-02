@@ -2,6 +2,29 @@
 
 按 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 组织，版本号遵循语义化版本。
 
+## [Unreleased]
+
+内置黄金任务不再拷进项目：`harness golden` 直接读取当前版本自带的用例，`upgrade` 之后自动更新，不用再手工同步项目里的 `golden/tasks.json`。
+
+### 变更
+
+- 起始黄金任务改为内置用例，文件从 `assets/golden/starter.json` 改名为 `assets/golden/builtin.json`。
+  `init` 只写一个放项目自己用例的 `golden/tasks.json`，`tasks` 为空；`harness golden` 把内置用例与项目用例合并后重放。
+- 项目 `golden/tasks.json` 里与内置同 id 的用例整条覆盖内置用例，输出里标注“覆盖内置”。
+  新增 `disableBuiltin`：列出要停用的内置用例 id，输出里记为跳过并注明“项目停用内置用例”，不计入通过率。
+  这两处都在 `.harness/golden/**` 里，仍是门禁改动，合并前要人确认。
+- `upgrade` 会移除 `golden/tasks.json` 里与当前内置用例完全相同的旧副本，并列出与内置同 id 但内容不同的用例。
+  其余内容不改，项目自己的用例不会被覆盖。
+
+### 升级说明
+
+- 旧版本 `init` 拷进项目的用例是内置用例的副本，升级后不再随版本更新。
+  运行 `upgrade` 会清掉与当前内置完全相同的副本；与内置不同的副本（例如密钥规则变化前的 `g01` 到 `g03`）保留并列出来，按旧期望继续重放。
+  那些副本只是旧版本的拷贝时，从 `golden/tasks.json` 里删掉，改用内置版本。
+- 之前改过 `lint` 或规则、为此改了起始用例的项目，改过的用例会作为覆盖保留，行为不变。
+- 内置用例对 `lint` 检查与四个起始预设有期望。
+  项目没启用某个预设，或把 `lint` 配成了真实命令时，在 `golden/tasks.json` 里用同 id 的用例覆盖，或把 id 写进 `disableBuiltin`。
+
 ## [0.11.0] - 2026-11-02
 
 这一版把提交信息规范统一到 `policy.json` 的 `commit-message` 规则一处，钩子、验证、评审、`status` 与合并共用同一份判定，不合规的提交在提交当场就被拒。

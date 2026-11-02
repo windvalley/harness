@@ -328,18 +328,61 @@ describe("安装与自检", () => {
     assert.ok(Object.keys(manifest.files).includes("bin/harness.mjs"), "应包含入口");
   });
 
-  test("init 自带黄金任务，且开箱全部通过", () => {
-    const repo = makeRepo();
+  test("init 不把内置黄金任务拷进项目，开箱按内置用例全部通过", () => {
+    const repo = makeRepo({ install: false, project: { ".harness/config.json": null, ".harness/policy.json": null, ".harness/verify.json": null } });
     repos.push(repo);
-    const tasks = JSON.parse(readFileSync(join(repo.root, ".harness/golden/tasks.json"), "utf8"));
-    assert.ok(tasks.tasks.length >= 10, "应写入起始黄金任务");
+    assert.equal(repo.rawCli("init").status, 0);
+    const project = JSON.parse(readFileSync(join(repo.root, ".harness/golden/tasks.json"), "utf8"));
+    assert.deepEqual(project.tasks, [], "项目文件只放项目自己的用例");
+    const builtin = JSON.parse(readFileSync(join(PACKAGE_ROOT_TEST, "assets/golden/builtin.json"), "utf8")).tasks;
+    assert.ok(builtin.length >= 10, "内置用例随版本分发");
+    const golden = repo.rawCli("golden", "--worktree");
+    assert.equal(golden.status, 0, golden.stdout + golden.stderr);
+    assert.match(golden.stdout, /PASS g04-recursive-delete/);
+    assert.match(golden.stdout, /PASS g17-plan-first/);
+    assert.match(golden.stdout, /SKIP g16-main-worktree-merge-only/, "针对可选预设的用例在预设未启用时跳过");
+  });
+
+  test("项目自己的黄金任务与内置用例一起重放", () => {
+    const repo = setup({
+      project: {
+        ".harness/golden/tasks.json": {
+          version: 1,
+          tasks: [{ id: "p01-own", title: "项目自己的用例", kind: "policy", steps: [{ kind: "shell", command: "rm -rf build", expect: "deny" }] }],
+        },
+      },
+    });
     const golden = repo.cli("golden");
     assert.equal(golden.status, 0, golden.stdout + golden.stderr);
-    // 针对可选预设的用例在预设未启用时跳过，不计入通过率。
-    const optional = tasks.tasks.filter((task) => (task.presets ?? []).length > 0).length;
-    const applicable = tasks.tasks.length - optional;
-    assert.match(golden.stdout, new RegExp(`${applicable}/${applicable} 通过`));
-    if (optional > 0) assert.match(golden.stdout, new RegExp(`跳过 ${optional} 项`));
+    assert.match(golden.stdout, /PASS p01-own/);
+    assert.match(golden.stdout, /PASS g04-recursive-delete/);
+  });
+
+  test("项目里同 id 的用例覆盖内置用例，输出里标明", () => {
+    const repo = setup({
+      project: {
+        ".harness/golden/tasks.json": {
+          version: 1,
+          tasks: [{ id: "g04-recursive-delete", kind: "policy", steps: [{ kind: "shell", command: "rm -rf build", expect: "allow" }] }],
+        },
+      },
+    });
+    const golden = repo.cli("golden");
+    assert.notEqual(golden.status, 0);
+    assert.match(golden.stdout, /FAIL g04-recursive-delete.*覆盖内置/);
+    assert.match(golden.stdout, /步骤 1 期望 allow，实际 deny/);
+  });
+
+  test("disableBuiltin 停用内置用例，输出里记为跳过并说明原因", () => {
+    const repo = setup({
+      project: {
+        ".harness/policy.json": { version: 1, presets: ["secrets", "git-safety", "gate-self"], disabled: ["shell-recursive-delete"], rules: [] },
+        ".harness/golden/tasks.json": { version: 1, disableBuiltin: ["g04-recursive-delete"], tasks: [] },
+      },
+    });
+    const golden = repo.cli("golden");
+    assert.equal(golden.status, 0, golden.stdout + golden.stderr);
+    assert.match(golden.stdout, /SKIP g04-recursive-delete.*项目停用/);
   });
 
   test("启用可选预设后，起始黄金任务里对应的用例参与重放", () => {
@@ -413,6 +456,34 @@ describe("安装与自检", () => {
     assert.equal(result.status, 0, result.stderr);
     assert.equal(readFileSync(join(repo.root, ".harness/config.json"), "utf8"), before);
     assert.ok(existsSync(join(repo.root, ".harness/rules/harness.md")));
+  });
+
+  test("升级移除项目里与内置完全相同的旧副本，改过的用例保留并提示", () => {
+    const repo = setup();
+    const builtin = JSON.parse(readFileSync(join(PACKAGE_ROOT_TEST, "assets/golden/builtin.json"), "utf8")).tasks;
+    const identical = builtin.find((task) => task.id === "g01-secret-read-denied");
+    const stale = { ...builtin.find((task) => task.id === "g02-secret-write-denied"), steps: [{ kind: "write", path: ".env", expect: "deny" }] };
+    const own = { id: "p01-own", kind: "policy", steps: [{ kind: "shell", command: "rm -rf build", expect: "deny" }] };
+    const file = join(repo.root, ".harness/golden/tasks.json");
+    write(repo.root, ".harness/golden/tasks.json", `${JSON.stringify({ version: 1, tasks: [identical, stale, own] }, null, 2)}\n`);
+    const result = repo.cli("upgrade");
+    assert.equal(result.status, 0, result.stderr);
+    const after = JSON.parse(readFileSync(file, "utf8"));
+    assert.deepEqual(after.tasks.map((task) => task.id), ["g02-secret-write-denied", "p01-own"]);
+    assert.match(result.stdout, /g01-secret-read-denied/, "说明移除了哪些旧副本");
+    assert.match(result.stdout, /覆盖内置.*g02-secret-write-denied/s);
+  });
+
+  test("升级不动没有内置副本的黄金任务文件", () => {
+    const repo = setup();
+    const file = join(repo.root, ".harness/golden/tasks.json");
+    const own = { id: "p01-own", kind: "policy", steps: [{ kind: "shell", command: "rm -rf build", expect: "deny" }] };
+    write(repo.root, ".harness/golden/tasks.json", `${JSON.stringify({ version: 1, tasks: [own] })}\n`);
+    const before = readFileSync(file, "utf8");
+    const result = repo.cli("upgrade");
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(readFileSync(file, "utf8"), before);
+    assert.doesNotMatch(result.stdout, /覆盖内置/);
   });
 });
 

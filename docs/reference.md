@@ -77,7 +77,7 @@ Agent 调用工具 ----> [1] 实时拦截：读写文件、执行命令之前按
 | 位置 | 内容 | 入库 |
 | --- | --- | --- |
 | `.harness/config.json`、`policy.json`、`verify.json` | 项目参数、拦截规则、检查映射 | 是 |
-| `.harness/golden/tasks.json` | 对规则本身的回归用例（黄金任务） | 是 |
+| `.harness/golden/tasks.json` | 项目自己的黄金任务，以及对内置用例的覆盖与停用 | 是 |
 | `.harness/rules/`、`.harness/templates/` | 给 Agent 读的研发规范，以及验收清单、行为说明、实施方案模板，`upgrade` 会整份重写 | 是 |
 | `.harness/acceptance/` | 验收清单 | 是 |
 | `.harness/bin/harness`、`.harness/VERSION` | 入口与锁定的版本号 | 是 |
@@ -208,7 +208,8 @@ node ~/github/harness/bin/harness.mjs sync                                    # 
 ### init 写了什么
 
 1. `.harness/` 下的 `config.json`、`policy.json`、`verify.json`、`golden/tasks.json`、`rules/`、`templates/`、`VERSION` 和空的 `acceptance/`。
-   已存在的 `config.json`、`policy.json`、`verify.json` 保持不动，加 `--force` 才覆盖；已有的黄金任务始终保留。
+   已存在的 `config.json`、`policy.json`、`verify.json` 保持不动，加 `--force` 才覆盖；已有的 `golden/tasks.json` 始终保留。
+   `golden/tasks.json` 只是放项目自己用例的空文件，规则回归用的内置用例随 harness 版本分发，不拷进项目。
 2. 起始检查只按项目声明过的命令生成，探测根目录与一级子目录：`go.mod` 对应 `go test` 与 `go build`，`package.json` 里声明的类型检查脚本用项目自己的包管理器执行，`Cargo.toml` 对应 `cargo test`，声明了 pytest 配置的项目对应 `pytest`。
    另外还有通用的 `lint` 占位与 `harness-golden` 规则回归检查，见“verify.json：检查映射”。
 3. 把当前版本的代码装进 `~/.local/share/harness/versions/<版本>/` 并写入内容哈希清单；本机还没有签名密钥时生成一把。
@@ -938,9 +939,11 @@ git commit -m "chore(harness): 升级到 <版本>" -m "- 更新入口锁定的�
 然后按日常任务的流程 verify、review、confirm、merge。
 `upgrade` 安装新版本、改写入口锁定的版本、重新生成钩子与客户端配置，并整份重写 `rules/` 与 `templates/`。
 `AGENTS.md` 里的托管块也会刷新，块外的内容保持不动。
-`config.json`、`policy.json`、`verify.json`、`golden/tasks.json` 保持不动，新版本带来的可选预设与配置要自己加，见 `CHANGELOG.md` 的升级说明。
+`config.json`、`policy.json`、`verify.json` 保持不动，新版本带来的可选预设与配置要自己加，见 `CHANGELOG.md` 的升级说明。
+内置黄金任务随版本自动更新，新版本新增或修改的内置用例升级后直接生效。
+`golden/tasks.json` 里项目自己的用例不动；只有与当前内置用例完全相同的旧副本会被移除，免得盖住以后的内置更新。
+与内置同 id 但内容不同的用例保留，`upgrade` 会列出它们：是自己改过的就留着，只是旧版本的拷贝就删掉。
 项目自己的研发规范不要写在 `.harness/rules/` 里，下次升级会被覆盖，写在 `AGENTS.md` 托管块之外即可。
-新版本新增的起始黄金任务不会自动加进项目，需要时对照 harness 仓库的 `assets/golden/starter.json` 补上。
 合并后 harness 用新入口刷新主 Worktree 的本机钩子，并列出客户端需要做的事。
 
 其他成员拿到这次升级：
@@ -1067,8 +1070,8 @@ node ~/github/harness/bin/harness.mjs install --local   # 按新锁定的版本�
 - pytest 配置（`pytest.ini`、`.pytest.ini`、`pytest.toml`、`.pytest.toml`、`conftest.py`、`tests/conftest.py`、`pyproject.toml` 里的 `[tool.pytest]`、`setup.cfg` 里的 `[tool:pytest]`、`tox.ini` 里的 `[pytest]`）：生成 `pytest`；根目录有配置时只看根目录。
 - `init` 不写示例检查，`extended` 与 `advisory` 的写法见上面的示例。
 
-改了 `lint` 后，要同步修改 `golden/tasks.json` 里引用它的起始用例 `g10`、`g11`、`g13`、`g14`，否则 `harness-golden` 检查失败。
-例如 `lint` 配成真实命令后，把 `g11`、`g13`、`g14` 里 `expectNotExecuted` 中的 `lint` 移到 `expectChecks`。
+改了 `lint` 后，内置用例 `g10`、`g11`、`g13`、`g14` 对它的期望会过期，`harness-golden` 检查失败。
+在 `golden/tasks.json` 里写同 id 的用例覆盖它们（见“golden/tasks.json：黄金任务”），例如 `lint` 配成真实命令后，覆盖版的 `g11`、`g13`、`g14` 把 `expectNotExecuted` 里的 `lint` 移到 `expectChecks`。
 `g10` 的 `forbidChecks` 要求只改文档时不选中 `lint`，配置真实命令时保持它的 `when` 不匹配文档。
 
 ### policy.json：拦截规则
@@ -1118,8 +1121,17 @@ node ~/github/harness/bin/harness.mjs install --local   # 按新锁定的版本�
 ### golden/tasks.json：黄金任务
 
 黄金任务是对规则本身的回归用例，`harness golden` 重放。
-`init` 自带 16 个起始用例，覆盖预设规则与起始检查。
+harness 内置 16 个用例（`assets/golden/builtin.json`），覆盖预设规则与起始检查，`harness golden` 每次直接读取当前版本的内置用例，`upgrade` 之后自动更新，项目文件里不需要也不应该拷一份。
+`golden/tasks.json` 放项目自己的用例，与内置用例一起重放。
 只针对某个预设的用例在该预设未启用时跳过：`g16` 对应可选的 `main-worktree`，`g17` 对应 `plan-first`。
+
+内置用例对项目的规则有期望，项目的规则与它们不一致时有两种处理：
+
+- 改期望：在 `tasks` 里写同 id 的用例，整条覆盖内置用例，`harness golden` 输出里标注“覆盖内置”。
+- 停用：把 id 写进 `disableBuiltin`，例如 `"disableBuiltin": ["g05-discard-changes"]`，输出里记为跳过。
+  项目没启用某个预设又不想看到对应用例失败时用它，id 写错不会报错，那条用例照常重放。
+
+这两处都在 `.harness/golden/**` 里，属于门禁改动，合并前要人确认。
 
 给上面的规则加一个用例：
 
@@ -1181,7 +1193,7 @@ node ~/github/harness/bin/harness.mjs install --local   # 按新锁定的版本�
 执行文件里的脚本（`python3 tools/x.py`、`bash x.sh`）、脚本里拼出来的路径、`xargs` 或构建工具间接写入。
 需要写入前的完整隔离，要靠宿主的沙箱或文件系统权限（例如只把任务 Worktree 设为可写目录），harness 的实时拦截只能看到命令文本。
 `harness status` 与 `harness doctor` 提示主 Worktree 不洁净属于事后检测，用来发现漏网的写入，不能替代写入前拦截。
-起始黄金任务里的 `g16-main-worktree-merge-only` 只在启用这个预设时重放，未启用时记为跳过。
+内置黄金任务里的 `g16-main-worktree-merge-only` 只在启用这个预设时重放，未启用时记为跳过。
 
 ### 由 harness 接管 git 钩子目录：git.hooksDir
 

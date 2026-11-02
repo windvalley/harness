@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "doc": "对规则本身的回归用例。init 会写入项目，之后按项目事实增删；改规则后运行 harness golden 重放。",
+  "doc": "内置的规则回归用例，随 harness 版本分发，harness golden 直接读取。项目在 .harness/golden/tasks.json 里用同 id 的用例覆盖，或用 disableBuiltin 停用；改规则后运行 harness golden 重放。",
   "tasks": [
     {
       "id": "g01-secret-read-denied",

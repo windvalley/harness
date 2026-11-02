@@ -3,7 +3,8 @@ import { dirname, join } from "node:path";
 import { git, gitOk, hooksPlacement, refExists, repoRoot } from "../lib/git.mjs";
 import { PACKAGE_ROOT } from "../policy/resolve.mjs";
 import { HOOK_NAMES, installAll, publishVersion, storeEntry, versionDir, worktreeHooksConfig } from "./install.mjs";
-import { assetPath, managedBlockBody, packageVersion, writeManagedBlock, writeRules } from "./managed.mjs";
+import { pruneBuiltinCopies } from "../golden/builtin.mjs";
+import { managedBlockBody, packageVersion, writeManagedBlock, writeRules } from "./managed.mjs";
 import { survey } from "./survey.mjs";
 import { planSettings } from "../plan/plan.mjs";
 
@@ -319,10 +320,9 @@ export function initProject({ cwd = process.cwd(), force = false, dryRun = false
   create("verify.json", starterVerify({ cwd: root }));
   if (!existsSync(join(dir, "golden", "tasks.json"))) {
     mkdirSync(join(dir, "golden"), { recursive: true });
-    // 自带一组针对预设规则的回归用例：没有它们的项目，改规则不会有任何检查能发现退化。
-    const starter = join(assetPath("golden"), "starter.json");
-    const body = existsSync(starter) ? readFileSync(starter, "utf8") : `${JSON.stringify({ version: 1, tasks: [] }, null, 2)}\n`;
-    writeFileSync(join(dir, "golden", "tasks.json"), body);
+    // 规则回归用例由 harness 内置并随版本更新；这里只放项目自己的用例。
+    const body = { version: 1, doc: "项目自己的黄金任务。内置用例随 harness 版本更新，同 id 的用例覆盖内置，disableBuiltin 列出要停用的内置用例 id。", tasks: [] };
+    writeFileSync(join(dir, "golden", "tasks.json"), `${JSON.stringify(body, null, 2)}\n`);
     written.push(".harness/golden/tasks.json");
   }
   mkdirSync(join(dir, "acceptance"), { recursive: true });
@@ -341,5 +341,6 @@ export function upgradeProject({ cwd = process.cwd() } = {}) {
   // 托管块随版本更新：Agent 每次都会加载 AGENTS.md，任务分级等硬性要求写在这里才不会被跳过。
   writeManagedBlock({ root, body: managedBlockBody() });
   const shim = installAll({ cwd: root });
-  return { root, version, shim };
+  const golden = pruneBuiltinCopies(root);
+  return { root, version, shim, golden };
 }

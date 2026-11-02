@@ -4,6 +4,7 @@ import { appendLedger } from "../lib/store.mjs";
 import { evaluateCall } from "../policy/engine.mjs";
 import { resolvePolicy } from "../policy/resolve.mjs";
 import { planChecks } from "../verify/verify.mjs";
+import { resolveGolden } from "./builtin.mjs";
 
 // 步骤未声明位置时按 Agent 日常工作的位置判定：Linked Worktree、不在主分支。
 // 结果因此与 harness golden 在哪个 Worktree 里运行无关。
@@ -77,13 +78,14 @@ export function runGolden({ cwd, source = "main" }) {
   const project = source === "worktree" ? loadProject(repoRoot(cwd)) : loadCurrentProject(cwd);
   const root = project.root;
   const resolved = resolvePolicy(project.policy);
-  const tasks = project.golden.tasks ?? [];
   const active = new Set(resolved.presets);
-  const results = tasks.map((task) => {
+  const results = resolveGolden(project.golden).map(({ task, origin }) => {
+    const base = { id: task.id, title: task.title, kind: task.kind, origin };
+    if (origin === "disabled") return { ...base, passed: true, skipped: "项目停用内置用例", failures: [] };
     // 只针对可选预设的用例（例如 main-worktree）在预设未启用时跳过，起始用例因此对所有项目都适用。
     const missing = (task.presets ?? []).filter((id) => !active.has(id));
     if (missing.length > 0) {
-      return { id: task.id, title: task.title, kind: task.kind, passed: true, skipped: `未启用预设 ${missing.join(", ")}`, failures: [] };
+      return { ...base, passed: true, skipped: `未启用预设 ${missing.join(", ")}`, failures: [] };
     }
     const failures =
       task.kind === "policy"
@@ -91,7 +93,7 @@ export function runGolden({ cwd, source = "main" }) {
         : task.kind === "verify-plan"
           ? checkVerifyPlan(task, project, root)
           : [`未知的黄金任务类型 ${task.kind}`];
-    return { id: task.id, title: task.title, kind: task.kind, passed: failures.length === 0, failures };
+    return { ...base, passed: failures.length === 0, failures };
   });
   const ran = results.filter((item) => !item.skipped);
   const passed = ran.filter((item) => item.passed).length;

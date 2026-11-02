@@ -6,7 +6,7 @@ import { PACKAGE_ROOT } from "../policy/resolve.mjs";
 import { commonDir, git, hooksPlacement, mainWorktreeRoot, repoRoot, run, samePath } from "../lib/git.mjs";
 import { gitHooksConfig, loadCurrentProject } from "../lib/config.mjs";
 import { loadKey } from "../lib/store.mjs";
-import { packageVersion, writeGolden, writeRules } from "./managed.mjs";
+import { packageVersion, writeRules } from "./managed.mjs";
 
 // 代码装在用户目录并按版本不可变；仓库里只放 shim 与配置。
 // 这样改门禁代码不落在任何任务分支里，任务分支也就无法放宽自己的门禁。
@@ -658,7 +658,6 @@ export function installAll({ cwd, takeOver = false }) {
   loadKey();
   const published = publishVersion();
   writeRules({ root, version: published.version });
-  writeGolden({ root });
   // 旧版生成过带本机绝对路径的入口脚本，入口改为 shim 后不再需要。
   for (const name of ["claude-hook.mjs", "codex-hook.mjs"]) rmSync(join(root, ".harness", "bin", name), { force: true });
   const shim = writeShim({ root });

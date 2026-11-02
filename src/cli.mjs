@@ -861,6 +861,11 @@ export async function main(argv) {
       case "upgrade": {
         const result = upgradeProject({});
         print(`已升级到 ${result.version}，入口 ${result.shim.shim}`);
+        if (result.golden.removed.length > 0) print(`  已从 .harness/golden/tasks.json 移除与内置相同的旧副本: ${result.golden.removed.join(", ")}`);
+        if (result.golden.overrides.length > 0) {
+          print(`  这些用例覆盖内置用例且与当前内置不同: ${result.golden.overrides.join(", ")}`);
+          print("  是自己改过的就保留；只是旧版本的拷贝就从 tasks.json 删掉，改用内置版本。");
+        }
         if (result.shim.hooksPath) print(`  ${formatHooksPath(result.shim.hooksPath)}`);
         return 0;
       }
@@ -899,7 +904,7 @@ export async function main(argv) {
             print(`  SKIP ${item.id} ${item.title ?? ""}（${item.skipped}）`);
             continue;
           }
-          print(`  ${item.passed ? "PASS" : "FAIL"} ${item.id} ${item.title ?? ""}`);
+          print(`  ${item.passed ? "PASS" : "FAIL"} ${item.id} ${item.title ?? ""}${item.origin === "override" ? "（覆盖内置）" : ""}`);
           for (const failure of item.failures) print(`       - ${failure}`);
         }
         return summary.failed === 0 ? 0 : 1;
