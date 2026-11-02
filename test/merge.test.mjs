@@ -1,9 +1,10 @@
 import { strict as assert } from "node:assert";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
 import { APPROVE, commit, fakeReviewer, git, makeRepo, write, writeReview } from "./helpers.mjs";
-import { planChecks, reusableChecks } from "../src/verify/verify.mjs";
+import { planChecks, reusableChecks, verifyConfigProblems } from "../src/verify/verify.mjs";
 
 let repos = [];
 afterEach(() => {
@@ -15,6 +16,9 @@ function setup(opts = {}) {
   repos.push(repo);
   return repo;
 }
+const verifyWith = (checks) => ({ version: 1, docOnly: { match: [], exclude: [] }, checks, fullSuiteTriggers: { paths: [] } });
+const evidenceOf = (repo, branch) =>
+  JSON.parse(readFileSync(join(repo.env.HARNESS_DATA_DIR, "evidence", `${git(repo.root, "rev-parse", branch)}.json`), "utf8"));
 
 describe("检查计划", () => {
   const project = {
@@ -56,6 +60,38 @@ describe("检查计划", () => {
     // 混合变更：存在的文件驱动选择器，删除的路径不参与。
     const mixed = planChecks({ project, cwd: "/tmp", changed: ["src/kept.js", "src/gone.js"], exists: (p) => p === "src/kept.js" });
     assert.ok(mixed.plan.some((item) => item.id === "files"));
+  });
+
+  test("配置错误的 gate 检查被选中时进 invalid，不再静默跳过；没选中、不自动执行的检查不受影响", () => {
+    const configured = {
+      verify: {
+        docOnly: { match: [], exclude: [] },
+        checks: [
+          { id: "no-cmd", tier: "gate", when: ["src/**"] },
+          { id: "string-cmd", tier: "gate", when: ["src/**"], cmd: "npm test" },
+          { id: "empty-cmd", when: ["src/**"], cmd: [] },
+          { id: "vitest", tier: "gate", when: ["src/**"], selector: "vitest", testRoot: "src" },
+          { id: "unknown", tier: "gate", when: ["src/**"], selector: "jest", cmd: ["npx", "jest"] },
+          { id: "go", tier: "gate", when: ["src/**"], selector: "go-packages", sharedPrefixes: [] },
+          { id: "manual", tier: "extended", when: ["src/**"], reason: "需人工" },
+          { id: "hint", tier: "advisory", when: ["src/**"], hint: "建议" },
+          { id: "elsewhere", tier: "gate", when: ["web/**"] },
+        ],
+        fullSuiteTriggers: { paths: [] },
+      },
+    };
+    const result = planChecks({ project: configured, cwd: "/tmp", changed: ["src/a.js"], exists: () => true });
+    assert.deepEqual(result.invalid.map((item) => item.id), ["no-cmd", "string-cmd", "empty-cmd", "vitest", "unknown"]);
+    assert.match(result.invalid.find((item) => item.id === "string-cmd").reason, /参数数组/);
+    const vitest = result.invalid.find((item) => item.id === "vitest");
+    assert.match(vitest.reason, /selector vitest 已移除/);
+    assert.match(vitest.fix, /--changed/);
+    assert.match(result.invalid.find((item) => item.id === "unknown").reason, /不认识的 selector "jest"/);
+    assert.ok(result.invalid.every((item) => item.def && item.fix), "每项都带检查指纹与改法");
+    assert.deepEqual(result.plan.map((item) => item.id), [], "go-packages 不需要 cmd，这里没有 Go 包可测");
+    assert.deepEqual(result.notExecuted.map((item) => item.id), ["manual"]);
+    assert.deepEqual(result.advisory.map((item) => item.id), ["hint"]);
+    assert.deepEqual(verifyConfigProblems(configured.verify).map((item) => item.id), ["no-cmd", "string-cmd", "empty-cmd", "vitest", "unknown", "elsewhere"]);
   });
 });
 
@@ -167,6 +203,77 @@ describe("验证与证据", () => {
     assert.match(result.stderr, /未找到命令 harness-no-such-command-xyz/);
     const record = JSON.parse(readFileSync(join(repo.env.HARNESS_DATA_DIR, "evidence", `${git(repo.root, "rev-parse", "task/a")}.json`), "utf8"));
     assert.equal(record.checks[0].spawnError, "ENOENT");
+  });
+
+  test("配置错误的 gate 检查被选中时验证失败并给出改法，不执行任何命令", () => {
+    const marker = join(tmpdir(), `harness-should-not-run-${process.pid}-${Date.now()}`);
+    const repo = setup({
+      project: {
+        ".harness/verify.json": verifyWith([
+          { id: "no-cmd", tier: "gate", when: ["src/**"] },
+          { id: "string-cmd", tier: "gate", when: ["src/**"], cmd: "npm test" },
+          { id: "ok", tier: "gate", when: ["src/**"], cmd: ["node", "-e", `require("fs").writeFileSync(${JSON.stringify(marker)}, "")`] },
+        ]),
+      },
+    });
+    repo.branch("task/a", { "src/a.js": "x\n" });
+    const result = repo.cli("verify", "--branch", "task/a");
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stderr, /FAIL no-cmd/);
+    assert.match(result.stderr, /FAIL string-cmd/);
+    assert.match(result.stderr, /--- no-cmd 配置错误 ---\ngate 检查没有可执行的 cmd/);
+    assert.match(result.stderr, /tier 改为 extended/);
+    assert.equal(existsSync(marker), false, "配置有错时不执行其他检查");
+    const record = evidenceOf(repo, "task/a");
+    assert.equal(record.status, "failed");
+    assert.deepEqual(record.checks.map((check) => [check.id, check.exit, Boolean(check.configError)]), [
+      ["no-cmd", null, true],
+      ["string-cmd", null, true],
+    ]);
+
+    // verify --plan 同样列出，并以非零退出提示这份计划验证不会通过
+    const plan = repo.cli("verify", "--plan", "--branch", "task/a");
+    assert.equal(plan.status, 1);
+    assert.match(plan.stdout, /ERR {2}no-cmd {2}gate 检查没有可执行的 cmd/);
+    assert.match(plan.stdout, /RUN {2}ok/);
+    const json = JSON.parse(repo.cli("verify", "--plan", "--json", "--branch", "task/a").stdout);
+    assert.deepEqual(json.invalid.map((item) => item.id), ["no-cmd", "string-cmd"]);
+  });
+
+  test("已移除的 vitest 选择器被选中时报配置错误；只改配置的分支选不中它，旧配置可以照常修掉", () => {
+    const legacy = { id: "web-unit", tier: "gate", when: ["web/**"], cwd: "web", selector: "vitest", testRoot: "web/src" };
+    const repo = setup({ project: { ".harness/verify.json": verifyWith([legacy]) } });
+    repo.branch("task/web", { "web/src/a.ts": "export const a = 1;\n" });
+    const result = repo.cli("verify", "--branch", "task/web");
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stderr, /FAIL web-unit/);
+    assert.match(result.stderr, /selector vitest 已移除/);
+    assert.match(result.stderr, /"cmd": \["pnpm", "exec", "vitest", "run", "--changed", "main"\]/);
+    assert.equal(evidenceOf(repo, "task/web").status, "failed");
+
+    // 主分支的配置决定验证；修配置的分支只改 .harness/verify.json，不在 web/** 范围内，照常通过
+    const { selector, testRoot, ...rest } = legacy;
+    const fixed = verifyWith([{ ...rest, cmd: ["node", "-e", "process.exit(0)"] }]);
+    repo.branch("task/fix", { ".harness/verify.json": `${JSON.stringify(fixed, null, 2)}\n` }, "fix(verify): 改用普通命令\n\n- 删掉已移除的 vitest 选择器\n- 改成参数数组形式的命令");
+    const fix = repo.cli("verify", "--branch", "task/fix");
+    assert.equal(fix.status, 0, fix.stderr);
+  });
+
+  test("doctor 列出主分支配置里所有写错的检查，不论这次是否会被选中", () => {
+    const repo = setup({
+      project: {
+        ".harness/verify.json": verifyWith([
+          { id: "web-unit", tier: "gate", when: ["web/**"], cwd: "web", selector: "vitest" },
+          { id: "no-cmd", tier: "gate", when: ["api/**"] },
+          { id: "unit", tier: "gate", when: ["src/**"], cmd: ["node", "-e", "process.exit(0)"] },
+        ]),
+      },
+    });
+    const result = repo.cli("doctor");
+    assert.notEqual(result.status, 0);
+    assert.match(result.stdout, /\[!!\] project:verify: web-unit: selector vitest 已移除；no-cmd: gate 检查没有可执行的 cmd/);
+    assert.match(result.stdout, /--changed/);
+    assert.doesNotMatch(result.stdout, /；unit: /, "写对的检查不列出");
   });
 
   test("主分支前进但未触及检查范围时复用证据", () => {

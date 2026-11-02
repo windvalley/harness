@@ -49,7 +49,7 @@ function checkPolicy(task, resolved, root) {
 
 function checkVerifyPlan(task, project, root) {
   const failures = [];
-  const { plan, notExecuted, advisory, docOnly } = planChecks({
+  const { plan, notExecuted, advisory, docOnly, invalid } = planChecks({
     project,
     cwd: root,
     changed: task.changed,
@@ -58,6 +58,7 @@ function checkVerifyPlan(task, project, root) {
   const ids = new Set(plan.map((item) => item.id));
   const skipped = new Set(notExecuted.map((item) => item.id));
   const hints = new Set(advisory.map((item) => item.id));
+  for (const item of invalid) failures.push(`检查 ${item.id} 配置无效: ${item.reason}`);
   for (const id of task.expectChecks ?? []) if (!ids.has(id)) failures.push(`应选中检查 ${id}，实际: ${[...ids].join(",") || "空"}`);
   for (const id of task.forbidChecks ?? []) if (ids.has(id)) failures.push(`不应选中检查 ${id}`);
   for (const id of task.expectNotExecuted ?? []) if (!skipped.has(id)) failures.push(`应记入未执行项 ${id}`);

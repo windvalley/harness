@@ -154,7 +154,7 @@ async function cmdVerify(argv) {
   for (const item of outcome.advisory ?? []) lines.push(`  ADVISORY ${item.id}: ${item.hint}`);
   process.stderr.write(`${lines.join("\n")}\n`);
   for (const item of outcome.results.filter((entry) => entry.exit !== 0 && !entry.skipped)) {
-    process.stderr.write(`\n--- ${item.id} 失败输出(末尾) ---\n${item.tail ?? ""}\n`);
+    process.stderr.write(`\n--- ${item.id} ${item.configError ? "配置错误" : "失败输出(末尾)"} ---\n${item.tail ?? ""}\n`);
   }
   return outcome.status === "passed" ? 0 : 1;
 }
@@ -172,21 +172,24 @@ function cmdVerifyPlan({ cwd, branch, base, json }) {
   const deleted = new Set(
     gitOk(root, ["diff", "--name-only", "--diff-filter=D", "--no-renames", baseOfHead, head]).split("\n").filter(Boolean),
   );
-  const { plan, notExecuted, advisory, docOnly } = planChecks({
+  const { plan, notExecuted, advisory, docOnly, invalid } = planChecks({
     project,
     cwd: root,
     changed,
     exists: (path) => !deleted.has(path) && existsSync(join(root, path)),
   });
+  // 有写错的检查时这份计划验证不会通过，非零退出让调用方察觉。
+  const status = invalid.length > 0 ? 1 : 0;
   if (json) {
-    print(JSON.stringify({ base: mainRef, head, changed, docOnly, plan, notExecuted, advisory }, null, 2));
-    return 0;
+    print(JSON.stringify({ base: mainRef, head, changed, docOnly, plan, notExecuted, advisory, invalid }, null, 2));
+    return status;
   }
   print(`相对 ${mainRef} 变更 ${changed.length} 个文件${docOnly ? "（仅文档）" : ""}`);
+  for (const item of invalid) print(`  ERR  ${item.id}  ${item.reason}；${item.fix}`);
   for (const item of plan) print(`  RUN  ${item.id}  ${item.cmd.join(" ")}${item.cwd && item.cwd !== "." ? `  (cwd ${item.cwd})` : ""}`);
   for (const item of notExecuted) print(`  TODO ${item.id}  ${item.reason}`);
   for (const item of advisory) print(`  HINT ${item.id}  ${item.hint}`);
-  return 0;
+  return status;
 }
 
 // 独立评审用哪个客户端、模型是各机器自己的事，不进项目配置；接入时告诉用户现状和改法。

@@ -9,6 +9,7 @@ import { commandExists, describePlan, maxDiffChars, planReviewers, resolveBacken
 import { loadLocalReviewers } from "../review/reviewers.mjs";
 import { resolvePolicy } from "../policy/resolve.mjs";
 import { findCommitRule, isStructuredRule, legacyConfigFields, resolveCommitRule, unknownRuleFields } from "../policy/commit-message.mjs";
+import { verifyConfigProblems } from "../verify/verify.mjs";
 import { packageVersion, MARK_START } from "./managed.mjs";
 import { leftoverWorktrees } from "../worktree/clean.mjs";
 import { platformStatus } from "../delivery/platform.mjs";
@@ -264,6 +265,15 @@ export function doctor({ cwd = process.cwd() } = {}) {
     });
     const messageCheck = commitMessageCheck(project);
     if (messageCheck) checks.push(messageCheck);
+    // 写错的检查只在被选中时才让验证失败，这里不论范围一次列全，升级后能提前发现。
+    const verifyProblems = verifyConfigProblems(project.verify);
+    if (verifyProblems.length > 0) {
+      checks.push({
+        id: "project:verify",
+        ok: false,
+        detail: `${verifyProblems.map((item) => `${item.id}: ${item.reason}`).join("；")}。${[...new Set(verifyProblems.map((item) => item.fix))].join("；")}`,
+      });
+    }
     checks.push({
       id: "project:main",
       ok: true,

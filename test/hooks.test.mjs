@@ -366,6 +366,20 @@ describe("安装与自检", () => {
     assert.match(golden.stdout, /FAIL g04/);
   });
 
+  test("黄金任务的检查计划选中写错的 gate 检查时失败，并说明原因", () => {
+    const repo = makeRepo();
+    repos.push(repo);
+    const verify = JSON.parse(readFileSync(join(repo.root, ".harness/verify.json"), "utf8"));
+    // unit 漏写 cmd：以前被静默跳过，g11 照样通过。
+    verify.checks = verify.checks.map(({ cmd, ...check }) => (check.id === "unit" ? check : { ...check, ...(cmd ? { cmd } : {}) }));
+    writeFileSync(join(repo.root, ".harness/verify.json"), `${JSON.stringify(verify, null, 2)}\n`);
+    commit(repo.root, "chore: 漏写命令\n\n- 测试用\n- 验证黄金任务");
+    const golden = repo.cli("golden");
+    assert.notEqual(golden.status, 0);
+    assert.match(golden.stdout, /FAIL g11/);
+    assert.match(golden.stdout, /检查 unit 配置无效: gate 检查没有可执行的 cmd/);
+  });
+
   test("doctor 报告各项状态，已信任的客户端不再标未实测", () => {
     const repo = setup();
     const result = repo.cli("doctor");

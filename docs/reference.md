@@ -495,7 +495,7 @@ harness merge  --branch feat/login   # 本地交付：核对证据与评审，�
 # harness sync                       # 平台合入后，快进本地主分支
 ```
 
-- `harness verify --plan --branch <分支>` 只列出会执行、记为未执行和仅提示的检查，不执行也不写证据。
+- `harness verify --plan --branch <分支>` 只列出会执行、记为未执行和仅提示的检查，不执行也不写证据；选中了写错的检查时以 `ERR` 列出并附改法，退出码为 1。
 - 提交之后、`verify` 之前按 `.harness/rules/method-review.md` 自审：验收清单能逐条对上证据、提交说明与 diff 一致且格式合规、没有漏提交的文件与无关改动、diff 之外的调用方与文档已经一起改。
   自审不是门禁，不留记录，结论也不交给独立评审。
   自审改出的新提交会让证据与评审作废，所以它放在 `verify` 之前，不放在 `verify` 与 `review` 之间。
@@ -1017,15 +1017,37 @@ node ~/github/harness/bin/harness.mjs install --local   # 按新锁定的版本�
 | `id` | 检查名，证据、复用与黄金任务都按它引用 |
 | `tier` | `gate` 必过，失败就不能合并；`extended` 不自动执行，记入证据的未执行清单并附补验方式；`advisory` 只提示，不计入未执行 |
 | `when` | 触发路径的 glob，支持 `*`、`**` 与 `{a,b}` |
-| `cmd` | 参数数组，直接执行而不经过 shell；需要管道等写法时用 `["sh", "-c", "..."]` |
+| `cmd` | 参数数组，直接执行而不经过 shell；需要管道等写法时用 `["sh", "-c", "..."]`；`gate` 检查必须写，没写或写成字符串时按配置错误处理 |
 | `cwd` | 相对仓库根的执行目录 |
 | `requires` | 依赖目录（例如 `node_modules`），从主 Worktree 软链接进检出；主 Worktree 里也没有时记为未执行，证据状态为 `incomplete`，不能评审与合并 |
-| `selector` | `go-packages` 只测改动涉及的 Go 包，`sharedPrefixes` 下的公共包连同依赖方一起测，超过 `maxPackages`（默认 40）扩大为全量；`vitest` 只跑与改动源文件同名或同目录的测试 |
+| `selector` | 只支持 `go-packages`：只测改动涉及的 Go 包，`sharedPrefixes` 下的公共包连同依赖方一起测，超过 `maxPackages`（默认 40）扩大为全量；其他取值按配置错误处理 |
 | `reason`、`howToVerify`、`hint` | 给人看的说明 |
 
 `docOnly` 只用来在证据里标注“仅文档”，检查是否执行仍由各自的 `when` 决定。
 `fullSuiteTriggers.paths` 命中时，`go-packages` 扩大为 `./...`。
 命令不存在时证据里单独标出“未找到命令”，说明要装工具，不是代码有问题。
+
+写错的 `gate` 检查（没有可执行的 `cmd`、`selector` 不认识）被选中时按配置错误处理：证据里记为失败并附改法，其余检查不再执行。
+以前这样的检查会被直接跳过，既不执行也不进未执行清单，证据却显示通过。
+没被选中时不影响验证，所以修配置的分支只要不改到它的 `when` 范围，就能照常验证与合并；`harness doctor` 的 `project:verify` 一项不论范围列出所有写错的检查。
+
+前端单元测试只跑受影响的部分时，用测试框架自己的增量选择，harness 只负责按 `when` 决定何时运行。
+例如 vitest 的 `--changed` 按 import 依赖找出受这次改动影响的测试，测试放在哪个目录都能找到，改了 vitest 配置或 `package.json` 时自动跑全量：
+
+```json
+{
+  "id": "web-unit",
+  "tier": "gate",
+  "when": ["web/**/*.{ts,tsx,js,jsx,vue}", "web/package.json", "web/vitest.config.*"],
+  "cwd": "web",
+  "cmd": ["pnpm", "exec", "vitest", "run", "--changed", "main"],
+  "requires": ["web/node_modules"]
+}
+```
+
+- 包管理器与主分支名按项目实际填写；`verify --base` 指定别的基线时，vitest 仍按命令里写的分支比较。
+- 被删除的模块不在依赖图里，只删文件时引用它的测试选不中，这类改动靠类型检查或全量测试兜住。
+- 没有受影响的测试时 vitest 正常退出，这项检查算通过；改动有没有补测试，由先红后绿的规则与独立评审把关。
 
 `init` 生成的起始检查：
 

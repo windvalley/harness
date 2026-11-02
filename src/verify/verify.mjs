@@ -19,7 +19,6 @@ import {
 } from "../lib/git.mjs";
 import { appendLedger, canonical, dataDir, readRecord, writeRecord } from "../lib/store.mjs";
 import { selectGoPackages } from "./selectors/go-packages.mjs";
-import { selectVitestFiles } from "./selectors/vitest.mjs";
 
 export const EVIDENCE_KIND = "evidence";
 
@@ -73,13 +72,47 @@ export function verifyConfigDigest(project) {
 
 const cmdText = (cmd) => (Array.isArray(cmd) ? cmd.join(" ") : cmd);
 
-function listTracked(cwd, prefix) {
-  return gitOk(cwd, ["ls-files", "-z", "--", prefix]).split("\0").filter(Boolean);
+const SELECTORS = new Set(["go-packages"]);
+
+/**
+ * 会自动执行的检查（tier 不是 extended、advisory）写得不对时返回原因与改法，否则返回 null。
+ * 这样的检查被选中时记为失败而不是跳过：跳过既不执行也不进未执行清单，证据会显示通过。
+ */
+function checkConfigProblem(check) {
+  if (check.tier === "extended" || check.tier === "advisory") return null;
+  const selector = check.selector ?? null;
+  if (selector === "vitest") {
+    return {
+      reason: "selector vitest 已移除",
+      fix: '删掉 selector 与 testRoot，改成普通命令，用 vitest 自带的 --changed 只跑受影响的测试，例如 "cmd": ["pnpm", "exec", "vitest", "run", "--changed", "main"]，包管理器与主分支名按项目实际',
+    };
+  }
+  if (selector !== null && !SELECTORS.has(selector)) {
+    return { reason: `不认识的 selector ${JSON.stringify(selector)}`, fix: "selector 只支持 go-packages；其他检查删掉 selector，写成参数数组形式的 cmd" };
+  }
+  if (selector !== null) return null;
+  const cmd = check.cmd;
+  if (!Array.isArray(cmd) || cmd.length === 0 || !cmd[0] || !cmd.every((part) => typeof part === "string")) {
+    return {
+      reason: "gate 检查没有可执行的 cmd，cmd 必须是非空的参数数组",
+      fix: '写成参数数组，例如 "cmd": ["npm", "test"]，需要管道时用 ["sh", "-c", "..."]；不需要自动执行的检查把 tier 改为 extended，并写上 reason 与 howToVerify',
+    };
+  }
+  return null;
+}
+
+/** 整份检查配置里写错的检查，不论这次会不会被选中；doctor 据此提前报出。 */
+export function verifyConfigProblems(verify) {
+  return (verify?.checks ?? []).flatMap((check) => {
+    const problem = checkConfigProblem(check);
+    return problem ? [{ id: check.id, ...problem }] : [];
+  });
 }
 
 /**
  * 计算一次要跑的检查集。
  * changed 是相对合并基线的全部改动路径（含被删除的），exists 用来把已删除路径排除出选择器输入。
+ * invalid 是被选中但写错的检查，验证把它们记为失败。
  */
 export function planChecks({ project, cwd, changed, exists = (path) => existsSync(join(cwd, path)) }) {
   const map = project.verify;
@@ -89,6 +122,7 @@ export function planChecks({ project, cwd, changed, exists = (path) => existsSyn
   const plan = [];
   const notExecuted = [];
   const advisory = [];
+  const invalid = [];
   const full = changed.some((path) => matchAny(path, map.fullSuiteTriggers?.paths ?? []));
   const env = project.config?.env ?? {};
 
@@ -113,6 +147,12 @@ export function planChecks({ project, cwd, changed, exists = (path) => existsSyn
       continue;
     }
 
+    const problem = checkConfigProblem(check);
+    if (problem) {
+      invalid.push({ id: check.id, def, ...problem });
+      continue;
+    }
+
     if (check.selector === "go-packages") {
       const selection = selectGoPackages({ cwd, changed: selectorInput, check });
       if (selection.mode === "none") continue;
@@ -127,40 +167,6 @@ export function planChecks({ project, cwd, changed, exists = (path) => existsSyn
       });
       continue;
     }
-
-    if (check.selector === "vitest") {
-      const selection = selectVitestFiles({
-        changed: selectorInput,
-        check,
-        listAllTests: () =>
-          listTracked(cwd, check.testRoot ?? "frontend/src").filter((path) =>
-            /\.(test|spec)\.(ts|tsx|js|vue)$/.test(path),
-          ),
-      });
-      if (selection.files.length === 0) {
-        if (selection.hasSourceWithoutTest) {
-          notExecuted.push({
-            id: check.id,
-            reason: "改动的源文件没有同名或同目录的单元测试",
-            impact: `${selection.sourceFiles.length} 个源文件无单测覆盖`,
-            howToVerify: "补充针对该行为的单元测试后重跑",
-          });
-        }
-        continue;
-      }
-      plan.push({
-        id: check.id,
-        cwd: check.cwd ?? ".",
-        cmd: ["pnpm", "exec", "vitest", "run", ...selection.files.map((file) => file.replace(/^[^/]+\//, ""))],
-        requires: check.requires ?? [],
-        when: check.when,
-        def,
-        note: `${selection.files.length} 个测试文件`,
-      });
-      continue;
-    }
-
-    if (!Array.isArray(check.cmd) || check.cmd.length === 0) continue;
 
     plan.push({
       id: check.id,
@@ -181,7 +187,7 @@ export function planChecks({ project, cwd, changed, exists = (path) => existsSyn
   const deduped = [...unique.values()];
   const hasAll = deduped.some((item) => item.cmd.join(" ") === "make test");
   const finalPlan = hasAll ? deduped.filter((item) => !(item.cmd[0] === "go" && item.cmd[1] === "test")) : deduped;
-  return { plan: finalPlan, notExecuted, advisory, docOnly };
+  return { plan: finalPlan, notExecuted, advisory, docOnly, invalid };
 }
 
 /**
@@ -340,7 +346,7 @@ export async function verify({
   const results = [];
 
   try {
-    const { plan, notExecuted, advisory, docOnly } = planChecks({ project, cwd: checkout, changed });
+    const { plan, notExecuted, advisory, docOnly, invalid } = planChecks({ project, cwd: checkout, changed });
     const { reuse: reusable, rerun } = reuse
       ? reusableChecks({ previous: previous.ok ? previous.record : null, plan, mainDelta: priorMainDelta })
       : { reuse: new Map(), rerun: plan.map((item) => item.id) };
@@ -351,8 +357,14 @@ export async function verify({
     );
     if (previous.ok) log(`[verify] 主分支自上次验证新增 ${priorMainDelta.length} 个文件`);
 
+    // 写错的检查记为失败，证据不能显示通过；配置要先改，其余检查按 failFast 不再执行。
+    for (const item of invalid) {
+      results.push({ id: item.id, cmd: "", def: item.def, exit: null, configError: item.reason, tail: `${item.reason}\n改法: ${item.fix}` });
+      log(`[verify] 配置错误 ${item.id}: ${item.reason}`);
+    }
+
     let blocked = false;
-    for (const item of plan) {
+    for (const item of invalid.length > 0 && config.failFast !== false ? [] : plan) {
       if (reusable.has(item.id)) {
         const prior = reusable.get(item.id);
         results.push({ ...prior, reused: true });

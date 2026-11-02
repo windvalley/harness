@@ -14,8 +14,14 @@
 - 任务分支里改坏的提交信息规则（字段取值或类型不对、字段名不认识、正则无效，或与 `config.json` 的旧字段并存）进不了主分支：verify、review 与合并以 `branch_commit_rule_invalid` 拒绝，`status` 列出 `commit-rule` 一项，都在要求人工确认之前。
 - `harness status` 新增 `commit-message` 一项，与合并同码；收尾检查把 `bad_commit_message` 与 `branch_commit_rule_invalid` 当作 Agent 自己能修的阻塞，提示先改写提交信息或修正规则。
 - `harness doctor` 新增 `project:commit-message`：主分支的规则不能用时报失败，还在用旧写法时提示迁移。
+- `harness doctor` 新增 `project:verify`：不论这次会不会被选中，列出主分支 `verify.json` 里写错的 `gate` 检查与改法。
 
 ### 变更
+
+- 移除 `verify.json` 的 `selector: "vitest"`。
+  它写死了 `pnpm exec vitest run` 与默认测试目录 `frontend/src`，路径换算假定检查目录正好是一级子目录，只按同名或同目录找测试，改了公共模块不会跑调用方的测试，测试放在单独目录时还会误报“没有单元测试”。
+  改用 vitest 自带的 `--changed`，写成普通命令，例如 `["pnpm", "exec", "vitest", "run", "--changed", "main"]`，参考手册的“verify.json：检查映射”给出完整写法与限制。
+- `harness verify --plan` 选中写错的检查时以 `ERR` 列出并附改法，退出码为 1；`--json` 输出新增 `invalid`。
 
 - 随项目分发的规则在“一次任务”里加入提交后自审：Agent 提交后、`harness verify` 之前按 `method-review.md` 自审，发现问题先改完再提交，然后去验证。
   自审改出的新提交会让证据与评审作废，所以放在验证之前；自审不是门禁，不写记录，结论也不交给独立评审。
@@ -35,6 +41,9 @@
 
 ### 修复
 
+- `gate` 检查没写 `cmd`、`cmd` 写成字符串或空数组，或者 `selector` 不认识时，被选中也会被直接跳过：既不执行也不进未执行清单，证据显示通过。
+  现在按配置错误处理：证据里记为失败并附改法，其余检查不再执行；`harness golden` 的检查计划用例选中它时同样失败。
+  没被选中时不影响验证，修配置的分支只要不改到它的 `when` 范围就能照常合入。
 - 默认配置下钩子只查 `policy.json` 的 `pattern`（只要求标题），合并才查 `config.json` 的 `merge.commitMessagePattern`（还要求要点正文）。
   只有标题的提交能提交，也能通过验证与评审，到合并才被拒，而 `status` 显示可以合并。
   现在两处取并集，提交当场就拒绝，`status` 与合并同码。
@@ -49,6 +58,9 @@
 
 ### 升级说明
 
+- 升级后运行 `harness doctor`，`project:verify` 列出主分支 `verify.json` 里需要修改的检查。
+  用 `selector: "vitest"` 的检查删掉 `selector` 与 `testRoot`，改成普通命令；没有 `cmd` 的 `gate` 检查补上参数数组形式的命令，不需要自动执行的改为 `extended`。
+  在只改 `.harness/verify.json` 的任务分支修改，`verify.json` 是门禁文件，合并前要人工确认；修好之前，改到这些检查 `when` 范围的分支验证都会失败。
 - `upgrade` 会刷新 `.harness/rules/harness.md`、`core.md` 与 `method-review.md`，规则改动在合并前由人确认。
 - `upgrade` 不改写项目的 `policy.json` 与 `config.json`，旧写法继续有效，判定取两处的并集：交付结果与以前一致，只是不合规的提交在提交当场就被拒。
 - 任务分支上已有的不合规提交，升级后 verify、review 会直接拒绝，先在任务分支改写提交信息。
