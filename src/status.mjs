@@ -9,6 +9,8 @@ import { mainWorktreeProblems, planMergeResult, reuseDecision, reviewStaleFiles 
 import { approvalState, planEnforced, planRequirement } from "./plan/plan.mjs";
 import { latestSubmit } from "./delivery/submit.mjs";
 import { unresolvedStop } from "./stop/session.mjs";
+import { commitRangeProblems, commitRuleErrorAt } from "./policy/commit-message.mjs";
+import { resolvePolicy } from "./policy/resolve.mjs";
 
 // 确认记录绑定合并结果的 tree：快进时就是分支的 tree，三方合并时算出合并后的 tree。
 function confirmFor(project, root, branch) {
@@ -55,6 +57,33 @@ export function branchStatus({ cwd, branch }) {
     return result;
   }
   add("branch", "ok", `待合入 ${branchCommit.slice(0, 10)} -> ${mainRef}`);
+
+  // 提交信息与合并同码：status 说可以交付时，merge 不应再以 bad_commit_message 拒绝。
+  try {
+    const messages = commitRangeProblems({
+      root,
+      resolved: resolvePolicy(project.policy),
+      config: project.config,
+      baseCommit: gitOk(root, ["merge-base", mainCommit, branchCommit]),
+      branchCommit,
+    });
+    if (messages.length > 0) {
+      add("commit-message", "fail", `分支上有提交不符合提交信息规范：${messages.slice(0, 3).join("；")}${messages.length > 3 ? " 等" : ""}。改写提交信息后重新 verify、review`);
+      block("bad_commit_message", "提交信息不符合规范");
+    } else {
+      add("commit-message", "ok", "分支上的提交信息符合规范");
+    }
+    // 主分支的规则能用时，再看本分支改过的规则：写坏了合并会拒绝，这里提前报出来，由 Agent 在任务分支修正。
+    const branchRule = commitRuleErrorAt(root, branchCommit);
+    if (branchRule) {
+      add("commit-rule", "fail", `本分支里的提交信息规则不能用，合入后所有提交都会被拒绝：${branchRule}`);
+      block("branch_commit_rule_invalid", "本分支的提交信息规则有误");
+    }
+  } catch (error) {
+    // 规则写错或两处定义冲突时钩子与合并都会报错，这里同样算阻塞；改门禁配置要人确认，不归 Agent 自己接着做。
+    add("commit-message", "fail", `无法判定提交信息: ${error.message}`);
+    block("commit_rule_invalid", "提交信息规则配置有误");
+  }
 
   // 合并在主 Worktree 里更新主分支，它不就绪时其他条件都满足也合不进去。
   const mainProblems = mainWorktreeProblems(project, mainWorktreeRoot(root));

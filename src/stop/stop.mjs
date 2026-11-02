@@ -14,10 +14,24 @@ import { readSession, saveSession } from "./session.mjs";
 // 只拦 Agent 自己能接着做的步骤；等用户授权、等人工确认这类要人做的事不拦。
 
 // Agent 能自己接着做的阻塞项，按交付流程的先后排列，第一项决定提示的下一步。
-const AGENT_STEPS = ["evidence_failed", "evidence_missing", "review_rejected", "review_stale", "review_missing", "acceptance_missing"];
+// 提交信息规则与提交信息排在最前：规则决定提交信息合不合规，改写提交会让后面的证据与评审全部作废，要先改完再往下走。
+const AGENT_STEPS = [
+  "branch_commit_rule_invalid",
+  "bad_commit_message",
+  "evidence_failed",
+  "evidence_missing",
+  "review_rejected",
+  "review_stale",
+  "review_missing",
+  "acceptance_missing",
+];
 
 function nextStep(code, { branch, mainRef }) {
   switch (code) {
+    case "branch_commit_rule_invalid":
+      return `修正 .harness/policy.json 的 commit-message 规则（与 config.json 的旧字段只留一处）并提交，再重新 harness verify、harness review --branch ${branch}`;
+    case "bad_commit_message":
+      return `在任务分支改写不符合规范的提交信息（git commit --amend 或变基），再重新 harness verify、harness review --branch ${branch}`;
     case "evidence_failed":
       return `修好失败的检查并提交，再运行 harness verify --branch ${branch}`;
     case "evidence_missing":

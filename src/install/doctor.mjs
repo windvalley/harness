@@ -8,6 +8,7 @@ import { mainWorktreeProblems } from "../merge/merge.mjs";
 import { commandExists, describePlan, maxDiffChars, planReviewers, resolveBackend } from "../review/review.mjs";
 import { loadLocalReviewers } from "../review/reviewers.mjs";
 import { resolvePolicy } from "../policy/resolve.mjs";
+import { findCommitRule, isStructuredRule, legacyConfigFields, resolveCommitRule } from "../policy/commit-message.mjs";
 import { packageVersion, MARK_START } from "./managed.mjs";
 import { leftoverWorktrees } from "../worktree/clean.mjs";
 import { platformStatus } from "../delivery/platform.mjs";
@@ -140,6 +141,28 @@ function dshCheck() {
 }
 
 /**
+ * 提交信息规范的写法：规则写错或两处定义冲突时算失败（钩子会拒绝所有提交）；
+ * 还在用旧写法时只提示，判定照旧取两处的并集，迁移由人决定。规范写法正常时不占一行。
+ */
+export function commitMessageCheck(project) {
+  const resolved = resolvePolicy(project.policy);
+  try {
+    resolveCommitRule({ resolved, config: project.config });
+  } catch (error) {
+    return { id: "project:commit-message", ok: false, detail: error.message };
+  }
+  const legacy = legacyConfigFields(project.config).map((field) => `.harness/config.json 的 ${field}`);
+  const rule = findCommitRule(resolved);
+  if (rule && !isStructuredRule(rule)) legacy.unshift(`.harness/policy.json 的 ${rule.id} 只写了 pattern`);
+  if (legacy.length === 0) return null;
+  return {
+    id: "project:commit-message",
+    ok: true,
+    detail: `提交信息规范还在用旧写法（${legacy.join("、")}），按两处的并集判定；迁移时改写成 policy.json 里的结构化字段并删掉 config.json 的旧字段，写法见参考手册的“提交信息”`,
+  };
+}
+
+/**
  * 逐客户端检查安装状态。
  * codex 的钩子是否需要宿主信任，由宿主自己决定；这里只报“文件已就位、执行未验证”，
  * 不把没验证过的接入算成通过。
@@ -235,6 +258,8 @@ export function doctor({ cwd = process.cwd() } = {}) {
       ok: unknown.length === 0,
       detail: `${stats.rules} 条拦截规则，${stats.checks} 项验证检查` + (unknown.length ? `；disabled 里有未知规则 ${unknown.join(", ")}` : ""),
     });
+    const messageCheck = commitMessageCheck(project);
+    if (messageCheck) checks.push(messageCheck);
     checks.push({
       id: "project:main",
       ok: true,

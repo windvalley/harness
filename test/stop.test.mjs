@@ -3,7 +3,7 @@ import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
 import { pathToFileURL } from "node:url";
-import { APPROVE, CONFIG, commit, fakeReviewer, git, makeRepo, sh, write, writeReview } from "./helpers.mjs";
+import { APPROVE, CONFIG, commit, commitWith, fakeReviewer, git, makeRepo, sh, write, writeReview } from "./helpers.mjs";
 
 let repos = [];
 afterEach(() => {
@@ -93,6 +93,32 @@ describe("收尾检查", () => {
 
     assert.equal(repo.cli("merge", "--branch", BRANCH).status, 0);
     assert.equal(stop(repo, { active: true }), null, "合并后放行");
+  });
+
+  test("分支上有不符合规范的提交信息时拦下，下一步先改写提交信息", () => {
+    const repo = setup();
+    const dir = linkedTask(repo);
+    agentCommit(repo, dir, { "src/a.js": "export const a = 1;\n" });
+    // 绕过钩子留下的坏提交（例如钩子没装时提交的），只能在交付前发现。
+    commitWith(dir, repo.env, "update code", { "src/b.js": "export const b = 2;\n" });
+    const owed = stop(repo);
+    assert.equal(owed?.decision, "block", "提交信息不合规是 Agent 自己能修的，不放行");
+    assert.match(owed.reason, /还差 提交信息不符合规范/);
+    assert.match(owed.reason, /下一步 在任务分支改写不符合规范的提交信息/);
+  });
+
+  test("任务分支里的提交信息规则不能用时拦下，下一步先修正规则", () => {
+    const repo = setup();
+    const dir = linkedTask(repo);
+    agentCommit(repo, dir, { "src/a.js": "export const a = 1;\n" });
+    // 夹具的 config.json 还留着旧字段，规则改成结构化后两处并存。
+    const policy = JSON.parse(readFileSync(join(dir, ".harness/policy.json"), "utf8"));
+    policy.rules = policy.rules.map((rule) => (rule.kind === "commit-message" ? { ...rule, lang: "zh" } : rule));
+    commitWith(dir, repo.env, "chore(policy): 提交信息改用中文\n\n- 规则改成结构化字段", { ".harness/policy.json": `${JSON.stringify(policy, null, 2)}\n` });
+    const owed = stop(repo);
+    assert.equal(owed?.decision, "block", "规则是本分支改坏的，Agent 自己能修");
+    assert.match(owed.reason, /本分支的提交信息规则有误/);
+    assert.match(owed.reason, /下一步 修正 \.harness\/policy\.json 的 commit-message 规则/);
   });
 
   test("两次结束之间没有进展时放行，账本记一次未上报的结束，status 与 merge 都会提示", () => {

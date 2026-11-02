@@ -823,10 +823,10 @@ dsh plugin --profile web add ~/.local/share/harness/dsh-plugin</code></pre></div
     <p>清单放在 <code>.harness/acceptance/&lt;分支名&gt;.md</code>，分支名里的 <code>/</code> 等字符换成 <code>-</code>，例如 <code>feat/login</code> 对应 <code>feat-login.md</code>。每条写成能用测试或命令验证的结果。没有清单时评审只评工程质量；<code>intent.mode</code> 设为 <code>required</code> 时没有清单不能合并。</p>
 
     <h3 id="commit-msg">提交信息</h3>
-    <p>默认规范分两处检查：<code>commit-msg</code> 钩子要求标题是 <code>类型: 说明</code> 或 <code>类型(范围): 说明</code>；<code>merge</code> 进一步要求标题之后空一行，其余每行都是 <code>- </code> 开头的要点。</p>
+    <p>提交信息规范只在 <code>.harness/policy.json</code> 的 <code>commit-message</code> 规则里定义一处，<code>commit-msg</code> 钩子、<code>verify</code> 与 <code>review</code> 的前置检查、<code>status</code> 和合并共用同一份判定。可以直接约定描述用什么语言（<code>lang</code> 取 <code>zh</code>、<code>en</code> 或 <code>any</code>）、允许的类型、标题长度与正文格式。</p>
     <div class="code"><pre><code>git commit -m "feat(login): 支持短信验证码登录" -m "- 新增验证码发送与校验接口
 - 登录页增加验证码输入"</code></pre></div>
-    <p>每个 <code>-m</code> 是一段，多条要点要写在同一个 <code>-m</code> 里换行。只有标题的提交能通过钩子，但合并时会报 <code>bad_commit_message</code>。</p>
+    <p>每个 <code>-m</code> 是一段，多条要点要写在同一个 <code>-m</code> 里换行，或者用编辑器写。不合规时提交当场被拒，并列出违反的条目与示例；已经提交的要改写提交信息，再重新 verify、review。</p>
 
     <h3 id="cleanup">清理任务 Worktree</h3>
     <p>合并后保留任务 Worktree 和分支，因为会话可能还停在里面。需要清理时向 Agent 发起请求：</p>
@@ -850,7 +850,7 @@ dsh plugin --profile web add ~/.local/share/harness/dsh-plugin</code></pre></div
     <div class="table-wrap"><table>
       <thead><tr><th>提示</th><th>处理</th></tr></thead>
       <tbody>
-        <tr><td><code>bad_commit_message</code></td><td>分支上有提交不符合合并时的格式；在任务分支改写提交信息，再重新 verify、review</td></tr>
+        <tr><td><code>bad_commit_message</code></td><td>分支上有提交不符合提交信息规范；<code>harness status</code> 会列出具体提交与条目，在任务分支改写后再重新 verify、review</td></tr>
         <tr><td><code>review_missing</code> / <code>review_blocked</code></td><td>运行 <code>harness review</code>；被拒时按发现修复，提交后重新 verify、review</td></tr>
         <tr><td><code>gate_change_unconfirmed</code></td><td>Agent 展示确认摘要；由人在自己的终端执行它给出的带 <code>--yes</code> 的确认命令，再告诉 Agent 继续</td></tr>
         <tr><td><code>plan_unapproved</code></td><td>大改动没有实施授权记录；补齐方案，你同意后由 Agent 照录原话运行 <code>harness approve</code></td></tr>

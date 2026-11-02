@@ -34,6 +34,8 @@ import { ensureHooksPath } from "../install/install.mjs";
 import { REVIEW_KIND } from "../review/review.mjs";
 import { approvalState, planEnforced, planRequirement } from "../plan/plan.mjs";
 import { MERGE_TOKEN_ENV, mainUpdateToken } from "../githook.mjs";
+import { commitRangeProblems, commitRuleErrorAt } from "../policy/commit-message.mjs";
+import { resolvePolicy } from "../policy/resolve.mjs";
 import { leftoverWorktrees } from "../worktree/clean.mjs";
 
 export class MergeError extends Error {
@@ -89,20 +91,7 @@ export function ensureMainReady(project, mainRoot) {
 }
 
 function checkCommitMessages(project, root, baseCommit, branchCommit) {
-  const rule = project.policy.resolved?.find?.((item) => item.kind === "commit-message");
-  const pattern = project.config.merge?.commitMessagePattern;
-  const forbid = project.config.merge?.forbidMessagePatterns ?? ["^Co-Authored-By:", "^Co-authored-by:"];
-  if (!pattern && forbid.length === 0) return [];
-  const commits = gitOk(root, ["rev-list", "--no-merges", `${baseCommit}..${branchCommit}`]).split("\n").filter(Boolean);
-  const bad = [];
-  for (const commit of commits) {
-    const message = gitOk(root, ["log", "-1", "--format=%B", commit]).replace(/\n+$/, "");
-    if (pattern && !new RegExp(pattern).test(message)) bad.push(`${commit.slice(0, 10)} 格式不符: ${message.split("\n")[0]}`);
-    for (const item of forbid) {
-      if (new RegExp(item, "im").test(message)) bad.push(`${commit.slice(0, 10)} 命中禁用内容: ${item}`);
-    }
-  }
-  return bad;
+  return commitRangeProblems({ root, resolved: resolvePolicy(project.policy), config: project.config, baseCommit, branchCommit });
 }
 
 export function mergeTree(root, mainCommit, branchCommit) {
@@ -189,7 +178,10 @@ export async function checkGates({ project, root, branch, log = console.error, d
   const baseCommit = gitOk(root, ["merge-base", mainCommit, branchCommit]);
   const badMessages = checkCommitMessages(project, root, baseCommit, branchCommit);
   if (badMessages.length > 0) {
-    throw new MergeError(`提交信息不符合规范:\n  ${badMessages.join("\n  ")}`, "bad_commit_message");
+    throw new MergeError(
+      `提交信息不符合规范，在任务分支改写这些提交信息后重新 verify、review:\n  ${badMessages.join("\n  ")}`,
+      "bad_commit_message",
+    );
   }
 
   const planned = planMergeResult({ project, root, branch });
@@ -208,6 +200,15 @@ export async function checkGates({ project, root, branch, log = console.error, d
   );
 
   const resultPaths = changedPaths(root, mainCommit, newHead);
+
+  // 提交信息规则写坏的合并结果不能进主分支：合入后钩子会拒绝所有提交。放在人工确认之前，不让人确认一份不能用的配置。
+  const ruleError = commitRuleErrorAt(root, newHead);
+  if (ruleError) {
+    throw new MergeError(
+      `合并结果里的提交信息规则不能用，合入后所有提交都会被拒绝；在任务分支修正后重新 verify、review:\n  ${ruleError}`,
+      "branch_commit_rule_invalid",
+    );
+  }
 
   // 门禁改动：需要人确认过这一版内容。
   const gate = gatePaths(project).flatMap((glob) => [glob]);

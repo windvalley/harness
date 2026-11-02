@@ -510,7 +510,7 @@ harness merge  --branch feat/login   # 本地交付：核对证据与评审，�
 
 门禁拒绝时：
 
-- 验证失败、评审拒绝、`review_stale`、合并冲突、`bad_commit_message`、`branch_moved`、`main_moved` 这类拒绝，由 Agent 按原因修改后重新 verify、review，再交付，不需要你安排。
+- 验证失败、评审拒绝、`review_stale`、合并冲突、`bad_commit_message`、`branch_commit_rule_invalid`、`branch_moved`、`main_moved` 这类拒绝，由 Agent 按原因修改后重新 verify、review，再交付，不需要你安排。
 - 修复只能改实现、测试或提交本身：任务分支放宽不了门禁，删测试、弱化断言、跳过检查也被项目规范禁止。
 - 常见的需要人的情况只有两种：改动涉及门禁本身（`merge` 与 `sync` 的拒绝码是 `gate_change_unconfirmed`，`status` 里同一件事显示为 `gate_unconfirmed`），由人看过摘要后亲自确认；同一个问题连续三轮没有解决，Agent 说明情况后由人决定。
 - 其余需要人的拒绝少见，出现时 Agent 停下说明对象和做法：
@@ -623,22 +623,86 @@ git -C <主 Worktree> worktree unlock <Worktree 路径>
 
 ### 提交信息
 
-`init` 生成的提交规范分两处检查：
+提交信息规范只在 `.harness/policy.json` 的 `commit-message` 规则里定义一处，判定也只有一份实现。
+同一个判定用在四个位置，结论一致：
 
-| 位置 | 何时检查 | 默认要求 |
+| 位置 | 什么时候 | 不合规时 |
 | --- | --- | --- |
-| `policy.json` 的 `commit-message` 规则 | `commit-msg` 钩子，每次提交 | 标题是 `类型: 说明` 或 `类型(范围): 说明`，类型为小写字母；不得出现 `Co-Authored-By:` 行 |
-| `config.json` 的 `merge.commitMessagePattern` 与 `forbidMessagePatterns` | `harness merge`，检查分支上每个非合并提交 | 标题之后空一行，其余每行都是 `- ` 开头的要点，要点之间不能有空行 |
+| `commit-msg` 钩子 | 每次提交（所有客户端与手工提交） | 当场拒绝提交，不产生提交 |
+| `harness verify --branch`、`harness review --branch` 的前置检查 | 验证、评审开始之前 | 以 `bad_commit_message` 拒绝，不跑检查、不调用评审者、不写记录 |
+| `harness status` | 只读检查 | 列一项 `commit-message` 并标 `FAIL`，与合并同码 |
+| `harness merge`、`harness submit` | 交付之前 | 以 `bad_commit_message` 拒绝 |
 
-```bash
-git commit -m "feat(login): 支持短信验证码登录" -m "- 新增验证码发送与校验接口
-- 登录页增加验证码输入"
+钩子可以被 `--no-verify` 绕过，也可能没装，所以交付前还会再判一次。
+
+`init` 生成的规则：
+
+```json
+{
+  "id": "commit-message",
+  "kind": "commit-message",
+  "lang": "any",
+  "types": ["feat", "fix", "docs", "style", "refactor", "perf", "test", "build", "ci", "chore", "revert"],
+  "header": { "maxLength": 72, "noTrailingPeriod": true },
+  "body": { "required": true, "leadingBlank": true, "bullets": true },
+  "forbidPatterns": ["^Co-Authored-By:", "^Co-authored-by:"],
+  "example": "feat(login): 支持短信验证码登录\n\n- 新增验证码发送与校验接口\n- 登录页增加验证码输入",
+  "reason": "提交信息必须符合项目提交规范",
+  "fix": "按示例改写：标题是“类型(范围): 描述”，空一行后每行一个“- ”开头的要点；已经提交的用 git commit --amend 或变基改写"
+}
 ```
 
-每个 `-m` 是一段，段与段之间有空行，因此多条要点要写在同一个 `-m` 里换行，或者用编辑器写。
-只有标题的提交能通过 `commit-msg`，但合并时会报 `bad_commit_message`。
-这时在任务分支上改写提交信息（`git commit --amend` 或变基），再重新 verify、review。
-两处规则都可以按项目规范修改，保持一致即可；把 `merge.commitMessagePattern` 设为 `null` 可以取消合并时的格式检查。
+| 字段 | 默认 | 说明 |
+| --- | --- | --- |
+| `pattern` | 无 | 整条提交信息的正则；结构化字段不够用时的兜底 |
+| `types` | 空，不校验 | 允许的类型；非空时标题必须写成 `类型(范围): 描述` 或 `类型: 描述` |
+| `lang` | `any` | `zh` 要求描述里有汉字，`en` 要求描述里没有汉字，`any` 不校验语言 |
+| `langScope` | `subject` | `subject` 只看描述，`all` 连正文一起看 |
+| `allowLatinTerms` | `true` | `lang` 为 `zh` 时是否允许夹杂英文术语 |
+| `header.maxLength` | `72` | 标题的字符上限，按 Unicode 字符计，一个汉字算一个；`0` 表示不限 |
+| `header.noTrailingPeriod` | `true` | 标题不得以句号或 `。` 结尾 |
+| `header.pattern` | 无 | 只作用于标题的正则 |
+| `body.required` | `false` | 是否要求有正文 |
+| `body.leadingBlank` | `true` | 标题与正文之间是否要空一行 |
+| `body.bullets` | `false` | 正文每行是否都要是 `- ` 开头的要点 |
+| `body.pattern` | 无 | 只作用于正文的正则 |
+| `body.maxLineLength` | `0` | 正文每行上限，`0` 表示不限；含网址的行不计 |
+| `forbidPatterns` | `Co-Authored-By` 行 | 任何提交里都不允许出现的内容，不区分大小写；写 `[]` 表示不禁止 |
+| `ignore` | `^Revert "` | 标题匹配时豁免格式要求，禁用内容仍然生效 |
+| `ignoreAuthors` | 空 | 作者（`姓名 <邮箱>`）匹配时豁免格式要求，留给机器人提交 |
+| `example` | 无 | 被拒时一并展示的示例 |
+| `reason`、`fix` | 必填 | 被拒时展示的原因与正确做法 |
+
+语言只看描述：类型前缀天然是英文，`feat(login): 支持短信验证码登录` 不会被判成混合语言。
+反引号里的代码、路径与命令不参与语言判定。
+合并提交不检查；`fixup!`、`squash!` 会随分支原样进入主分支，照常检查。
+
+几个常见的项目约定：
+
+```jsonc
+{ "lang": "zh" }                                  // 中文为主，描述里必须有汉字，允许夹杂英文术语
+{ "lang": "zh", "allowLatinTerms": false }        // 描述里不许出现英文字母
+{ "lang": "en" }                                  // 纯英文，描述里不许有汉字
+{ "lang": "en", "langScope": "all" }              // 标题与正文都用英文
+{ "types": [] }                                   // 不要求 Conventional Commits 的类型前缀
+```
+
+规则属于门禁配置，在任务分支改完经人确认后合入主分支才生效。
+规则写错（字段取值非法、正则无效，或与 `config.json` 的旧字段并存）的分支进不了主分支：`verify`、`review` 以 `branch_commit_rule_invalid` 拒绝，`status` 列出 `commit-rule` 一项，合并按合并结果再查一次，都在要求人工确认之前。
+主分支上的规则已经不能用时（例如绕过门禁写进去的），钩子会拒绝所有提交，合并也会报错，`harness doctor` 的 `project:commit-message` 一项会指出问题，需要由人修正主分支。
+
+被拒时在任务分支改写提交信息，再重新 verify、review：
+
+```bash
+git commit --amend                      # 只改顶端一个提交
+git rebase -i <主分支>                  # 改前面几个，编辑器里把要改的提交标成 reword
+```
+
+`harness status` 会列出具体是哪个提交的哪一条不符合，不用自己翻。
+
+旧写法：0.11.0 之前，规范分在 `policy.json` 的 `pattern` 与 `config.json` 的 `merge.commitMessagePattern`、`merge.forbidMessagePatterns` 两处，钩子看前者、合并看后者。
+旧写法继续有效，判定取两处的并集：交付结果与以前一致，只是拒绝提前到提交当场。
+在 `commit-message` 规则里写了任一结构化字段之后，`config.json` 的旧字段就与它冲突，会直接报错，要一并删掉；`harness doctor` 会提示还在用旧写法的项目。
 
 ### 被拦截时
 
@@ -899,8 +963,8 @@ node ~/github/harness/bin/harness.mjs install --local   # 按新锁定的版本�
 | `verify.failFast` | `true` | 一项检查失败后不再执行后面的检查 |
 | `merge.requireEvidence` | `true` | 合并要求验证证据；设为 `false` 时连评审也不再要求 |
 | `merge.requireReview` | `true` | 合并要求通过的独立评审 |
-| `merge.commitMessagePattern` | 见“提交信息” | 合并时每个提交的完整格式，`null` 表示不检查 |
-| `merge.forbidMessagePatterns` | `Co-Authored-By` 行 | 提交信息里不允许出现的内容 |
+| `merge.commitMessagePattern` | 旧字段，不再生成 | 提交信息格式改成 `policy.json` 的 `commit-message` 规则，见“提交信息”；留着时与它取并集，规则里写了结构化字段就冲突 |
+| `merge.forbidMessagePatterns` | 旧字段，不再生成 | 同上 |
 | `merge.subjectPrefix` | `"Merge: "` | 三方合并时生成的合并提交的标题前缀 |
 | `merge.postMergeCommand` | `null` | 合并后在主 Worktree 执行的命令数组；失败时 `merge` 退出码为 3 |
 | `review.*` | | 评审后端、模型与阻断级别，见“独立评审的后端” |
@@ -1002,7 +1066,7 @@ node ~/github/harness/bin/harness.mjs install --local   # 按新锁定的版本�
 | `generated-header` | 文件头带生成标记的文件不许手改 | `paths`、`headerPatterns` | 实时拦截 |
 | `shell-forbid` | 命令 | `patterns`、`scope` | 实时拦截 |
 | `shell-secret-access` | 命令里出现密钥文件 | `patterns`、`allowVerbs` | 实时拦截 |
-| `commit-message` | 提交信息 | `pattern`、`forbidPatterns` | `commit-msg` |
+| `commit-message` | 提交信息 | `pattern`、`types`、`lang`、`header`、`body`、`forbidPatterns`、`example`，见“提交信息” | `commit-msg`；`verify`、`review` 前置检查；`status`；合并 |
 | `commit-forbid` | 能否在当前位置提交 | `when` | `pre-commit` |
 
 - 路径字段是相对仓库根的 glob；`patterns`、`pattern` 是 JavaScript 正则，写在 JSON 里反斜杠要写两次。
@@ -1361,7 +1425,7 @@ harness 防的是 Agent 的误操作，以及被提示注入后常见的绕过�
 | --- | --- |
 | 接入前需要手工创建 Worktree、依次运行命令吗 | 在目标项目中用自然语言请求接入即可；Agent 按项目规则准备环境，是否新建 Worktree 取决于实际约束；必须由人执行的确认与客户端操作会单独提示 |
 | Agent 报告初始化成功，是否已经全部接入 | 还要核对真实检查、验证与评审、确认和合并、当前客户端的启用情况；配置就位不等于当前会话已验证生效 |
-| `合并被拒绝(bad_commit_message)` | 分支上有提交不符合合并时的提交格式；在任务分支改写提交信息，再重新 verify、review |
+| `合并被拒绝(bad_commit_message)` | 分支上有提交不符合提交信息规范；`harness status` 会列出具体提交与不符合的条目，在任务分支改写后再重新 verify、review |
 | `主 Worktree 当前不在 main 分支` 或 `存在未提交或未跟踪文件` | Agent 先核对状态并保留已有改动，再按项目规则准备主 Worktree；需要处置用户改动时说明具体对象并取得授权，不能直接丢弃 |
 | `本机没有安装门禁锁定的版本` | Agent 工具调用被拦截时，由人在项目目录运行 `node ~/github/harness/bin/harness.mjs install --local`，再让 Agent 继续诊断 |
 | `gate_change_unconfirmed` | Agent 展示确认摘要；由人在自己的终端执行它给出的带 `--yes` 的确认命令 |

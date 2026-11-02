@@ -17,8 +17,6 @@ function defaultConfig({ mainBranch }) {
       postMergeCommand: null,
       requireEvidence: true,
       requireReview: true,
-      commitMessagePattern: "^[a-z]+(\\([^)]+\\))?: .+\\n\\n(- .+\\n?)+$",
-      forbidMessagePatterns: ["^Co-Authored-By:", "^Co-authored-by:"],
     },
     // 只放判据：哪些级别的发现阻断合并、单次评审能接受的 diff 字符数（超过时拒绝评审并给出拆分建议）。
     // 用哪个评审客户端、模型、推理强度和端点是各机器自己的事，放在本机 ~/.config/harness/reviewers.json，用 harness reviewer 管理。
@@ -50,10 +48,16 @@ function starterPolicy({ mainBranch }) {
       {
         id: "commit-message",
         kind: "commit-message",
-        pattern: "^[a-z]+(\\([^)]+\\))?: .+",
+        // 提交信息规范只在这一条里定义：钩子、verify 与 review 的前置检查、status 和合并共用同一份判定。
+        // 中文为主的项目把 lang 改成 "zh"，纯英文项目改成 "en"；字段说明见参考手册的“提交信息”。
+        lang: "any",
+        types: ["feat", "fix", "docs", "style", "refactor", "perf", "test", "build", "ci", "chore", "revert"],
+        header: { maxLength: 72, noTrailingPeriod: true },
+        body: { required: true, leadingBlank: true, bullets: true },
         forbidPatterns: ["^Co-Authored-By:", "^Co-authored-by:"],
+        example: "feat(login): 支持短信验证码登录\n\n- 新增验证码发送与校验接口\n- 登录页增加验证码输入",
         reason: "提交信息必须符合项目提交规范",
-        fix: "按项目提交规范改写提交信息",
+        fix: "按示例改写：标题是“类型(范围): 描述”，空一行后每行一个“- ”开头的要点；已经提交的用 git commit --amend 或变基改写",
       },
     ],
   };

@@ -21,6 +21,7 @@ import { loadLocalReviewers, reviewersFile } from "./review/reviewers.mjs";
 import { approveConfirm, confirmSummary, formatSummary } from "./confirm/confirm.mjs";
 import { approvePlan, formatPlanSummary, planSummary } from "./plan/plan.mjs";
 import { checkCommitMessage, checkStaged, guardReference } from "./githook.mjs";
+import { branchMessageProblems, commitRuleErrorAt } from "./policy/commit-message.mjs";
 import { answerEscalation, listEscalations, openEscalation, readEscalation, resumePlan } from "./escalate/escalate.mjs";
 import { runGolden } from "./golden/golden.mjs";
 import { computeMetrics, formatMetrics } from "./golden/metrics.mjs";
@@ -83,6 +84,40 @@ function print(text) {
   process.stdout.write(`${text}\n`);
 }
 
+/**
+ * verify、review 的前置检查：分支上有提交不符合提交信息规范时直接拒绝。
+ * 这两步之后改写提交会让证据与评审作废，所以判定要放在动手之前。
+ */
+function messageGate({ cwd, branch, label = "验证" }) {
+  let project;
+  try {
+    project = loadGateProject(cwd, { branch });
+  } catch (error) {
+    process.stderr.write(`${label}前置检查读不到项目配置: ${error.message}\n`);
+    return 1;
+  }
+  let problems;
+  let ruleError;
+  try {
+    problems = branchMessageProblems({ project, root: project.root, branch });
+    ruleError = commitRuleErrorAt(project.root, branch);
+  } catch (error) {
+    process.stderr.write(`${label}前置检查失败: ${error.message}\n`);
+    return 1;
+  }
+  if (ruleError) {
+    process.stderr.write(
+      `[harness] ${label}被拒绝(branch_commit_rule_invalid): 本分支里的提交信息规则不能用，合入后所有提交都会被拒绝，先修正再继续\n  ${ruleError}\n`,
+    );
+    return 1;
+  }
+  if (problems.length === 0) return 0;
+  process.stderr.write(
+    `[harness] ${label}被拒绝(bad_commit_message): 分支上有提交不符合提交信息规范，先改写提交信息再继续\n  ${problems.join("\n  ")}\n`,
+  );
+  return 1;
+}
+
 async function cmdVerify(argv) {
   const { values } = parseArgs({
     args: argv,
@@ -97,6 +132,11 @@ async function cmdVerify(argv) {
   });
   const cwd = process.cwd();
   if (values.plan) return cmdVerifyPlan({ cwd, branch: values.branch ?? values.head ?? "HEAD", base: values.base, json: values.json });
+  // 提交信息不合规时，验证出来的证据也随之作废：先拒绝，不白跑检查。
+  if (values.branch) {
+    const blocked = messageGate({ cwd, branch: values.branch });
+    if (blocked) return blocked;
+  }
   const head = values.branch ?? values.head ?? "HEAD";
   // 证据按“被验证的提交”索引，不按分支名（名字里可能有 /，且分支会移动）。
   const recordKey = values.branch ? git(repoRoot(cwd), ["rev-parse", "--verify", `${values.branch}^{commit}`]).stdout.trim() : undefined;
@@ -170,6 +210,9 @@ async function cmdReview(argv) {
     process.stderr.write("用法: harness review --branch <名称>\n");
     return 2;
   }
+  // 评审花钱也花时间，提交信息不合规时先拒绝，改写提交后重来。
+  const blocked = messageGate({ cwd: process.cwd(), branch: values.branch, label: "评审" });
+  if (blocked) return blocked;
   try {
     const record = await reviewBranch({ cwd: process.cwd(), branch: values.branch });
     const lines = [
@@ -338,7 +381,7 @@ function cmdGithook(argv) {
       process.stderr.write("[harness] commit-msg 钩子缺少提交信息文件参数\n");
       return 1;
     }
-    const result = checkCommitMessage({ root, resolved, messageFile });
+    const result = checkCommitMessage({ root, resolved, config: project.config, messageFile });
     if (result.decision === "deny") {
       process.stderr.write(`${formatDenialText(result)}\n`);
       return 1;

@@ -4,16 +4,39 @@
 
 ## [Unreleased]
 
+### 新增
+
+- 提交信息规范统一写在 `.harness/policy.json` 的 `commit-message` 规则里，新增结构化字段：`types`、`lang`、`langScope`、`allowLatinTerms`、`header`、`body`、`ignore`、`ignoreAuthors` 与 `example`。
+  `lang` 可以要求描述用中文（`zh`）或英文（`en`）；语言只看描述，类型前缀与反引号里的代码、路径和命令不参与判定。
+  被拒时逐条列出不符合的地方，附上 `example` 与 `fix`。
+- 同一份判定用在 `commit-msg` 钩子、`harness verify --branch` 与 `harness review --branch` 的前置检查、`harness status`、`merge` 与 `submit` 上，结论一致。
+  verify、review 发现提交信息不合规时以 `bad_commit_message` 拒绝，不跑检查、不调用评审者、不写记录。
+- 任务分支里改坏的提交信息规则（字段取值非法、正则无效，或与 `config.json` 的旧字段并存）进不了主分支：verify、review 与合并以 `branch_commit_rule_invalid` 拒绝，`status` 列出 `commit-rule` 一项，都在要求人工确认之前。
+- `harness status` 新增 `commit-message` 一项，与合并同码；收尾检查把 `bad_commit_message` 与 `branch_commit_rule_invalid` 当作 Agent 自己能修的阻塞，提示先改写提交信息或修正规则。
+- `harness doctor` 新增 `project:commit-message`：主分支的规则不能用时报失败，还在用旧写法时提示迁移。
+
 ### 变更
 
 - 随项目分发的规则在“一次任务”里加入提交后自审：Agent 提交后、`harness verify` 之前按 `method-review.md` 自审，发现问题先改完再提交，然后去验证。
   自审改出的新提交会让证据与评审作废，所以放在验证之前；自审不是门禁，不写记录，结论也不交给独立评审。
-- `method-review.md` 新增“提交后自审”一节，只查独立评审看不到或后期才发现很费事的几项：验收清单逐条对上证据、提交说明如实且格式合规、没有漏提交的文件与无关改动、diff 之外的调用方与文档已经一起改。
+- `method-review.md` 新增“提交后自审”一节，只查独立评审看不到或后期才发现很费事的几项：验收清单逐条对上证据、提交说明如实写出改了什么、没有漏提交的文件与无关改动、diff 之外的调用方与文档已经一起改；提交信息的格式与语言由钩子把关。
 - `core.md` 原来的“交付前自审”一句同时讲自审和交付汇报，拆成两条：提交后、验证前自审；交付时按验收清单逐条给出结果与证据。
+- `init` 不再在 `config.json` 写 `merge.commitMessagePattern` 与 `merge.forbidMessagePatterns`，提交信息要求只写在 `policy.json` 的 `commit-message` 规则里。
+  默认格式与以前合并时一致（`类型(范围): 描述`，空一行后每行一个 `- ` 开头的要点），另外限定了类型范围、标题不超过 72 个字符、标题结尾不用句号。
+- `harness.md` 写明钩子按 `commit-message` 规则校验、verify 与 review 动手前再判一次；Agent 自己修复的拒绝里加上 `branch_commit_rule_invalid`。
+
+### 修复
+
+- 默认配置下钩子只查 `policy.json` 的 `pattern`（只要求标题），合并才查 `config.json` 的 `merge.commitMessagePattern`（还要求要点正文）。
+  只有标题的提交能提交，也能通过验证与评审，到合并才被拒，而 `status` 显示可以合并。
+  现在两处取并集，提交当场就拒绝，`status` 与合并同码。
 
 ### 升级说明
 
-- `upgrade` 会刷新 `.harness/rules/harness.md`、`core.md` 与 `method-review.md`，规则改动在合并前由人确认；门禁判定与命令不变。
+- `upgrade` 会刷新 `.harness/rules/harness.md`、`core.md` 与 `method-review.md`，规则改动在合并前由人确认。
+- `upgrade` 不改写项目的 `policy.json` 与 `config.json`，旧写法继续有效，判定取两处的并集：交付结果与以前一致，只是不合规的提交在提交当场就被拒。
+- 任务分支上已有的不合规提交，升级后 verify、review 会直接拒绝，先在任务分支改写提交信息。
+- 要统一到一处时，在任务分支把 `commit-message` 规则改写成结构化字段，同时删掉 `config.json` 的两个旧字段，经人确认后合入；只改规则、不删旧字段会以 `branch_commit_rule_invalid` 拒绝。
 
 ## [0.10.4] - 2026-10-30
 

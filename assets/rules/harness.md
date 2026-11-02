@@ -28,7 +28,7 @@
 先按 `core.md` 判断任务分级：直接实施的任务从第 1 步开始；先方案后实施的任务，方案经用户授权后再从第 1 步开始。
 
 1. 按项目规则准备任务分支和工作环境，需要 Worktree 时由 Agent 创建或复用符合隔离要求的目录。
-   在任务分支里实现并提交，提交信息按项目规范，`commit-msg` 钩子会校验。
+   在任务分支里实现并提交，提交信息按项目规范，`commit-msg` 钩子按 `.harness/policy.json` 的 `commit-message` 规则校验，`verify` 与 `review` 也会在动手前再判一次。
    提交后、`harness verify` 之前按 `method-review.md` 自审，发现问题先改完再提交一次，然后去验证。
    自审改出的新提交会让已有证据与评审作废，所以不放在验证之后。
    自审不是门禁，不写记录，结论也不作为评审材料。
@@ -52,7 +52,7 @@
 
 ### 门禁拒绝时
 
-验证失败、评审拒绝、`review_stale`、合并冲突、`bad_commit_message`、`branch_moved`、`main_moved` 这类拒绝由 Agent 按拒绝原因修改后重新 verify、review，再交付，不需要用户安排。
+验证失败、评审拒绝、`review_stale`、合并冲突、`bad_commit_message`、`branch_commit_rule_invalid`、`branch_moved`、`main_moved` 这类拒绝由 Agent 按拒绝原因修改后重新 verify、review，再交付，不需要用户安排。
 修复只能改实现、测试或提交本身：任务分支放宽不了门禁，删测试、弱化断言、跳过检查同样不允许。
 需要人的拒绝停下来说明对象和做法：`gate_change_unconfirmed`（人确认门禁改动）、`plan_unapproved`（用户同意实施）、`platform_missing` 与 `platform_failed`（人安装或登录平台命令）、`version_missing`（人安装版本）、`push_rejected` 与 `not_fast_forward`（远程或本地主分支有来源不明的提交，由人判断）。
 另外按 `core.md` 的停下条件处理：缺权限、需要业务拍板、改动范围明显超出方案、同一个问题连续三轮没有解决。

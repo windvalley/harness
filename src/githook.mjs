@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { matchAny } from "./lib/glob.mjs";
 import { currentBranch, git, gitOk, isLinkedWorktree, ZERO_OID } from "./lib/git.mjs";
+import { describeProblems, messageProblems, normalizeMessage, resolveCommitRule } from "./policy/commit-message.mjs";
 import { evaluateCommit, formatDenial } from "./policy/engine.mjs";
 import { resolvePolicy } from "./policy/resolve.mjs";
 import { signPayload, loadKey } from "./lib/store.mjs";
@@ -91,28 +92,19 @@ function commentCharOf(root) {
   return value && value !== "auto" ? value : "#";
 }
 
-export function checkCommitMessage({ root, resolved, messageFile }) {
-  const rule = resolved.rules.find((item) => item.kind === "commit-message");
-  if (!rule) return { decision: "allow" };
+export function checkCommitMessage({ root, resolved, config = {}, messageFile }) {
+  const spec = resolveCommitRule({ resolved, config });
+  if (!spec) return { decision: "allow" };
+  // 合并提交（git merge 时 MERGE_HEAD 存在）只是同步分支，与合并时 --no-merges 的口径一致，不按标题判断。
+  if (git(root, ["rev-parse", "--verify", "--quiet", "MERGE_HEAD"]).status === 0) return { decision: "allow" };
   const raw = readFileSync(resolve(root, messageFile), "utf8");
-  const message = cleanCommitMessage(raw, commentCharOf(root));
+  const message = normalizeMessage(cleanCommitMessage(raw, commentCharOf(root)));
+  const author = git(root, ["var", "GIT_AUTHOR_IDENT"]).stdout.replace(/>.*$/s, ">").trim();
 
-  // 合并提交由 harness merge 生成，标题固定为 Merge 主题，不套用普通提交格式。
-  const isMerge = /^Merge[: ]/.test(message) || git(root, ["rev-parse", "--verify", "--quiet", "MERGE_HEAD"]).status === 0;
-  if (isMerge) return { decision: "allow" };
-
-  if (rule.pattern && !new RegExp(rule.pattern).test(message)) {
-    return deny(
-      { ...rule, detail: message.split("\n")[0] },
-      `提交信息不符合规范: ${message.split("\n")[0]}`,
-    );
-  }
-  for (const pattern of rule.forbidPatterns ?? []) {
-    if (new RegExp(pattern, "im").test(message)) {
-      return deny(rule, `提交信息命中禁用内容: ${pattern}`);
-    }
-  }
-  return { decision: "allow" };
+  const problems = messageProblems({ spec, message, author });
+  if (problems.length === 0) return { decision: "allow" };
+  const header = message.split("\n")[0];
+  return deny(spec.rule, [`提交信息不符合规范: ${header}`, ...describeProblems(spec, problems)].join("\n"));
 }
 
 /**
