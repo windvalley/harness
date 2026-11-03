@@ -276,8 +276,8 @@ function runClaude({ cwd, prompt, entry, bin, profile = CODE_PROFILE }) {
   }
 }
 
-// codex 与通用命令都在空的临时目录里运行：代码评审只依据给出的材料，不读项目文件，也不加载项目里的钩子与规则。
-// 方案评审把材料放在提示里，这一层仍然不接触仓库。
+// codex 与通用命令默认在空的临时目录里运行：代码评审只依据给出的材料，不读项目文件，也不加载项目里的钩子与规则。
+// 方案评审在档位里给出 repoDir 时，它们改到那个目录里运行，核对仓库不再只靠提示里的材料。
 function withScratch(fn, profile = CODE_PROFILE) {
   const dir = mkdtempSync(join(tmpdir(), "harness-review-"));
   try {
@@ -291,7 +291,8 @@ function withScratch(fn, profile = CODE_PROFILE) {
 
 function runCodex({ prompt, entry, bin, profile = CODE_PROFILE }) {
   return withScratch(({ dir, schema, output }) => {
-
+    // 给了 repoDir 就在仓库里跑，只读靠沙箱与事后比对；schema 与输出文件仍在临时目录，用绝对路径。
+    const cwd = profile.repoDir ?? dir;
     const args = [
       "exec",
       "--ephemeral",
@@ -299,7 +300,7 @@ function runCodex({ prompt, entry, bin, profile = CODE_PROFILE }) {
       "--sandbox",
       "read-only",
       "--cd",
-      dir,
+      cwd,
       "--color",
       "never",
       "--output-schema",
@@ -310,7 +311,7 @@ function runCodex({ prompt, entry, bin, profile = CODE_PROFILE }) {
       ...(entry.effort ? ["-c", `model_reasoning_effort="${entry.effort}"`] : []),
       "-",
     ];
-    const result = run(bin, args, { cwd: dir, input: `${profile.system}\n\n${prompt}`, timeout: timeoutMs(entry) });
+    const result = run(bin, args, { cwd, input: `${profile.system}\n\n${prompt}`, timeout: timeoutMs(entry) });
     ensureNotTimedOut(result, entry);
     ensureOk(result, bin);
     if (!existsSync(output)) throw new Error("codex 没有写出评审结果");
@@ -332,7 +333,9 @@ function runCommand({ prompt, entry, profile = CODE_PROFILE }) {
       ...(entry.effort ? { HARNESS_REVIEW_EFFORT: entry.effort } : {}),
       ...(entry.model ? { HARNESS_REVIEW_MODEL: entry.model } : {}),
     };
-    const result = run(cmd, args, { cwd: files.dir, input: `${profile.system}\n\n${prompt}`, timeout: timeoutMs(entry), env });
+    // 与 codex 一致：给了 repoDir 就在仓库里跑，只读靠约定与事后比对，命令本身不受约束。
+    const cwd = profile.repoDir ?? files.dir;
+    const result = run(cmd, args, { cwd, input: `${profile.system}\n\n${prompt}`, timeout: timeoutMs(entry), env });
     ensureNotTimedOut(result, entry);
     ensureOk(result, cmd);
     const text = usesOutput && existsSync(files.output) ? readFileSync(files.output, "utf8") : result.stdout;

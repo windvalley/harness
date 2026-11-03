@@ -90,9 +90,16 @@ const REPO_TOOLS = [
   "Read(**/credentials*)",
 ];
 
-// 只有 claude 客户端在检出目录里运行并带只读工具；codex 与 command 评审者在空目录里，只看提示里的方案文件。
-export function planReviewProfile({ readsRepo }) {
-  return { schema: PLAN_REVIEW_SCHEMA, system: SYSTEM_PROMPT, tools: readsRepo ? REPO_TOOLS : [], parse: parsePlanReview };
+// 有检出目录时三类评审者都在那里运行：claude 带工具白名单，codex 用只读沙箱，command 靠约定；
+// 后两者无法在工具层屏蔽密钥文件，只读由事后比对工作区兜底。没有检出目录时都只看提示里的方案文件。
+export function planReviewProfile({ worktree }) {
+  return {
+    schema: PLAN_REVIEW_SCHEMA,
+    system: SYSTEM_PROMPT,
+    tools: worktree ? REPO_TOOLS : [],
+    repoDir: worktree ?? undefined,
+    parse: parsePlanReview,
+  };
 }
 
 /** 分支检出在哪个 Worktree；没有检出时返回 null，评审者只能看方案文件。 */
@@ -120,7 +127,7 @@ export function buildPlanPrompt({ branch, acceptance, acceptancePath, planFiles,
   const parts = [
     `# 方案评审对象: ${branch}`,
     worktree
-      ? `如果你有读文件的工具：当前工作目录 ${worktree} 已检出 ${branch}，只读，可以用 Read、Grep、Glob 和只读的 git 查询核对已有实现，不要修改文件，也不要执行会改变工作区的命令。没有这些工具时只看下面的方案材料，与已有实现是否冲突无法核对的，在发现里标注无法确认。`
+      ? `当前工作目录 ${worktree} 已检出 ${branch}，只读：可以读文件、搜索和用只读的 git 查询核对已有实现，不要修改任何文件，也不要执行会改变工作区的命令，不要读取 .env、私钥、凭据这类密钥文件。核对不了的，在发现里标注无法确认。`
       : "你看不到仓库，只有下面的方案材料；与已有实现是否冲突无法核对的，在发现里标注无法确认。",
     "## 验收清单",
     acceptance ? `路径: ${acceptancePath}\n${acceptance}` : "(分支上没有验收清单)",
@@ -182,13 +189,13 @@ export function reviewPlan({ cwd, branch, all = false, log = () => {}, reviewer 
     prompt,
     config: project.config.review ?? {},
     log,
-    profile: planReviewProfile({ readsRepo: Boolean(worktree) }),
+    profile: planReviewProfile({ worktree }),
   });
   if (worktree && workspaceState(worktree) !== before) {
     throw new Error(`评审者改动了工作区 ${worktree}，这次评审结果不可信，请检查 git status 后重跑`);
   }
 
-  const readsRepo = Boolean(worktree) && result.backend === "claude";
+  const readsRepo = Boolean(worktree);
   const record = {
     branch,
     commit,

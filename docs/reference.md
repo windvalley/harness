@@ -500,8 +500,10 @@ harness review-plan --branch feat/login --all  # 展示全部
 - claude 评审者在任务分支的 Worktree 里运行，可以读整个仓库来核对已有实现，但没有任何写入类工具：只开 Read、Grep、Glob 和只读的 git 查询（`log`、`show`、`diff`、`grep`、`blame`、`ls-files`、`status`），`Edit`、`Write` 被禁用。
   `.env`、`*.pem`、`*.key`、`id_rsa*`、`credentials*` 在工具层被屏蔽，评审者的系统提示也要求不碰这类文件。
   评审前后会比对 Worktree 的 HEAD 与 `git status`，发现被改动时报错，不采信这次结果。
-- codex 与 command 评审者在空目录里运行，只看提示里的三份方案文件，不读仓库；输出会写明“没有读仓库”，与已有实现是否冲突的发现可信度因此打折。
-- 任务分支没有检出在任何 Worktree 里时，所有评审者都只看方案文件。
+- codex 与 command 评审者同样在任务分支的 Worktree 里运行，但约束更弱：codex 用只读沙箱，command 是你自己写的任意命令，只能靠约定。
+  它们没有 claude 那样的工具白名单，也屏蔽不了密钥文件，能读到 Worktree 里的任何文件，包括被 `.gitignore` 忽略的 `.env` 等本机文件，这些内容会随评审流程发往它们各自的端点；评审者是 codex 或 command 时请先确认这一点可以接受。
+  只读由事后比对兜底：评审前后 Worktree 的 HEAD 或 `git status` 变了，这次结果不被采信。
+- 任务分支没有检出在任何 Worktree 里时，所有评审者都只看方案文件，输出会写明“没有读仓库”。
 - 评审者读到的文件内容会随提示发往评审端点，与代码评审同样要求端点是你自己配置的。
 - Agent 逐条判断采纳与否，记在 `spec.md` 的“方案评审意见与处理”一节，不采纳的写理由；你仍然是唯一的实施授权人。
   采纳了 high 及以上的意见并实质修改方案后才跑第二轮，最多两轮。

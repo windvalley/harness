@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
 import { fakeClaudes, fakeCodex, git, makeRepo, writeReviewers } from "./helpers.mjs";
@@ -157,17 +157,44 @@ describe("方案评审", () => {
     assert.match(result.stderr, /没有.*方案/);
   });
 
-  test("codex 评审者在空目录里只读方案文件，不读仓库，并如实说明", () => {
+  test("codex 评审者也在任务分支的 Worktree 里运行并读仓库", () => {
     const repo = setup();
     const log = fakeCodex(repo, { findings: [HIGH] });
     writeReviewers(repo, { reviewers: [{ name: "cx", client: "codex" }] });
     const result = repo.cli("review-plan", "--branch", "task/a");
     assert.equal(result.status, 0, result.stderr);
     const call = JSON.parse(readFileSync(log, "utf8"));
-    assert.notEqual(call.cwd, repo.root);
+    assert.equal(call.cwd, realpathSync(repo.root));
+    assert.equal(call.args[call.args.indexOf("--cd") + 1], realpathSync(repo.root));
+    assert.equal(call.args[call.args.indexOf("--sandbox") + 1], "read-only");
     assert.match(call.stdin, /PLAN-TEXT/);
     assert.ok(call.schema.properties.findings);
-    assert.match(result.stderr, /没有读仓库/);
-    assert.equal(ledger(repo).find((item) => item.event === "plan.review").readsRepo, false);
+    assert.match(result.stderr, /读了仓库/);
+    assert.equal(ledger(repo).find((item) => item.event === "plan.review").readsRepo, true);
+  });
+
+  test("command 评审者在任务分支的 Worktree 里运行，改了文件同样不采信", () => {
+    const repo = setup();
+    const dir = join(repo.root, "..");
+    const log = join(dir, "command-call.json");
+    const bin = join(dir, "fake-command-reviewer");
+    writeFileSync(
+      bin,
+      `#!/usr/bin/env node
+import { readFileSync, writeFileSync } from "node:fs";
+const stdin = readFileSync(0, "utf8");
+writeFileSync(${JSON.stringify(log)}, JSON.stringify({ cwd: process.cwd(), stdin }));
+writeFileSync("command-stray.txt", "changed\\n");
+process.stdout.write(JSON.stringify(${JSON.stringify({ findings: [HIGH] })}));
+`,
+    );
+    chmodSync(bin, 0o755);
+    writeReviewers(repo, { reviewers: [{ name: "cmd", client: "command", command: [bin] }] });
+    const result = repo.cli("review-plan", "--branch", "task/a");
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /改动了工作区/);
+    const call = JSON.parse(readFileSync(log, "utf8"));
+    assert.equal(call.cwd, realpathSync(repo.root));
+    assert.match(call.stdin, /PLAN-TEXT/);
   });
 });
