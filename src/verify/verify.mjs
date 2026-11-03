@@ -112,6 +112,18 @@ export function verifyConfigProblems(verify) {
   return problem ? [...problems, { id: "requiredPaths", ...problem }] : problems;
 }
 
+/** extended 检查永远记为未执行；缺 reason 或 howToVerify 时证据里没有补验方式，列为 incomplete。 */
+export function extendedChecks(verify) {
+  return (verify?.checks ?? [])
+    .filter((check) => check.tier === "extended")
+    .map((check) => ({
+      id: check.id,
+      missing: [["reason", check.reason], ["howToVerify", check.howToVerify]]
+        .filter(([, value]) => typeof value !== "string" || value.trim() === "")
+        .map(([name]) => name),
+    }));
+}
+
 const isGlobList = (value) => Array.isArray(value) && value.every((item) => typeof item === "string");
 
 /** requiredPaths 写成数组等错误形状时会被当成“没配置”而静默失效，必须当配置错误。 */

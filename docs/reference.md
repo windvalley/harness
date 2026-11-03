@@ -1040,6 +1040,7 @@ node ~/github/harness/bin/harness.mjs install --local   # 按新锁定的版本�
 写错的 `gate` 检查（没有可执行的 `cmd`、`selector` 不认识）被选中时按配置错误处理：证据里记为失败并附改法，其余检查不再执行。
 以前这样的检查会被直接跳过，既不执行也不进未执行清单，证据却显示通过。
 没被选中时不影响验证，所以修配置的分支只要不改到它的 `when` 范围，就能照常验证与合并；`harness doctor` 的 `project:verify` 一项不论范围列出所有写错的检查。
+`project:extended` 一项列出所有 `extended` 检查：它们永远记为未执行，依赖它们的验收只能手工补验；缺 `reason` 或 `howToVerify` 时报 `[!!]`，因为证据里没有补验方式，说明齐全的只提示。
 
 前端单元测试只跑受影响的部分时，用测试框架自己的增量选择，harness 只负责按 `when` 决定何时运行。
 例如 vitest 的 `--changed` 按 import 依赖找出受这次改动影响的测试，测试放在哪个目录都能找到，改了 vitest 配置或 `package.json` 时自动跑全量：
@@ -1075,6 +1076,7 @@ node ~/github/harness/bin/harness.mjs install --local   # 按新锁定的版本�
   根目录声明了 `workspaces` 或有 `pnpm-workspace.yaml` 时，没有自己锁文件的子目录算工作区成员：根目录有类型检查脚本就由它统管，不再为成员生成；根目录没有时为成员各自生成，`requires` 改成根目录的 `node_modules`，pnpm 另加成员自己的 `node_modules`（`node-linker` 为 `hoisted` 时除外）。
 - `Cargo.toml`：生成 `cargo-test`；根目录是 Cargo workspace 时只看根目录。
 - pytest 配置（`pytest.ini`、`.pytest.ini`、`pytest.toml`、`.pytest.toml`、`conftest.py`、`tests/conftest.py`、`pyproject.toml` 里的 `[tool.pytest]`、`setup.cfg` 里的 `[tool:pytest]`、`tox.ini` 里的 `[pytest]`）：生成 `pytest`；根目录有配置时只看根目录。
+- 接入时项目规定的验证命令要先在基线提交上试跑，能通过的配成 `gate`，基线上就失败的作为基线问题报给用户，不配成 `gate`，也不留成没有说明的 `extended`；`init` 不替你试跑。
 - `init` 不写示例检查，`extended` 与 `advisory` 的写法见上面的示例。
 
 改了 `lint` 后，内置用例 `g10`、`g11`、`g13`、`g14` 对它的期望会过期，`harness-golden` 检查失败。

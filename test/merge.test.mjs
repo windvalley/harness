@@ -434,6 +434,37 @@ describe("验证与证据", () => {
     assert.doesNotMatch(result.stdout, /；unit: /, "写对的检查不列出");
   });
 
+  test("doctor 列出 extended 检查，缺补验说明的报问题，说明齐全的只提示", () => {
+    const ok = ["node", "-e", "process.exit(0)"];
+    const complete = setup({
+      project: {
+        ".harness/verify.json": verifyWith([
+          { id: "unit", tier: "gate", when: ["src/**"], cmd: ok },
+          { id: "browser", tier: "extended", when: ["web/**"], reason: "需要真实浏览器", howToVerify: "pnpm e2e" },
+        ]),
+      },
+    });
+    const pass = complete.cli("doctor");
+    assert.match(pass.stdout, /\[ok\] project:extended: 1 项检查永远记为未执行（browser）/);
+    assert.doesNotMatch(pass.stdout, /\[!!\] project:extended/);
+
+    const lacking = setup({
+      project: {
+        ".harness/verify.json": verifyWith([
+          { id: "unit", tier: "gate", when: ["src/**"], cmd: ok },
+          { id: "browser", tier: "extended", when: ["web/**"], reason: "需要真实浏览器" },
+          { id: "bare", tier: "extended", when: ["api/**"] },
+        ]),
+      },
+    });
+    const fail = lacking.cli("doctor");
+    assert.notEqual(fail.status, 0);
+    assert.match(fail.stdout, /\[!!\] project:extended: browser 缺 howToVerify；bare 缺 reason、howToVerify/);
+
+    const none = setup({ project: { ".harness/verify.json": verifyWith([{ id: "unit", tier: "gate", when: ["src/**"], cmd: ok }]) } });
+    assert.doesNotMatch(none.cli("doctor").stdout, /project:extended/);
+  });
+
   test("主分支前进但未触及检查范围时复用证据", () => {
     const repo = setup({
       project: {
