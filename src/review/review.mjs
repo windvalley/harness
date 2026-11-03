@@ -710,7 +710,7 @@ export async function reviewBranch({ cwd, branch, log = console.error, reviewer 
   const evidenceText = [
     `状态: ${evidence.record.status}`,
     `变更文件数: ${evidence.record.changedCount}`,
-    ...(evidence.record.checks ?? []).map((check) => `- ${check.id}: exit=${check.exit}${check.reused ? " (复用)" : ""} ${check.cmd}`),
+    ...(evidence.record.checks ?? []).map((check) => `- ${check.id}: exit=${check.exit}${check.reused ? " (复用)" : ""} ${check.cmd}${check.id.startsWith("harness:") && check.note ? ` - ${check.note}` : ""}`),
     ...(evidence.record.notExecuted ?? []).map((item) => `- 未执行 ${item.id}: ${item.reason}`),
     ...(evidence.record.advisory ?? []).map((item) => `- 咨询项 ${item.id}: ${item.hint}`),
   ].join("\n");

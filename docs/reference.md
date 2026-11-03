@@ -1070,6 +1070,7 @@ node ~/github/harness/bin/harness.mjs install --local   # 按新锁定的版本�
 `requiredPaths` 可选，写法与 `docOnly` 相同（`match` 与 `exclude`）：命中 `match` 的改动路径必须被最终会执行的检查覆盖（`gate` 检查的 `when` 命中，且这次确实进入了执行计划；选择器没选出任何东西、命令被 `make test` 取代都不算覆盖），否则证据状态为 `incomplete`，并在未执行清单里列出这些路径，不能评审与合并。
 `exclude` 是显式豁免，例如 `{ "match": ["src/**"], "exclude": ["src/**/*.md"] }`。
 没配置 `requiredPaths` 时，没有任何检查声明会管的非文档改动只记入证据的 `uncovered`，并在验证输出里提示，不阻断。
+`testFirst` 与 `coverage` 可选，是两道对“测试够不够”的机器证据，见下面的“测试证据：先红后绿与改动行覆盖率”。
 `fullSuiteTriggers.paths` 命中时，`go-packages` 扩大为 `./...`，选择器没选出包时也一样。
 `go-packages` 还会在 `go.mod`、`go.sum`、`go.work`、`go.work.sum` 变化时自动扩大为全量，前提是这些文件在检查的 `when` 范围内。
 验证结果的复用同时看运行环境：每项检查的证据记录环境指纹，由命令用到的工具链版本（`node`、`npm`、`pnpm`、`yarn`、`bun`、`go`、`python`、`cargo`）和 `requires` 依赖目录的安装状态（安装清单文件内容与顶层条目的修改时间，点开头的缓存目录不算）组成。
@@ -1081,6 +1082,63 @@ node ~/github/harness/bin/harness.mjs install --local   # 按新锁定的版本�
 以前这样的检查会被直接跳过，既不执行也不进未执行清单，证据却显示通过。
 没被选中时不影响验证，所以修配置的分支只要不改到它的 `when` 范围，就能照常验证与合并；`harness doctor` 的 `project:verify` 一项不论范围列出所有写错的检查。
 `project:extended` 一项列出所有 `extended` 检查：它们永远记为未执行，依赖它们的验收只能手工补验；缺 `reason` 或 `howToVerify` 时报 `[!!]`，因为证据里没有补验方式，说明齐全的只提示。
+
+#### 测试证据：先红后绿与改动行覆盖率
+
+门禁只能证明“检查跑过并通过”，证明不了“测试真的约束了这次改动”。
+`verify.json` 的 `testFirst` 与 `coverage` 补上这两项，由 harness 在验证里自己复算，不靠 Agent 自述。
+它们在普通检查都通过之后才运行；证据里记为 `harness:tdd-red` 与 `harness:changed-line-coverage` 两个检查，失败就是 `failed`，不能评审与合并。
+
+`testFirst`：改了实现就必须有会先失败的测试。
+
+```json
+"testFirst": {
+  "mode": "enforce",
+  "source": { "match": ["src/**"], "exclude": [] },
+  "tests": { "match": ["**/*.test.ts"], "exclude": [] },
+  "cwd": "web",
+  "cmd": ["pnpm", "exec", "vitest", "run", "{tests}"],
+  "requires": ["web/node_modules"]
+}
+```
+
+- `source` 是实现文件，`tests` 是测试文件；同时命中两者的算测试。没有实现文件的改动（只改文档、只改测试）不产生这一项。
+- `cmd` 里的 `{tests}` 展开成这次新增或修改的测试文件（相对 `cwd`），`{testDirs}` 展开成它们所在的目录（Go 用 `go test -count=1 {testDirs}`）。`cwd` 之外的测试不算。
+- 判定分三步：改了实现却没有新增或修改测试，失败；在当前实现上跑这些测试，必须通过；把全部实现文件还原成基线版本、保留这些测试再跑一次，必须失败。
+  最后一步失败，才说明测试在实现之前就会红，而不是事后补的、对旧实现也成立的测试。
+- 行为不变的重构、纯性能或内部整理没有会红的测试，在提交信息里写一行 `Tdd-Waiver: 原因`（可写成 `- Tdd-Waiver: 原因` 以符合列表式正文）豁免。
+  原因写进证据、评审输入和 PR/MR 描述，由评审与人核对；它由 Agent 自己写，所以不是人工放行，只是留痕。
+- 还原后仍然通过也可能是实现文件的划分太粗，或者测试只改了无关断言，这类情况靠评审判断。
+
+`coverage`：只看这次改动的行是否被覆盖，不看全仓覆盖率。
+
+```json
+"coverage": {
+  "mode": "enforce",
+  "include": { "match": ["src/**"], "exclude": ["**/*.d.ts"] },
+  "cwd": "web",
+  "cmd": ["pnpm", "exec", "vitest", "run", "--coverage"],
+  "report": "coverage/lcov.info",
+  "threshold": 80,
+  "requires": ["web/node_modules"]
+}
+```
+
+- 在检出里运行 `cmd`，读 `report`（相对 `cwd`）。支持 lcov（JS、Python、Rust 等工具都能产出）与 Go 的 coverprofile，格式自动识别；Go 的文件名按 `go.mod` 的模块路径映射回仓库文件。
+- 把 `git diff` 里新增或修改的行与报告求交，只统计报告里算可执行的行；已覆盖行数除以可执行行数，低于 `threshold`（默认 80）失败，输出里列出没覆盖的行。
+- 改动的文件整个不在报告里时，它的改动行全部按未覆盖算；类型声明一类没有可执行代码的文件用 `include.exclude` 排除。
+- 没生成报告、命令失败都算失败，不会当成通过。
+- 覆盖率命令会再跑一遍测试；想省时间，可以让它取代同范围的普通单元测试检查。
+- 行被执行不等于断言有效，覆盖率只是下限；它与 `testFirst` 互补：`testFirst` 证明有测试会红，`coverage` 证明改动的行都被测试执行过。
+
+两项共有的字段：
+
+- `mode`：`enforce`（默认）不通过就失败；`observe` 只记录，证据里标 `observed`，用来先在真实项目里看误报再决定是否强制。
+- `requires`、`cwd`：与普通检查相同；依赖缺失记为未执行，证据为 `incomplete`。
+- 写错的配置按配置错误失败，不会静默失效；`harness doctor` 的 `project:verify` 一项会列出。
+- 两项都按定义指纹与运行环境复用：同一个提交、配置与工具链没变、主分支新增改动没有碰到它们管的路径时，直接沿用上次结果。
+- 配置在 `.harness/verify.json`，属于门禁文件，改动要人确认；确认摘要会单独列出 `testFirst` 与 `coverage` 的改前改后，调低阈值或改成 `observe` 一眼可见。
+- 不配置时行为不变，旧证据也不因升级而失效。
 
 前端单元测试只跑受影响的部分时，用测试框架自己的增量选择，harness 只负责按 `when` 决定何时运行。
 例如 vitest 的 `--changed` 按 import 依赖找出受这次改动影响的测试，测试放在哪个目录都能找到，改了 vitest 配置或 `package.json` 时自动跑全量：
@@ -1514,7 +1572,11 @@ harness 防的是 Agent 的误操作，以及被提示注入后常见的绕过�
 - 任务分级与先红后绿的判断仍由 Agent 做出，门禁只兜底可以机械判定的部分：
   写了方案的任务在记录授权前改不了代码，超过阈值或改了库表的分支没有授权记录合不进去。
   授权记录由 Agent 写入，门禁能保证它存在、照录了原话并且清单没有再改，但无法核实你是否真的说过这句话，要靠你在合并输出或 `harness status` 里核对。
-  Agent 把大任务误判成直接实施时，要到合并才会被拦下；测试是否先于实现失败过，门禁无法证明，靠评审与你抽查。
+  Agent 把大任务误判成直接实施时，要到合并才会被拦下。
+  测试是否先于实现失败过，配置了 `testFirst` 的项目由 harness 复算（还原实现后测试必须失败），改动行是否被测试执行过，配置了 `coverage` 的项目按报告核对，见“测试证据：先红后绿与改动行覆盖率”。
+  没配置它们的项目，这两点仍然只靠评审与你抽查。
+  即使配置了，也只证明“有测试会红、改动行被执行过”，不证明断言有效：没有变异测试，断言写得很弱但能红、能执行到的测试照样通过；
+  `Tdd-Waiver` 由 Agent 自己写，只留痕不放行；覆盖率报告由项目命令生成，命令本身写得宽松时数字不可信，所以命令与阈值的改动要人确认。
 - 风险信号只看路径、依赖清单与行数，有这些已知缺口：
   把大改动拆成多个小分支，每个分支都不超过阈值，规模信号看不出总量，要靠人在合并输出和 `harness status` 里留意；
   二进制文件按 0 行计；

@@ -78,7 +78,7 @@ function describeGates({ evidence, review, approval, risk }) {
   const checks = evidence?.checks ?? [];
   const passed = checks.filter((item) => item.exit === 0 && !item.skipped);
   lines.push(`- 验证: ${evidence?.status ?? "无记录"}（执行 ${checks.length} 项，通过 ${passed.length} 项${evidence?.reusedChecks?.length ? `，复用 ${evidence.reusedChecks.length} 项` : ""}）`);
-  for (const item of checks) lines.push(`  - ${item.id}: exit=${item.exit}${item.reused ? "（复用）" : ""} ${item.cmd ?? ""}`.trimEnd());
+  for (const item of checks) lines.push(`  - ${item.id}: exit=${item.exit}${item.reused ? "（复用）" : ""} ${item.cmd ?? ""}${item.id.startsWith("harness:") && item.note ? ` - ${item.note}` : ""}`.trimEnd());
   for (const item of evidence?.notExecuted ?? []) lines.push(`  - 未执行 ${item.id}: ${item.reason}`);
   for (const item of evidence?.advisory ?? []) lines.push(`  - 咨询项 ${item.id}: ${item.hint}`);
   if (review) {

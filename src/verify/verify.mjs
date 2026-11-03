@@ -20,6 +20,7 @@ import {
 import { appendLedger, canonical, dataDir, readRecord, writeRecord } from "../lib/store.mjs";
 import { environmentDigests } from "./environment.mjs";
 import { selectGoPackages } from "./selectors/go-packages.mjs";
+import { evaluateCoverage, evaluateTdd, testEvidenceChecks, testEvidenceProblems, TDD_ID } from "./testevidence.mjs";
 
 export const EVIDENCE_KIND = "evidence";
 
@@ -68,7 +69,9 @@ export function checkFingerprint(check, env = {}) {
 /** 整份检查配置的指纹：新增、删除或改动任何检查都会改变它，合并据此判断旧证据是否还代表当前的检查集。 */
 export function verifyConfigDigest(project) {
   const map = project.verify ?? {};
-  return digest({ checks: map.checks ?? [], docOnly: map.docOnly ?? null, fullSuiteTriggers: map.fullSuiteTriggers ?? null, requiredPaths: map.requiredPaths ?? null, env: project.config?.env ?? {} });
+  // testFirst 与 coverage 没配置时不进指纹，已有项目的旧证据不因升级而失效。
+  const testEvidence = { ...(map.testFirst ? { testFirst: map.testFirst } : {}), ...(map.coverage ? { coverage: map.coverage } : {}) };
+  return digest({ checks: map.checks ?? [], docOnly: map.docOnly ?? null, fullSuiteTriggers: map.fullSuiteTriggers ?? null, requiredPaths: map.requiredPaths ?? null, ...testEvidence, env: project.config?.env ?? {} });
 }
 
 const cmdText = (cmd) => (Array.isArray(cmd) ? cmd.join(" ") : cmd);
@@ -109,7 +112,7 @@ export function verifyConfigProblems(verify) {
     return problem ? [{ id: check.id, ...problem }] : [];
   });
   const problem = requiredPathsProblem(verify?.requiredPaths);
-  return problem ? [...problems, { id: "requiredPaths", ...problem }] : problems;
+  return [...problems, ...(problem ? [{ id: "requiredPaths", ...problem }] : []), ...testEvidenceProblems(verify)];
 }
 
 /** extended 检查永远记为未执行；缺 reason 或 howToVerify 时证据里没有补验方式，列为 incomplete。 */
@@ -397,8 +400,10 @@ export async function verify({
 
   try {
     const { plan, notExecuted, advisory, docOnly, invalid, uncovered, requiredUncovered } = planChecks({ project, cwd: checkout, changed });
+    for (const problem of testEvidenceProblems(project.verify)) invalid.push({ ...problem, def: digest(problem.id === TDD_ID ? project.verify.testFirst : project.verify.coverage) });
+    const testEvidence = testEvidenceChecks(project.verify).map((item) => ({ ...item, def: checkFingerprint(item.config, env) }));
     const environment = environmentDigests({
-      items: plan.map((item) => ({ id: item.id, tool: item.cmd[0], requires: item.requires })),
+      items: [...plan, ...testEvidence].map((item) => ({ id: item.id, tool: item.cmd[0], requires: item.requires })),
       mainRoot,
       cwd: checkout,
       env,
@@ -406,6 +411,9 @@ export async function verify({
     const { reuse: reusable, rerun } = reuse
       ? reusableChecks({ previous: previous.ok ? previous.record : null, plan, mainDelta: priorMainDelta, environment })
       : { reuse: new Map(), rerun: plan.map((item) => item.id) };
+    const reusableEvidence = reuse
+      ? reusableChecks({ previous: previous.ok ? previous.record : null, plan: testEvidence, mainDelta: priorMainDelta, environment }).reuse
+      : new Map();
 
     log(
       `[verify] head=${headCommit.slice(0, 12)} 变更 ${changed.length} 个文件${docOnly ? "(仅文档)" : ""}，` +
@@ -479,6 +487,60 @@ export async function verify({
         log(`[verify] 注意: 未找到命令 ${item.cmd[0]}，这项检查没有真正执行`);
       }
       if (outcome.exit !== 0 && config.failFast !== false) break;
+    }
+
+    // 测试证据在普通检查都通过之后再算：前面已经失败或缺依赖时，这两项没有意义，也省下重复跑测试的时间。
+    if (!blocked && !results.some((item) => item.exit !== 0 && !item.skipped)) {
+      const evaluators = { tdd: evaluateTdd, coverage: evaluateCoverage };
+      for (const item of testEvidence) {
+        if (reusableEvidence.has(item.id)) {
+          results.push({ ...reusableEvidence.get(item.id), reused: true });
+          log(`[verify] = ${item.id} 复用上次结果`);
+          continue;
+        }
+        const missing = (item.requires ?? []).filter((rel) => !existsSync(join(mainRoot, rel)) && !existsSync(join(checkout, rel)));
+        if (missing.length > 0) {
+          results.push({ id: item.id, cmd: item.cmd.join(" "), def: item.def, exit: null, skipped: true, reason: `缺少依赖目录 ${missing.join(", ")}` });
+          notExecuted.push({ id: item.id, reason: `缺少依赖目录 ${missing.join(", ")}`, impact: "该检查未能执行，不能证明对应范围通过", howToVerify: "在主 Worktree 安装依赖后重跑 harness verify" });
+          blocked = true;
+          continue;
+        }
+        const started = performance.now();
+        log(`[verify] -> ${item.id}: ${item.cmd.join(" ")}`);
+        const outcome = await evaluators[item.kind]({
+          item,
+          changed,
+          root,
+          checkout,
+          baseCommit: baseOfHead,
+          headCommit,
+          env,
+          timeoutMs: (config.timeoutSeconds ?? 1800) * 1000,
+          execute,
+          link: () => linkDependencies(mainRoot, checkout, item.requires ?? []),
+        });
+        if (!outcome) {
+          log(`[verify]    ${item.id} 不适用（这次改动没有涉及它管的文件）`);
+          continue;
+        }
+        const observing = item.config.mode === "observe" && !outcome.pass;
+        const exit = outcome.pass || observing ? 0 : 1;
+        results.push({
+          id: item.id,
+          cmd: item.cmd.join(" "),
+          cwd: item.cwd,
+          def: item.def,
+          envDigest: environment.get(item.id),
+          exit,
+          durationMs: Math.round(performance.now() - started),
+          note: observing ? `观察模式，未拦截: ${outcome.note}` : outcome.note,
+          ...(observing ? { observed: true } : {}),
+          ...(outcome.waived ? { waived: true } : {}),
+          ...(outcome.coverage ? { coverage: outcome.coverage } : {}),
+          tail: outcome.pass ? undefined : [outcome.note, outcome.tail].filter(Boolean).join("\n"),
+        });
+        log(`[verify]    ${outcome.pass ? "通过" : observing ? "未通过（观察模式，不拦截）" : "未通过"}: ${outcome.note}`);
+      }
     }
 
     const failed = results.filter((item) => item.exit !== 0 && !item.skipped);

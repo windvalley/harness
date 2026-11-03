@@ -29,6 +29,7 @@ export function confirmSummary({ cwd, branch }) {
   const assessed = assessRisk({ root, project, base: mergeBase(root, planned.mainCommit, planned.branchCommit), head: planned.branchCommit });
   const risk = { tier: assessed.tier, confirm: assessed.confirmReasons, approve: assessed.reasons, observed: assessed.observed };
   const riskConfig = describeRiskConfigChange({ root, mainCommit: planned.mainCommit, resultCommit: planned.resultCommit });
+  const testEvidenceConfig = describeTestEvidenceConfigChange({ root, mainCommit: planned.mainCommit, resultCommit: planned.resultCommit });
 
   return {
     branch,
@@ -46,7 +47,20 @@ export function confirmSummary({ cwd, branch }) {
     checkDiff,
     risk,
     riskConfig,
+    testEvidenceConfig,
   };
+}
+
+/** testFirst 与 coverage 决定“测试先行”与改动行覆盖率这两道机器证据怎么判，调低阈值、改成 observe 或改掉命令都要让人看见。 */
+function describeTestEvidenceConfigChange({ root, mainCommit, resultCommit }) {
+  const pick = (commit) => {
+    const verify = safeJson(root, commit, ".harness/verify.json");
+    return verify ? { testFirst: verify.testFirst ?? null, coverage: verify.coverage ?? null } : null;
+  };
+  const before = pick(mainCommit);
+  const after = pick(resultCommit);
+  if (!before || !after || JSON.stringify(before) === JSON.stringify(after)) return null;
+  return { before, after };
 }
 
 /**
@@ -248,6 +262,12 @@ export function formatSummary(summary) {
     lines.push("风险配置有改动（决定哪些改动要授权、要人确认）:");
     lines.push(`  risk: ${JSON.stringify(before.risk)} -> ${JSON.stringify(after.risk)}`);
     lines.push(`  intent.plan: ${JSON.stringify(before.plan)} -> ${JSON.stringify(after.plan)}`);
+  }
+  if (summary.testEvidenceConfig) {
+    const { before, after } = summary.testEvidenceConfig;
+    lines.push("测试证据配置有改动（决定先红后绿与改动行覆盖率怎么判）:");
+    lines.push(`  testFirst: ${JSON.stringify(before.testFirst)} -> ${JSON.stringify(after.testFirst)}`);
+    lines.push(`  coverage: ${JSON.stringify(before.coverage)} -> ${JSON.stringify(after.coverage)}`);
   }
   if (summary.risk.confirm.length > 0) {
     lines.push(`风险分级: T2（要人确认，按主分支的风险配置判定）`);

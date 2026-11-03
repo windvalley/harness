@@ -327,7 +327,7 @@ footer { border-top: 1px solid var(--line); color: var(--muted); font-size: .88r
         <tr><td>交付</td><td>逐条给出验收证据、交付状态与待处理项</td><td>由你最终验收</td></tr>
       </tbody>
     </table></div>
-    <p>小需求核实范围后跳过方案，直接从实施开始。任务分级和先红后绿由 Agent 按项目规范执行，门禁兜底其中能机械判定的部分，见<a href="#limits">信任模型与限制</a>。</p>
+    <p>小需求核实范围后跳过方案，直接从实施开始。任务分级和先红后绿由 Agent 按项目规范执行，门禁兜底其中能机械判定的部分：配置了 <code>testFirst</code> 与 <code>coverage</code> 的项目，验证会复算“还原实现后新增的测试必须失败”和“改动行必须被测试执行到”，见<a href="#limits">信任模型与限制</a>。</p>
 
     <h3 id="delivery-modes">两种交付方式</h3>
     <div class="table-wrap"><table>
@@ -943,7 +943,7 @@ HARNESS_MAIN_BYPASS=1 git merge --ff-only origin/main</code></pre></div>
       <li>路径规则只约束写文件、读文件类的工具调用；用 shell 命令读写同一个文件，要靠命令规则覆盖。</li>
       <li>Codex 没有信任钩子时没有实时拦截；DeepSeek Harness 的本机插件尚未在运行中的客户端里端到端实测；Claude 桌面版只做了静态确认。git 层对它们都生效。</li>
       <li>经通用入口接入的 Agent 只有实时拦截，没有收尾检查，harness 也无法验证 Agent 是否真的因拒绝而不执行。</li>
-      <li>任务分级与先红后绿仍由 Agent 判断，门禁只兜底能机械判定的部分；授权记录里的原话要靠你在合并输出或 <code>harness status</code> 里核对。</li>
+      <li>任务分级仍由 Agent 判断，门禁只兜底能机械判定的部分；先红后绿与改动行覆盖率在配置了 <code>testFirst</code>、<code>coverage</code> 后由验证复算，但只证明“有测试会红、改动行被执行过”，不证明断言有效，没配置的项目仍靠评审与抽查；授权记录里的原话要靠你在合并输出或 <code>harness status</code> 里核对。</li>
     </ul>
 
     <!-- ============ 速查 ============ -->

@@ -6,6 +6,14 @@
 
 ### 新增
 
+- 测试证据：`verify.json` 新增可选的 `testFirst` 与 `coverage`，把“先红后绿”和“改动行被测试执行过”从靠评审与抽查变成机器证据。
+  `testFirst` 在验证里把全部实现文件还原成基线版本、保留这次新增或修改的测试再跑一次，必须失败；在当前实现上必须通过；改了实现却没有改测试直接失败。
+  行为不变的改动在提交信息里写 `Tdd-Waiver: 原因` 豁免，原因写进证据、评审输入与 PR/MR 描述。
+  `coverage` 运行覆盖率命令，读 lcov 或 Go coverprofile，只统计 `git diff` 里新增或修改的行，低于 `threshold`（默认 80）失败，并列出未覆盖的行。
+  两项在证据里记为 `harness:tdd-red` 与 `harness:changed-line-coverage`，各有 `mode`（`enforce` 或 `observe`），按定义指纹与运行环境复用，配置写错按配置错误失败；没配置的项目行为与旧证据不变。
+  `harness confirm` 的摘要单独列出这两项配置的改前改后，调低阈值或改成 `observe` 一眼可见。
+  规则文件与接入规则同步：配置时先写 `observe`，看过误报再改 `enforce`。
+
 - 风险分级：`.harness/config.json` 新增 `risk.paths` 与 `risk.deps`。
   改动命中 `risk.paths` 的敏感路径时，合并与提交前要人确认，缺少确认报 `risk_unconfirmed`，不受 `plan-first` 与 `governance.confirmOnGateChange` 影响。
   改动命中 `risk.deps` 的依赖清单时，按大改动处理，要实施授权（启用 `plan-first` 时生效）。
