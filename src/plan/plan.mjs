@@ -38,10 +38,12 @@ export function planSettings(config) {
 }
 
 // 风险信号：paths 命中要人确认（T2），deps 命中要实施授权（T1，启用 plan-first 时生效）。
+// exclude 只豁免 paths：测试夹具、说明文档放在敏感目录里不该要人确认；deps 不受它影响，免得把锁文件漏掉。
 // 配置里没有 risk 就都不启用，已接入项目升级后行为不变；init 给新项目写入下面的默认值。
 // deps 只放锁文件与不带锁的清单，不放 package.json：只改 scripts 不是依赖变化，真正的依赖变化一定会改锁文件。
 export const RISK_DEFAULTS = {
   paths: [".github/workflows/**", ".gitlab-ci.yml", ".circleci/**", "**/Jenkinsfile", "**/Dockerfile", "deploy/**"],
+  exclude: ["**/*.md", "**/testdata/**", "**/test/**", "**/tests/**", "**/__tests__/**", "**/fixtures/**"],
   deps: [
     "**/go.mod",
     "**/go.sum",
@@ -62,15 +64,16 @@ export const RISK_DEFAULTS = {
 /** 读取风险配置；形状不对时返回 error，由调用方按需要人确认处理（出错就按最严处理）。 */
 export function riskSettings(config) {
   const raw = config?.risk;
-  if (raw === undefined || raw === null) return { paths: [], deps: [], active: false, error: null };
+  if (raw === undefined || raw === null) return { paths: [], deps: [], exclude: [], active: false, error: null };
   const isGlobs = (value) => Array.isArray(value) && value.every((item) => typeof item === "string");
-  if (typeof raw !== "object" || Array.isArray(raw)) return { paths: [], deps: [], active: true, error: "risk 必须是对象" };
-  for (const key of ["paths", "deps"]) {
-    if (raw[key] !== undefined && !isGlobs(raw[key])) return { paths: [], deps: [], active: true, error: `risk.${key} 必须是字符串数组` };
+  const broken = (error) => ({ paths: [], deps: [], exclude: [], active: true, error });
+  if (typeof raw !== "object" || Array.isArray(raw)) return broken("risk 必须是对象");
+  for (const key of ["paths", "deps", "exclude"]) {
+    if (raw[key] !== undefined && !isGlobs(raw[key])) return broken(`risk.${key} 必须是字符串数组`);
   }
   const paths = raw.paths ?? [];
   const deps = raw.deps ?? [];
-  return { paths, deps, active: paths.length > 0 || deps.length > 0, error: null };
+  return { paths, deps, exclude: raw.exclude ?? [], active: paths.length > 0 || deps.length > 0, error: null };
 }
 
 export function planEnforced(policy) {
@@ -138,13 +141,34 @@ export function assessRisk({ root, project, base, head }) {
   if (risk.error) confirm.push(`风险配置无效（${risk.error}），按需要人确认处理`);
   else if (risk.active) {
     const paths = changedPaths(root, base, head);
-    const sensitive = paths.filter((path) => matchAny(path, risk.paths));
+    const sensitive = paths.filter((path) => matchAny(path, risk.paths) && !matchAny(path, risk.exclude));
     if (sensitive.length > 0) confirm.push(`敏感路径 ${sensitive.slice(0, 3).join(", ")}${sensitive.length > 3 ? ` 等 ${sensitive.length} 个` : ""}`);
     const deps = paths.filter((path) => matchAny(path, risk.deps));
     if (deps.length > 0) approve.push(`依赖清单变化 ${deps.slice(0, 3).join(", ")}`);
   }
   const tier = confirm.length > 0 ? 2 : approve.length > 0 ? 1 : 0;
   return { tier, reasons: approve, confirmReasons: confirm, active: risk.active, lines: need.lines, markers: need.markers, settings: need.settings };
+}
+
+/**
+ * 提交前就给 Agent 看的风险提示：交付时才发现要授权或要人确认，前面的实现可能要返工。
+ * 返回要输出的行，没有命中信号时为空；评估本身出错不影响验证。
+ */
+export function riskHints({ root, project, base, head, branch }) {
+  let risk;
+  try {
+    risk = assessRisk({ root, project, base, head });
+  } catch {
+    return [];
+  }
+  const lines = [];
+  if (risk.reasons.length > 0 && planEnforced(project.policy)) {
+    lines.push(`RISK 要实施授权: ${risk.reasons.join("；")}。先写方案并向用户说明，用户同意后运行 harness approve --branch ${branch} --yes --note "<用户原话>"；改动本不该这么大时，现在拆小或撤掉无关改动`);
+  }
+  if (risk.confirmReasons.length > 0) {
+    lines.push(`RISK 要人确认: ${risk.confirmReasons.join("；")}。验证与评审通过后运行 harness confirm --branch ${branch} 展示摘要，由人在自己的终端带 --yes 确认`);
+  }
+  return lines;
 }
 
 /**

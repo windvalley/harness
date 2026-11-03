@@ -23,6 +23,7 @@ import {
   refExists,
   resolveCommit,
   run,
+  showBlob,
   statusShort,
   treeOf,
   worktreeEntries,
@@ -216,8 +217,22 @@ export async function checkGates({ project, root, branch, log = console.error, d
     );
   }
 
-  // 风险：命中的信号各带自己的要求，取并集。要人确认的并入下面的门禁确认，要实施授权的在其后核对。
+  // 风险：命中的信号各带自己的要求，取并集。
+  // 要人确认的风险信号放在证据与评审之后核对，免得人确认了一份随后验证失败、改完又要重新确认的版本；
+  // 拒绝信息里同时列出其他还没满足的人工项，让人一次处理完。
   const risk = assessRisk({ root, project, base: baseCommit, head: branchCommit });
+  const when = label === "submit" ? "提交前" : "合并前";
+  const confirmRecord = readRecord(root, "confirm", resultTree);
+  const confirmed = confirmRecord.ok && confirmRecord.record.decision === "approve";
+  const needsPlan = planEnforced(project.policy) && risk.reasons.length > 0;
+  const planState = needsPlan
+    ? approvalState({ root, branch, acceptanceText: showBlob(root, branchCommit, acceptancePath(project, branch)) })
+    : { approved: true };
+  const alsoPending = (skip) =>
+    [
+      !planState.approved && skip !== "plan" ? `另外还差用户同意实施（${risk.reasons.join("；")}）：${planState.reason}，用户同意后运行 harness approve --branch ${branch} --yes --note "<用户原话>"` : null,
+      risk.confirmReasons.length > 0 && !confirmed && skip !== "confirm" ? `另外还差人确认高风险改动（${risk.confirmReasons.join("；")}）：harness confirm --branch ${branch}，确认无误后加 --yes` : null,
+    ].filter(Boolean);
   // 门禁改动：需要人确认过这一版内容。
   const gate = gatePaths(project).flatMap((glob) => [glob]);
   const gateTouched = resultPaths.filter((path) => matchAny(path, gate));
@@ -233,57 +248,49 @@ export async function checkGates({ project, root, branch, log = console.error, d
   // 首次接入引入的是信任根本身，不受 confirmOnGateChange 开关影响，一律要人确认；风险信号要求的确认同样不受它影响。
   const gateNeedsConfirm = bootstrap || change.changed || (governance.confirmOnGateChange !== false && gateTouched.length > 0);
   const riskNeedsConfirm = !bootstrap && risk.confirmReasons.length > 0;
-  if (gateNeedsConfirm || riskNeedsConfirm) {
-    const confirm = readRecord(root, "confirm", resultTree);
-    if (!confirm.ok || confirm.record.decision !== "approve") {
+  if (gateNeedsConfirm) {
+    const confirm = confirmRecord;
+    if (!confirmed) {
       // merge 与 submit 共用这段核对，拒绝信息按调用方说清是哪一步之前要确认。
-      const when = label === "submit" ? "提交前" : "合并前";
       const reason = bootstrap
         ? `首次接入会把这个分支里的门禁配置变成主分支的信任根，需要人在${when}确认一次。`
         : change.changed
           ? `本次改动改变了交付设置（${describeChange(change)}），需要人在${when}确认一次。`
-          : gateNeedsConfirm
-            ? `本次改动涉及门禁配置或规则(${gateTouched.length} 个文件)，需要人在${when}确认一次。`
-            : `本次改动命中高风险信号，需要人在${when}确认一次。`;
-      const listed = gateNeedsConfirm
-        ? (change.changed ? resultPaths.filter((path) => matchAny(path, [".harness/config.json"])) : gateTouched).slice(0, 12)
-        : [];
+          : `本次改动涉及门禁配置或规则(${gateTouched.length} 个文件)，需要人在${when}确认一次。`;
+      const listed = (change.changed ? resultPaths.filter((path) => matchAny(path, [".harness/config.json"])) : gateTouched).slice(0, 12);
       throw new MergeError(
         [
           reason,
           ...(listed.length > 0 ? [`  ${listed.join("\n  ")}`] : []),
-          ...risk.confirmReasons.map((item) => `  风险信号: ${item}`),
+          ...(riskNeedsConfirm ? risk.confirmReasons.map((item) => `  风险信号: ${item}`) : []),
+          ...alsoPending("confirm"),
           `由人查看并确认: harness confirm --branch ${branch}，确认无误后加 --yes`,
           "Agent 不能代为确认；在 Claude Code 里可以让用户在输入框执行 ! .harness/bin/harness confirm --branch <分支> --yes",
           `确认后重新运行 harness ${label} --branch ${branch}。`,
         ].join("\n"),
-        gateNeedsConfirm ? "gate_change_unconfirmed" : "risk_unconfirmed",
+        "gate_change_unconfirmed",
       );
     }
-    if (gateNeedsConfirm) log(`[${label}] 门禁改动已确认(确认人: ${confirm.record.by ?? "user"})`);
-    if (riskNeedsConfirm) log(`[${label}] 风险改动已确认(${risk.confirmReasons.join("；")}；确认人: ${confirm.record.by ?? "user"})`);
+    log(`[${label}] 门禁改动已确认(确认人: ${confirm.record.by ?? "user"})`);
   }
   // 方案：写了实施方案、改了库表或改动超过阈值的任务，必须有用户的实施授权记录，且授权后验收清单没有再改。
   // 实时拦截只能约束走了方案流程的任务，这里兜住没写方案就直接做了大改动的情况。
   let approval = null;
-  if (planEnforced(project.policy)) {
-    if (risk.reasons.length > 0) {
-      const acceptanceText = git(root, ["cat-file", "blob", `${branchCommit}:${acceptancePath(project, branch)}`]);
-      const state = approvalState({ root, branch, acceptanceText: acceptanceText.status === 0 ? acceptanceText.stdout : null });
-      if (!state.approved) {
-        throw new MergeError(
-          [
-            `这次改动属于先方案后实施的任务（${risk.reasons.join("；")}），没有有效的实施授权: ${state.reason}`,
-            `先向用户说明方案（验收清单 ${acceptancePath(project, branch)}、行为说明与实施方案）；用户表达开始实施的意思后，`,
-            `运行 harness approve --branch ${branch} --yes --note "<用户原话>" 记录授权，再重新运行。`,
-            "用户没有同意时不要记录授权。",
-          ].join("\n"),
-          "plan_unapproved",
-        );
-      }
-      approval = state.record.note;
-      log(`[${label}] 已有实施授权(依据: ${state.record.note})`);
+  if (needsPlan) {
+    if (!planState.approved) {
+      throw new MergeError(
+        [
+          `这次改动属于先方案后实施的任务（${risk.reasons.join("；")}），没有有效的实施授权: ${planState.reason}`,
+          `先向用户说明方案（验收清单 ${acceptancePath(project, branch)}、行为说明与实施方案）；用户表达开始实施的意思后，`,
+          `运行 harness approve --branch ${branch} --yes --note "<用户原话>" 记录授权，再重新运行。`,
+          "用户没有同意时不要记录授权。",
+          ...alsoPending("plan"),
+        ].join("\n"),
+        "plan_unapproved",
+      );
     }
+    approval = planState.record.note;
+    log(`[${label}] 已有实施授权(依据: ${planState.record.note})`);
   }
   const unresolved = unresolvedStop(root, branch, branchCommit);
   if (unresolved) log(`[${label}] 注意: 有会话在 ${unresolved.at} 没有上报阻塞就结束了（当时${unresolved.missing}），汇报时说明`);
@@ -368,6 +375,23 @@ export async function checkGates({ project, root, branch, log = console.error, d
       }
       reviewRecord = review.record;
     }
+  }
+
+  // 风险确认：证据与评审都通过之后再请人确认，确认绑定的就是这一版合并结果。
+  if (riskNeedsConfirm) {
+    if (!confirmed) {
+      throw new MergeError(
+        [
+          `本次改动命中高风险信号，验证与评审已通过，需要人在${when}确认一次。`,
+          ...risk.confirmReasons.map((item) => `  风险信号: ${item}`),
+          `由人查看并确认: harness confirm --branch ${branch}，确认无误后加 --yes`,
+          "Agent 不能代为确认；在 Claude Code 里可以让用户在输入框执行 ! .harness/bin/harness confirm --branch <分支> --yes",
+          `确认后重新运行 harness ${label} --branch ${branch}。`,
+        ].join("\n"),
+        "risk_unconfirmed",
+      );
+    }
+    log(`[${label}] 风险改动已确认(${risk.confirmReasons.join("；")}；确认人: ${confirmRecord.record.by ?? "user"})`);
   }
 
   if (dryRun) log(`[${label}] dry-run: 全部门禁通过，未更新主分支`);

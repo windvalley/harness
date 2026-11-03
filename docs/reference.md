@@ -462,6 +462,10 @@ Agent 开始任务前先判断分级，规则写在 `.harness/rules/core.md`，�
 - 要人确认的信号复用 `harness confirm`，不要求先写方案，缺确认报 `risk_unconfirmed`；它不受 `plan-first` 与 `governance.confirmOnGateChange` 影响。
 - 两类要求互不替代：同时命中时，确认不能代替授权，授权也不能代替确认。
 - 确认摘要列出命中的信号；只命中风险信号时不再显示“无需确认”。
+- 风险确认排在验证与评审之后核对，免得人确认了一份随后验证失败、改完又要重新确认的版本；门禁改动的确认仍排在最前。
+- 合并或提交被拒时，拒绝信息会一并列出其他还没满足的人工项（缺授权又缺确认时），让人一次处理完。
+- `harness verify --plan` 与 `harness verify --branch` 的输出里有 `RISK` 行，提交前就能看到命中了哪些信号，不用等到合并才发现。
+- `risk.exclude` 豁免敏感路径下的文档与测试夹具（默认 `**/*.md`、`**/testdata/**`、`**/test/**`、`**/tests/**`、`**/__tests__/**`、`**/fixtures/**`），写错形状同样按需要人确认处理。
 - 删除或重命名敏感路径下的文件同样命中。
 - 判定读主分支的配置，任务分支放宽不了自己的档位；分支改了 `risk` 或 `intent.plan` 属于门禁改动，确认摘要列出改前改后。
 - `risk` 写错形状（例如 `paths` 不是数组）时按需要人确认处理，不会静默放行。
@@ -1008,6 +1012,7 @@ node ~/github/harness/bin/harness.mjs install --local   # 按新锁定的版本�
 | `intent.plan.triggers` | `**/migrations/**`、`**/*.sql` | 库表相关文件，改了就需要实施授权 |
 | `intent.plan.exclude` | 测试、文档、锁文件与 `.harness/` | 不计入代码改动行数的文件；写了这一项会整个替换默认列表 |
 | `risk.paths` | 新项目由 `init` 写入 CI 与部署文件，没有这一项则不启用 | 敏感路径 glob；分支改动命中任何一个，合并或提交前要人确认（`risk_unconfirmed`），不受 `plan-first` 与 `confirmOnGateChange` 影响，见“风险分级” |
+| `risk.exclude` | 新项目由 `init` 写入文档与测试夹具目录 | 只豁免 `risk.paths`，不影响 `risk.deps`；放宽它是门禁改动，要人确认 |
 | `risk.deps` | 新项目由 `init` 写入各语言的锁文件与 `go.mod`、`requirements*.txt`，没有这一项则不启用 | 依赖清单 glob；命中的分支要实施授权，启用 `plan-first` 时生效，不套用 `intent.plan.exclude` |
 | `governance.confirmOnGateChange` | `true` | 门禁改动是否要人工确认；首次接入不受这个开关影响 |
 | `governance.gatePaths` | `[]` | 追加的门禁文件 glob |
@@ -1523,7 +1528,7 @@ harness 防的是 Agent 的误操作，以及被提示注入后常见的绕过�
 | `本机没有安装门禁锁定的版本` | Agent 工具调用被拦截时，由人在项目目录运行 `node ~/github/harness/bin/harness.mjs install --local`，再让 Agent 继续诊断 |
 | `gate_change_unconfirmed` | Agent 展示确认摘要；由人在自己的终端执行它给出的带 `--yes` 的确认命令 |
 | 运行 `confirm --yes` 后主分支没有新提交 | 确认只记录，不合并；告诉 Agent 已确认，让它按交付方式继续：本地交付完成合并，远程交付提交 PR/MR |
-| `risk_unconfirmed` | 改动命中了 `risk.paths` 的敏感路径；Agent 展示 `harness confirm` 摘要，由人在自己的终端执行带 `--yes` 的确认，之后让 Agent 重新运行交付命令 |
+| `risk_unconfirmed` | 改动命中了 `risk.paths` 的敏感路径，验证与评审已通过；Agent 展示 `harness confirm` 摘要，由人在自己的终端执行带 `--yes` 的确认，之后让 Agent 重新运行交付命令 |
 | `plan_unapproved` | 大改动没有实施授权记录，或授权后验收清单又改了；补齐方案并提交，向用户说明，用户同意后照录原话运行 `harness approve --branch <分支> --yes --note "<原话>"` |
 | 写代码时被 `plan-before-code` 拦截 | 任务分支里有实施方案但还没有授权记录；用户还没同意就停下等，已经同意就按上一条记录；只是借用了 `docs/changes/` 下的旧方案时，把它移出这次改动 |
 | Claude Code 提示 `Stop hook error occurred` | 收尾检查拦下了结束：Claude Code 把所有拦下结束的 `Stop` 钩子都这样提示，原因在 `Stop hook feedback` 里，Agent 会按它接着做，不是门禁出错 |

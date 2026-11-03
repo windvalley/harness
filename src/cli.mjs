@@ -19,7 +19,7 @@ import { describePlan, planReviewers, projectReviewConfig, projectReviewerNote, 
 import { reviewerCommand } from "./review/reviewers-cmd.mjs";
 import { loadLocalReviewers, reviewersFile } from "./review/reviewers.mjs";
 import { approveConfirm, confirmSummary, formatSummary } from "./confirm/confirm.mjs";
-import { approvePlan, formatPlanSummary, planSummary } from "./plan/plan.mjs";
+import { approvePlan, formatPlanSummary, planSummary, riskHints } from "./plan/plan.mjs";
 import { checkCommitMessage, checkStaged, guardReference } from "./githook.mjs";
 import { branchMessageProblems, commitRuleErrorAt } from "./policy/commit-message.mjs";
 import { answerEscalation, listEscalations, openEscalation, readEscalation, resumePlan } from "./escalate/escalate.mjs";
@@ -152,11 +152,24 @@ async function cmdVerify(argv) {
   }
   for (const item of outcome.notExecuted) lines.push(`  NOT_EXECUTED ${item.id}: ${item.reason}`);
   for (const item of outcome.advisory ?? []) lines.push(`  ADVISORY ${item.id}: ${item.hint}`);
+  if (values.branch) lines.push(...riskLines(cwd, values.branch));
   process.stderr.write(`${lines.join("\n")}\n`);
   for (const item of outcome.results.filter((entry) => entry.exit !== 0 && !entry.skipped)) {
     process.stderr.write(`\n--- ${item.id} ${item.configError ? "配置错误" : "失败输出(末尾)"} ---\n${item.tail ?? ""}\n`);
   }
   return outcome.status === "passed" ? 0 : 1;
+}
+
+function riskLines(cwd, branch) {
+  try {
+    const project = loadGateProject(cwd, { branch });
+    const root = project.root;
+    const head = resolveCommit(root, branch);
+    const base = mergeBase(root, resolveCommit(root, mainBranch(project)), head);
+    return riskHints({ root, project, base, head, branch }).map((line) => `  ${line}`);
+  } catch {
+    return [];
+  }
 }
 
 /** 只算不改：列出这次会选中哪些检查、哪些记为未执行，不执行也不写证据。 */
@@ -191,6 +204,7 @@ function cmdVerifyPlan({ cwd, branch, base, json }) {
   if (requiredUncovered.length > 0) print(`  ERR  required-paths  ${requiredUncovered.length} 个必验路径没有自动检查覆盖: ${requiredUncovered.slice(0, 10).join(", ")}`);
   else if (uncovered.length > 0) print(`  WARN uncovered  ${uncovered.length} 个改动路径没有任何检查覆盖: ${uncovered.slice(0, 10).join(", ")}`);
   for (const item of advisory) print(`  HINT ${item.id}  ${item.hint}`);
+  for (const line of riskHints({ root, project, base: baseOfHead, head, branch })) print(`  ${line}`);
   return status;
 }
 

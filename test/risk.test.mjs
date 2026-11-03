@@ -94,22 +94,104 @@ describe("风险分级", () => {
     assert.equal(merged.status, 0, merged.stderr);
   });
 
-  test("T1 与 T2 取并集：确认不能替代授权", () => {
+  test("T1 与 T2 取并集：确认不能替代授权，授权也不能替代确认", () => {
     const repo = setup();
     const branch = "feat/both";
     repo.branch(branch, { "src/big.js": code(10), [WORKFLOW]: "name: ci\n", [acceptanceOf(branch)]: "- 大改动\n" });
     const first = landed(repo, branch);
-    assert.match(first.stderr, /risk_unconfirmed/);
-    assert.equal(repo.cli("confirm", "--branch", branch, "--yes").status, 0);
+    assert.match(first.stderr, /plan_unapproved/);
 
+    assert.equal(repo.cli("confirm", "--branch", branch, "--yes").status, 0);
     const second = repo.cli("merge", "--branch", branch);
     assert.notEqual(second.status, 0);
     assert.match(second.stderr, /plan_unapproved/, "确认之后仍然需要实施授权");
+    assert.doesNotMatch(second.stderr, /另外还差人确认/, "已确认的不再重复提示");
+
     assert.equal(repo.cli("approve", "--branch", branch, "--yes", "--note", QUOTE).status, 0);
     const merged = repo.cli("merge", "--branch", branch);
     assert.equal(merged.status, 0, merged.stderr);
     assert.match(merged.stderr, /已有实施授权/);
     assert.match(merged.stderr, /风险改动已确认/);
+  });
+
+  test("只有授权没有确认时，验证评审通过后仍报 risk_unconfirmed", () => {
+    const repo = setup();
+    const branch = "feat/both3";
+    repo.branch(branch, { "src/big.js": code(10), [WORKFLOW]: "name: ci\n", [acceptanceOf(branch)]: "- 大改动\n" });
+    landed(repo, branch);
+    assert.equal(repo.cli("approve", "--branch", branch, "--yes", "--note", QUOTE).status, 0);
+    const refused = repo.cli("merge", "--branch", branch);
+    assert.notEqual(refused.status, 0);
+    assert.match(refused.stderr, /risk_unconfirmed/);
+    assert.match(refused.stderr, /验证与评审已通过/);
+  });
+
+  test("同时缺授权和确认时一次说全，先授权后确认各自满足才放行", () => {
+    const repo = setup();
+    const branch = "feat/both2";
+    repo.branch(branch, { "src/big.js": code(10), [WORKFLOW]: "name: ci\n", [acceptanceOf(branch)]: "- 大改动\n" });
+    const refused = landed(repo, branch);
+    assert.notEqual(refused.status, 0);
+    assert.match(refused.stderr, /plan_unapproved/);
+    assert.match(refused.stderr, /另外还差人确认高风险改动.*harness confirm --branch feat\/both2/s, "授权被拒时同时说明还差确认");
+    const status = repo.cli("status", "--branch", branch).stdout;
+    assert.match(status, /待实施授权/);
+    assert.match(status, /风险改动待确认/);
+  });
+
+  test("验证失败时不先请人确认风险改动", () => {
+    const repo = setup();
+    repo.branch("feat/ci-bad", { [WORKFLOW]: "name: ci\n" });
+    fakeReviewer(repo, APPROVE);
+    const refused = repo.cli("merge", "--branch", "feat/ci-bad", "--dry-run");
+    assert.notEqual(refused.status, 0);
+    assert.doesNotMatch(refused.stderr, /risk_unconfirmed/, "还没有评审记录时不该先问人");
+  });
+
+  test("risk.exclude 里的路径不算敏感，只改它们的分支自动放行", () => {
+    const repo = setup({ risk: { ...RISK, exclude: ["deploy/**/*.md", "**/testdata/**"] } });
+    repo.branch("docs/deploy", { "deploy/README.md": "说明\n", "pkg/testdata/Dockerfile": "FROM x\n" });
+    const merged = landed(repo, "docs/deploy");
+    assert.equal(merged.status, 0, merged.stderr);
+
+    repo.branch("feat/deploy", { "deploy/run.sh": "echo\n", "deploy/README.md": "改\n" });
+    const refused = landed(repo, "feat/deploy");
+    assert.notEqual(refused.status, 0);
+    assert.match(refused.stderr, /risk_unconfirmed/);
+    assert.match(refused.stderr, /deploy\/run\.sh/);
+    assert.doesNotMatch(refused.stderr, /deploy\/README\.md/, "被排除的文件不进风险信号");
+  });
+
+  test("risk.exclude 写错形状时按需要人确认处理", () => {
+    const repo = setup({ risk: { ...RISK, exclude: "deploy/**" } });
+    repo.branch("feat/small", { "src/a.js": code(2) });
+    const refused = landed(repo, "feat/small");
+    assert.notEqual(refused.status, 0);
+    assert.match(refused.stderr, /风险配置无效/);
+  });
+
+  test("verify --plan 与 verify 在交付之前就提示命中的风险信号", () => {
+    const repo = setup();
+    const branch = "fix/tidy";
+    repo.branch(branch, { "src/a.js": code(2), "package-lock.json": "{}\n", [WORKFLOW]: "name: ci\n" });
+    const plan = repo.cli("verify", "--plan", "--branch", branch);
+    assert.equal(plan.status, 0, plan.stderr);
+    assert.match(plan.stdout, /RISK 要实施授权: 依赖清单变化 package-lock\.json/);
+    assert.match(plan.stdout, /RISK 要人确认: 敏感路径 \.github\/workflows\/ci\.yml/);
+    assert.match(plan.stdout, /harness approve --branch fix\/tidy/);
+
+    fakeReviewer(repo, APPROVE);
+    const verified = repo.cli("verify", "--branch", branch);
+    assert.equal(verified.status, 0, verified.stderr);
+    assert.match(verified.stderr, /RISK 要实施授权: 依赖清单变化 package-lock\.json/);
+    assert.match(verified.stderr, /RISK 要人确认/);
+  });
+
+  test("没有命中风险信号时 verify 不输出 RISK 行", () => {
+    const repo = setup();
+    repo.branch("fix/small", { "src/a.js": code(2) });
+    const plan = repo.cli("verify", "--plan", "--branch", "fix/small");
+    assert.doesNotMatch(plan.stdout, /RISK/);
   });
 
   test("没有 risk 配置的项目行为不变", () => {

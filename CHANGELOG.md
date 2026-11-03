@@ -13,6 +13,9 @@
   判定读主分支的配置；配置写错形状按需要人确认处理；删除或重命名敏感路径下的文件同样命中。
   `harness confirm` 的摘要列出命中的风险信号，并列出 `risk` 与 `intent.plan` 的改前改后；`harness status` 多一行 `risk`；PR/MR 描述写明风险确认。
   没有 `risk` 配置的项目行为不变，`init` 给新项目写入默认值：CI 与部署文件为敏感路径，各语言锁文件与 `go.mod`、`requirements*.txt` 为依赖清单。
+  新增 `risk.exclude`，只豁免敏感路径下的文档与测试夹具，不影响依赖清单。
+  风险确认排在验证与评审之后核对，门禁改动的确认仍在最前；缺授权又缺确认时，拒绝信息一次列出全部人工项。
+  `harness verify --plan` 与 `harness verify --branch` 的输出新增 `RISK` 行，提交前就能看到命中的信号。
 - `harness doctor` 新增 `project:extended` 一项：列出所有 `extended` 检查，提示它们永远记为未执行、依赖它们的验收只能手工补验；缺 `reason` 或 `howToVerify` 的报 `[!!]`。
   以前这样的检查不会被发现，评审只在证据里看到一条没有补验方式的“未执行”。
 
