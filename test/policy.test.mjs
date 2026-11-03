@@ -43,6 +43,25 @@ function tmpRoot(files = {}) {
 const decide = (call, context = {}) => evaluateCall({ policy: resolved, root: tmpRoot(), call, context });
 const denies = (call, context) => decide(call, context).decision === "deny";
 
+describe("人工确认命令不能靠引号绕过", () => {
+  const forbidden = [
+    '.harness/bin/harness "confirm" --branch task/x --yes',
+    ".harness/bin/harness 'confirm' --branch task/x --yes",
+    '.harness/bin/harness conf"irm" --branch task/x --yes',
+    '.harness/bin/harness confirm --branch task/x "--yes"',
+    '.harness/bin/harness "key" rotate --yes',
+    ".harness/bin/harness key 'rotate' \\--yes",
+  ];
+  for (const command of forbidden) {
+    test(command, () => assert.equal(decide({ kind: "shell", command }).decision, "deny"));
+  }
+
+  test("只读摘要与引号里提到命令的提交信息不受影响", () => {
+    assert.equal(decide({ kind: "shell", command: '.harness/bin/harness "confirm" --branch task/x' }).decision, "allow");
+    assert.equal(decide({ kind: "shell", command: ".harness/bin/harness status --branch task/x" }).decision, "allow");
+  });
+});
+
 describe("预设解析", () => {
   test("三个预设都能加载且每条规则都有 id、reason、fix", () => {
     for (const id of ["secrets", "git-safety", "gate-self"]) {

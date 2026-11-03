@@ -318,10 +318,11 @@ export function evaluateShell({ policy, command, context = {}, cwd, locate }) {
     for (const target of targets) {
       for (const pattern of rule.patterns ?? []) {
         const re = new RegExp(pattern);
-        // 整串规则看原文；逐段规则忽略引号内文字，避免提交信息提到被禁命令时误拦。
+        // 整串规则看原文，也看去掉引号与反斜杠后的写法，防止 harness "confirm" --yes 这类拆写绕过；
+        // 逐段规则忽略引号内文字，避免提交信息提到被禁命令时误拦。
         const hit =
           rule.scope === "whole"
-            ? re.test(target.raw)
+            ? re.test(target.raw) || re.test(target.raw.replace(/["'\\]/g, ""))
             : re.test(maskQuoted(target.raw)) || re.test(maskQuoted(target.norm));
         if (hit) return deny(rule, unsure(target) ? `${target.raw}（${UNKNOWN_PLACE_NOTE}）` : target.raw);
       }

@@ -9,6 +9,11 @@
 - `harness doctor` 新增 `project:extended` 一项：列出所有 `extended` 检查，提示它们永远记为未执行、依赖它们的验收只能手工补验；缺 `reason` 或 `howToVerify` 的报 `[!!]`。
   以前这样的检查不会被发现，评审只在证据里看到一条没有补验方式的“未执行”。
 
+### 修复
+
+- 命令规则对整串命令的匹配现在也看去掉引号与反斜杠后的写法：`harness "confirm" --branch x --yes`、`harness conf"irm" --yes` 一类拆写以前能绕过 `confirm-human-only` 与 `key-rotate-human-only`，现在会被拦下。
+  内置黄金任务 `g15` 新增了这一步。
+
 ### 变更
 
 - 接入规则要求项目规定的验证命令先在基线提交上试跑：能通过的配成带 `cmd` 的 `gate`，基线上就失败的作为基线问题报给用户，不再静默留成 `extended`。
