@@ -28,6 +28,7 @@ import { answerEscalation, listEscalations, openEscalation, readEscalation, resu
 import { runGolden } from "./golden/golden.mjs";
 import { computeMetrics, formatMetrics } from "./golden/metrics.mjs";
 import { initProject, upgradeProject } from "./install/init.mjs";
+import { unconfiguredOptions } from "./install/optional.mjs";
 import { uninstall } from "./install/uninstall.mjs";
 import { branchStatus, formatStatus } from "./status.mjs";
 import { stopCheck } from "./stop/stop.mjs";
@@ -913,6 +914,11 @@ export async function main(argv) {
           print("  是自己改过的就保留；只是旧版本的拷贝就从 tasks.json 删掉，改用内置版本。");
         }
         if (result.shim.hooksPath) print(`  ${formatHooksPath(result.shim.hooksPath)}`);
+        const missing = unconfiguredOptions(result.root);
+        if (missing.length > 0) {
+          print("尚未配置的可选项（upgrade 不改 config.json 与 verify.json，要启用就在任务分支里加，门禁文件改动需要人确认）:");
+          for (const text of missing) print(`  - ${text}`);
+        }
         return 0;
       }
       case "doctor": {

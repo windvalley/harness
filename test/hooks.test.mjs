@@ -858,3 +858,38 @@ describe("版本管理", () => {
     assert.match(dry.stdout, /0\.0\.9/);
   });
 });
+
+describe("升级时列出尚未配置的可选项", () => {
+  test("缺哪项列哪项，并区分只记录与会拦截，不改任何配置文件", () => {
+    const repo = setup();
+    const before = ["config.json", "verify.json"].map((name) => readFileSync(join(repo.root, ".harness", name), "utf8"));
+    const result = repo.cli("upgrade");
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /尚未配置的可选项/);
+    assert.match(result.stdout, /risk.*observe.*只记录/s);
+    assert.match(result.stdout, /testFirst.*observe/s);
+    assert.match(result.stdout, /coverage.*observe/s);
+    assert.match(result.stdout, /requiredPaths.*直接拦截/s);
+    const after = ["config.json", "verify.json"].map((name) => readFileSync(join(repo.root, ".harness", name), "utf8"));
+    assert.deepEqual(after, before);
+  });
+
+  test("已配置的项不再列出，全部配置时不输出这一段", () => {
+    const repo = setup();
+    const config = JSON.parse(readFileSync(join(repo.root, ".harness/config.json"), "utf8"));
+    const verify = JSON.parse(readFileSync(join(repo.root, ".harness/verify.json"), "utf8"));
+    write(repo.root, ".harness/config.json", `${JSON.stringify({ ...config, risk: { mode: "observe", paths: [], deps: [] } })}\n`);
+    write(repo.root, ".harness/verify.json", `${JSON.stringify({ ...verify, testFirst: {}, coverage: {} })}\n`);
+    const partial = repo.cli("upgrade");
+    assert.equal(partial.status, 0, partial.stderr);
+    assert.match(partial.stdout, /requiredPaths/);
+    assert.doesNotMatch(partial.stdout, /risk[^\n]*observe/);
+    assert.doesNotMatch(partial.stdout, /testFirst/);
+    assert.doesNotMatch(partial.stdout, /coverage/);
+
+    write(repo.root, ".harness/verify.json", `${JSON.stringify({ ...verify, testFirst: {}, coverage: {}, requiredPaths: { match: ["src/**"] } })}\n`);
+    const full = repo.cli("upgrade");
+    assert.equal(full.status, 0, full.stderr);
+    assert.doesNotMatch(full.stdout, /尚未配置的可选项/);
+  });
+});
