@@ -69,7 +69,10 @@ export function userSettingsFile(home = homedir()) {
   return existsSync(file) ? file : "";
 }
 
-export function reviewerArgs({ model, maxBudgetUsd, effort }, settingsFile = "") {
+// 评审档位：代码评审只看材料，方案评审允许读仓库，两者的 schema、提示词与工具参数都不同。
+const CODE_PROFILE = { schema: REVIEW_SCHEMA, system: SYSTEM_PROMPT, tools: [], parse: (structured) => parseVerdict(structured) };
+
+export function reviewerArgs({ model, maxBudgetUsd, effort }, settingsFile = "", profile = CODE_PROFILE) {
   return [
     "-p",
     "--no-session-persistence",
@@ -77,14 +80,13 @@ export function reviewerArgs({ model, maxBudgetUsd, effort }, settingsFile = "")
     "--setting-sources",
     "",
     ...(settingsFile ? ["--settings", settingsFile] : []),
-    "--tools",
-    "",
+    ...(profile.tools.length > 0 ? profile.tools : ["--tools", ""]),
     "--output-format",
     "json",
     "--json-schema",
-    JSON.stringify(REVIEW_SCHEMA),
+    JSON.stringify(profile.schema),
     "--system-prompt",
-    SYSTEM_PROMPT,
+    profile.system,
     "--model",
     model,
     ...(effort ? ["--effort", effort] : []),
@@ -231,7 +233,7 @@ const PROVIDER_SWITCHES = [
   "CLAUDE_CODE_USE_MANTLE",
 ];
 
-function runClaude({ cwd, prompt, entry, bin }) {
+function runClaude({ cwd, prompt, entry, bin, profile = CODE_PROFILE }) {
   const scratch = entry.baseUrl ? mkdtempSync(join(tmpdir(), "harness-review-")) : null;
   try {
     const env = { ...process.env };
@@ -251,7 +253,7 @@ function runClaude({ cwd, prompt, entry, bin }) {
       );
       env[KEY_ENV] = entry.apiKey;
     }
-    const result = run(bin, reviewerArgs({ model: entry.model, maxBudgetUsd: entry.maxBudgetUsd, effort: entry.effort }, settingsFile), {
+    const result = run(bin, reviewerArgs({ model: entry.model, maxBudgetUsd: entry.maxBudgetUsd, effort: entry.effort }, settingsFile, profile), {
       cwd,
       input: prompt,
       timeout: timeoutMs(entry),
@@ -274,20 +276,22 @@ function runClaude({ cwd, prompt, entry, bin }) {
   }
 }
 
-// codex 与通用命令都在空的临时目录里运行：评审只依据给出的材料，不读项目文件，也不加载项目里的钩子与规则。
-function withScratch(fn) {
+// codex 与通用命令都在空的临时目录里运行：代码评审只依据给出的材料，不读项目文件，也不加载项目里的钩子与规则。
+// 方案评审把材料放在提示里，这一层仍然不接触仓库。
+function withScratch(fn, profile = CODE_PROFILE) {
   const dir = mkdtempSync(join(tmpdir(), "harness-review-"));
   try {
-    writeFileSync(join(dir, "schema.json"), JSON.stringify(strictSchema(REVIEW_SCHEMA), null, 2));
-    writeFileSync(join(dir, "system.md"), SYSTEM_PROMPT);
+    writeFileSync(join(dir, "schema.json"), JSON.stringify(strictSchema(profile.schema), null, 2));
+    writeFileSync(join(dir, "system.md"), profile.system);
     return fn({ dir, schema: join(dir, "schema.json"), system: join(dir, "system.md"), output: join(dir, "output.json") });
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 }
 
-function runCodex({ prompt, entry, bin }) {
+function runCodex({ prompt, entry, bin, profile = CODE_PROFILE }) {
   return withScratch(({ dir, schema, output }) => {
+
     const args = [
       "exec",
       "--ephemeral",
@@ -306,15 +310,15 @@ function runCodex({ prompt, entry, bin }) {
       ...(entry.effort ? ["-c", `model_reasoning_effort="${entry.effort}"`] : []),
       "-",
     ];
-    const result = run(bin, args, { cwd: dir, input: `${SYSTEM_PROMPT}\n\n${prompt}`, timeout: timeoutMs(entry) });
+    const result = run(bin, args, { cwd: dir, input: `${profile.system}\n\n${prompt}`, timeout: timeoutMs(entry) });
     ensureNotTimedOut(result, entry);
     ensureOk(result, bin);
     if (!existsSync(output)) throw new Error("codex 没有写出评审结果");
     return { structured: dropNulls(extractJson(readFileSync(output, "utf8"))), costUsd: null, models: [] };
-  });
+  }, profile);
 }
 
-function runCommand({ prompt, entry }) {
+function runCommand({ prompt, entry, profile = CODE_PROFILE }) {
   return withScratch((files) => {
     const argv = entry.command;
     const usesOutput = argv.some((arg) => arg.includes("{output}"));
@@ -328,19 +332,19 @@ function runCommand({ prompt, entry }) {
       ...(entry.effort ? { HARNESS_REVIEW_EFFORT: entry.effort } : {}),
       ...(entry.model ? { HARNESS_REVIEW_MODEL: entry.model } : {}),
     };
-    const result = run(cmd, args, { cwd: files.dir, input: `${SYSTEM_PROMPT}\n\n${prompt}`, timeout: timeoutMs(entry), env });
+    const result = run(cmd, args, { cwd: files.dir, input: `${profile.system}\n\n${prompt}`, timeout: timeoutMs(entry), env });
     ensureNotTimedOut(result, entry);
     ensureOk(result, cmd);
     const text = usesOutput && existsSync(files.output) ? readFileSync(files.output, "utf8") : result.stdout;
     const payload = extractJson(text);
     return { structured: dropNulls(payload.structured_output ?? payload), costUsd: payload.total_cost_usd ?? null, models: [] };
-  });
+  }, profile);
 }
 
-function runEntry({ cwd, prompt, entry }) {
-  if (entry.client === "claude") return runClaude({ cwd, prompt, entry, bin: entry.bin });
-  if (entry.client === "codex") return runCodex({ prompt, entry, bin: entry.bin });
-  return runCommand({ prompt, entry });
+function runEntry({ cwd, prompt, entry, profile = CODE_PROFILE }) {
+  if (entry.client === "claude") return runClaude({ cwd, prompt, entry, bin: entry.bin, profile });
+  if (entry.client === "codex") return runCodex({ prompt, entry, bin: entry.bin, profile });
+  return runCommand({ prompt, entry, profile });
 }
 
 // 没有本机文件时按项目里的旧字段运行，只有一个评审者，行为和以前一致。
@@ -409,7 +413,7 @@ function inheritedSecrets(env = process.env) {
   return [env.ANTHROPIC_AUTH_TOKEN, env.ANTHROPIC_API_KEY, env[KEY_ENV]].filter((value) => typeof value === "string" && value.length >= 8);
 }
 
-export function runReviewer({ cwd, prompt, config = {}, log = () => {}, plan = planReviewers(config) }) {
+export function runReviewer({ cwd, prompt, config = {}, log = () => {}, plan = planReviewers(config), profile = CODE_PROFILE }) {
   log(`[review] 评审者（${plan.source === "local" ? `本机文件 ${plan.file}` : "项目配置"}）: ${describePlan(plan)}`);
   const attempts = [];
   for (const entry of plan.candidates) {
@@ -420,9 +424,9 @@ export function runReviewer({ cwd, prompt, config = {}, log = () => {}, plan = p
     }
     const started = Date.now();
     try {
-      const outcome = runEntry({ cwd, prompt, entry });
+      const outcome = runEntry({ cwd, prompt, entry, profile });
       // 给出结论（通过或拒绝）就停；输出不符合结构按失败处理，换下一个。
-      const structured = parseVerdict(outcome.structured);
+      const structured = profile.parse(outcome.structured);
       attempts.push({ name: entry.name, outcome: "done" });
       const inherited = entry.client === "claude" && !entry.baseUrl ? process.env.ANTHROPIC_BASE_URL : null;
       return {

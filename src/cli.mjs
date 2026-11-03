@@ -21,6 +21,7 @@ import { reviewerCommand } from "./review/reviewers-cmd.mjs";
 import { loadLocalReviewers, reviewersFile } from "./review/reviewers.mjs";
 import { approveConfirm, confirmSummary, formatSummary } from "./confirm/confirm.mjs";
 import { approvePlan, formatPlanSummary, planSummary, riskHints } from "./plan/plan.mjs";
+import { reviewPlan } from "./plan/planreview.mjs";
 import { checkCommitMessage, checkStaged, guardReference } from "./githook.mjs";
 import { branchMessageProblems, commitRuleErrorAt } from "./policy/commit-message.mjs";
 import { answerEscalation, listEscalations, openEscalation, readEscalation, resumePlan } from "./escalate/escalate.mjs";
@@ -45,6 +46,7 @@ const USAGE = `harness <命令> [参数]
 工程流程
   verify   [--head <ref>] [--base <ref>] [--branch <名称>] [--no-reuse] [--plan]   对分支验证并写签名证据；--plan 只列出会执行的检查
   review   --branch <名称>                          独立评审
+  review-plan --branch <名称> [--all]               方案评审：只给建议，不是门禁；默认只展示 high 及以上，--all 展示全部
   status   --branch <名称>                           只读汇总：还差哪几步才能合并
   confirm  --branch <名称> [--yes]                   查看门禁改动；--yes 记录人工确认
   approve  --branch <名称> [--yes --note <原话>]     查看任务方案；用户同意实施后加 --yes，--note 照录用户原话
@@ -265,6 +267,23 @@ async function cmdReview(argv) {
     return record.verdict === "approve" ? 0 : 1;
   } catch (error) {
     process.stderr.write(`评审失败: ${error.message}\n`);
+    return 1;
+  }
+}
+
+// 方案评审是建议性的：评审者不可用或结果不可信时只说明原因，不影响分支，也不阻塞方案交付。
+function cmdReviewPlan(argv) {
+  const { values } = parseArgs({ args: argv, options: { branch: { type: "string" }, all: { type: "boolean", default: false } } });
+  if (!values.branch) {
+    process.stderr.write("用法: harness review-plan --branch <名称> [--all]\n");
+    return 2;
+  }
+  try {
+    const { text } = reviewPlan({ cwd: process.cwd(), branch: values.branch, all: values.all, log: (line) => process.stderr.write(`${line}\n`) });
+    process.stderr.write(`${text}\n`);
+    return 0;
+  } catch (error) {
+    process.stderr.write(`方案评审失败: ${error.message}\n`);
     return 1;
   }
 }
@@ -940,6 +959,8 @@ export async function main(argv) {
         return cmdVerify(rest);
       case "review":
         return cmdReview(rest);
+      case "review-plan":
+        return cmdReviewPlan(rest);
       case "merge":
         return cmdMerge(rest);
       case "submit":
