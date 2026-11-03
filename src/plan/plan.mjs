@@ -39,27 +39,13 @@ export function planSettings(config) {
 
 // 风险信号：paths 命中要人确认（T2），deps 命中要实施授权（T1，启用 plan-first 时生效）。
 // mode: enforce（默认）按上面执行；observe 只记录命中的信号、不拦截，用来在真实项目里先看误报再决定要不要执行。
-// exclude 只豁免 paths：测试夹具、说明文档放在敏感目录里不该要人确认；deps 不受它影响，免得把锁文件漏掉。
+// exclude 只豁免 paths：测试夹具、说明文档放在敏感目录里不该要人确认；deps 不受它影响，免得项目自己加进去的依赖清单被误豁免。
 // 配置里没有 risk 就都不启用，已接入项目升级后行为不变；init 给新项目写入下面的默认值。
-// deps 只放锁文件与不带锁的清单，不放 package.json：只改 scripts 不是依赖变化，真正的依赖变化一定会改锁文件。
+// 默认 deps 只放声明依赖的清单：锁文件常被 npm install、go mod tidy 顺带改动，package.json 里还有 scripts 等无关字段，默认都不放；项目确有需要时自己加。
 export const RISK_DEFAULTS = {
   paths: [".github/workflows/**", ".gitlab-ci.yml", ".circleci/**", "**/Jenkinsfile", "**/Dockerfile", "deploy/**"],
   exclude: ["**/*.md", "**/testdata/**", "**/test/**", "**/tests/**", "**/__tests__/**", "**/fixtures/**"],
-  deps: [
-    "**/go.mod",
-    "**/go.sum",
-    "**/package-lock.json",
-    "**/npm-shrinkwrap.json",
-    "**/pnpm-lock.yaml",
-    "**/yarn.lock",
-    "**/bun.lock",
-    "**/requirements*.txt",
-    "**/poetry.lock",
-    "**/uv.lock",
-    "**/Cargo.lock",
-    "**/Gemfile.lock",
-    "**/composer.lock",
-  ],
+  deps: ["**/go.mod", "**/requirements*.txt", "**/Pipfile", "**/Gemfile"],
 };
 
 /** 读取风险配置；形状不对时返回 error，由调用方按需要人确认处理（出错就按最严处理）。 */

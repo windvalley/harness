@@ -252,6 +252,24 @@ describe("风险分级", () => {
     assert.match(landed(strict, "feat/ci").stderr, /risk_unconfirmed/);
   });
 
+  test("init 给新项目的默认：先观察不拦截，依赖只认声明依赖的清单，不含锁文件与 package.json", () => {
+    const repo = makeRepo({
+      install: false,
+      project: { ".harness/config.json": null, ".harness/policy.json": null, ".harness/verify.json": null },
+    });
+    repos.push(repo);
+    const init = repo.rawCli("init");
+    assert.equal(init.status, 0, init.stderr + init.stdout);
+    const { risk } = JSON.parse(readFileSync(join(repo.root, ".harness/config.json"), "utf8"));
+    assert.equal(risk.mode, "observe");
+    assert.ok(risk.paths.includes(".github/workflows/**"));
+    assert.ok(risk.deps.includes("**/go.mod"));
+    assert.ok(risk.deps.includes("**/requirements*.txt"));
+    for (const name of ["package-lock.json", "pnpm-lock.yaml", "yarn.lock", "go.sum", "Cargo.lock", "package.json"]) {
+      assert.ok(!risk.deps.some((glob) => glob.endsWith(`/${name}`) || glob === name), `${name} 不该在默认依赖清单里`);
+    }
+  });
+
   test("没有 risk 配置的项目行为不变", () => {
     const repo = setup({ risk: null });
     repo.branch("feat/ci", { [WORKFLOW]: "name: ci\n", "package-lock.json": "{}\n" });
