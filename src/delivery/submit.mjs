@@ -277,7 +277,7 @@ export async function submitTask({ cwd, branch, log = console.error }) {
     requestId: request.id,
     createdAt: new Date().toISOString(),
   });
-  appendLedger(root, { event: "submit.ready", branch, head: branchCommit, url: request.url, pushed });
+  appendLedger(root, { event: "submit.ready", branch, head: branchCommit, url: request.url, pushed, riskObserved: gates.risk.observed });
   if (openedByBranch) log(`[submit] 本分支开启了远程交付（${describeDelivery(settings)}），确认记录已存在`);
 
   return {

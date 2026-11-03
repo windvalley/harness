@@ -469,6 +469,10 @@ Agent 开始任务前先判断分级，规则写在 `.harness/rules/core.md`，�
 - 删除或重命名敏感路径下的文件同样命中。
 - 判定读主分支的配置，任务分支放宽不了自己的档位；分支改了 `risk` 或 `intent.plan` 属于门禁改动，确认摘要列出改前改后。
 - `risk` 写错形状（例如 `paths` 不是数组）时按需要人确认处理，不会静默放行。
+- 观察模式（`risk.mode: "observe"`）：`risk.paths` 与 `risk.deps` 命中的信号只记录、不拦截。
+  记录在 `harness status` 的 `risk` 一行、`verify` 输出的 `RISK 观察` 行、`confirm` 摘要、合并与提交的日志里，以及账本 `merge` 与 `submit.ready` 事件的 `riskObserved` 字段，之后可以统计命中频率。
+  观察模式只管 `risk` 里的两类信号，代码行数、库表、方案文件这些原有要求照常执行。
+  已接入的项目想先试用，在任务分支里加上 `risk` 并写 `"mode": "observe"`；确认误报可以接受后，把 `mode` 改成 `enforce`，两次改动都是门禁改动，要人确认。
 - `harness status` 在配置了 `risk` 的项目里多一行 `risk`，`harness submit` 写进 PR/MR 描述的门禁结果里有“风险确认”一行。
 - 没有 `risk` 配置的项目行为不变；`init` 只给新项目写默认值，已接入项目要启用就在任务分支里加上这一项，它本身是门禁改动，要人确认。
 - `risk.deps` 默认不包含 `package.json`，只改 `scripts` 不算依赖变化，真正的依赖变化一定会改锁文件。
@@ -1012,6 +1016,7 @@ node ~/github/harness/bin/harness.mjs install --local   # 按新锁定的版本�
 | `intent.plan.triggers` | `**/migrations/**`、`**/*.sql` | 库表相关文件，改了就需要实施授权 |
 | `intent.plan.exclude` | 测试、文档、锁文件与 `.harness/` | 不计入代码改动行数的文件；写了这一项会整个替换默认列表 |
 | `risk.paths` | 新项目由 `init` 写入 CI 与部署文件，没有这一项则不启用 | 敏感路径 glob；分支改动命中任何一个，合并或提交前要人确认（`risk_unconfirmed`），不受 `plan-first` 与 `confirmOnGateChange` 影响，见“风险分级” |
+| `risk.mode` | `enforce` | `enforce` 按下面两项执行；`observe` 只记录命中的信号、不拦截，用来在真实项目里先观察误报；写错值按需要人确认处理 |
 | `risk.exclude` | 新项目由 `init` 写入文档与测试夹具目录 | 只豁免 `risk.paths`，不影响 `risk.deps`；放宽它是门禁改动，要人确认 |
 | `risk.deps` | 新项目由 `init` 写入各语言的锁文件与 `go.mod`、`requirements*.txt`，没有这一项则不启用 | 依赖清单 glob；命中的分支要实施授权，启用 `plan-first` 时生效，不套用 `intent.plan.exclude` |
 | `governance.confirmOnGateChange` | `true` | 门禁改动是否要人工确认；首次接入不受这个开关影响 |

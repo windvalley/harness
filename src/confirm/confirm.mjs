@@ -27,7 +27,7 @@ export function confirmSummary({ cwd, branch }) {
   const ruleDiff = describeRuleDiff({ root, mainCommit: planned.mainCommit, resultCommit: planned.resultCommit });
   const checkDiff = describeCheckDiff({ root, project, mainCommit: planned.mainCommit, resultCommit: planned.resultCommit });
   const assessed = assessRisk({ root, project, base: mergeBase(root, planned.mainCommit, planned.branchCommit), head: planned.branchCommit });
-  const risk = { tier: assessed.tier, confirm: assessed.confirmReasons, approve: assessed.reasons };
+  const risk = { tier: assessed.tier, confirm: assessed.confirmReasons, approve: assessed.reasons, observed: assessed.observed };
   const riskConfig = describeRiskConfigChange({ root, mainCommit: planned.mainCommit, resultCommit: planned.resultCommit });
 
   return {
@@ -256,6 +256,7 @@ export function formatSummary(summary) {
     lines.push(`风险分级: T1（要实施授权，不要求人工确认）`);
   }
   if (summary.risk.confirm.length > 0 && summary.risk.approve.length > 0) lines.push(`  另有要实施授权的信号: ${summary.risk.approve.join("；")}`);
+  if (summary.risk.observed.length > 0) lines.push(`风险观察（不拦截）: ${summary.risk.observed.join("；")}`);
   if (summary.gateTouched.length === 0 && summary.risk.confirm.length === 0) lines.push("本次没有改动门禁文件，也没有命中高风险信号，无需确认。");
   return lines.join("\n");
 }

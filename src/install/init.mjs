@@ -28,8 +28,8 @@ function defaultConfig({ mainBranch }) {
     // plan：任务分级的机械判定，plan-first 预设据此要求先有实施授权；exclude 里的文件不计入代码改动行数。
     intent: { mode: "checklist", dir: "acceptance", plan: planSettings({}) },
     governance: { confirmOnGateChange: true, gatePaths: [] },
-    // risk：机械风险信号。paths 命中的改动合并前要人确认，exclude 豁免其中的文档与测试夹具；deps 命中的改动要实施授权（plan-first 预设生效时）。按项目补充路径。
-    risk: { paths: [...RISK_DEFAULTS.paths], deps: [...RISK_DEFAULTS.deps], exclude: [...RISK_DEFAULTS.exclude] },
+    // risk：机械风险信号。paths 命中的改动合并前要人确认，exclude 豁免其中的文档与测试夹具；deps 命中的改动要实施授权（plan-first 预设生效时）。按项目补充路径；mode 改成 observe 时只记录命中、不拦截。
+    risk: { mode: "enforce", paths: [...RISK_DEFAULTS.paths], deps: [...RISK_DEFAULTS.deps], exclude: [...RISK_DEFAULTS.exclude] },
     escalate: {
       triggers: ["需求有歧义且会改变行为或权限", "必要验证被既有问题阻塞", "涉及推送、远程 MR、部署或生产操作", "同一个问题连续三轮没有解决"],
     },

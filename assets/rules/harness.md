@@ -145,7 +145,7 @@ harness 保证它提交的 PR/MR 通过了本机门禁；平台上最终合入�
 
 ## 风险确认
 
-`.harness/config.json` 的 `risk.paths` 列出敏感路径（接入时默认放 CI 与部署文件，项目按需补充），`risk.exclude` 豁免其中的文档与测试夹具。
+`.harness/config.json` 的 `risk.paths` 列出敏感路径（接入时默认放 CI 与部署文件，项目按需补充），`risk.exclude` 豁免其中的文档与测试夹具；`risk.mode` 为 `observe` 时命中的信号只记录、不拦截，`RISK 观察` 行与 `status` 里的 `risk` 一行照常显示，不需要为它停下或找人确认。
 分支改动命中其中任何一个时，合并或提交前必须有人的确认记录，缺少时报 `risk_unconfirmed`，不要求先写方案。
 
 - 提交后运行 `harness verify --plan --branch <任务分支>` 或 `harness verify` 时，输出里的 `RISK` 行会提前告诉你命中了哪些信号；要实施授权的，趁早补方案或把改动拆小，不要等到合并才发现。

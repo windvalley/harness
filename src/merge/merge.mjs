@@ -377,6 +377,8 @@ export async function checkGates({ project, root, branch, log = console.error, d
     }
   }
 
+  if (risk.observed.length > 0) log(`[${label}] 风险观察（不拦截）: ${risk.observed.join("；")}`);
+
   // 风险确认：证据与评审都通过之后再请人确认，确认绑定的就是这一版合并结果。
   if (riskNeedsConfirm) {
     if (!confirmed) {
@@ -410,7 +412,7 @@ export async function checkGates({ project, root, branch, log = console.error, d
     evidence: evidenceRecord,
     review: reviewRecord,
     approval,
-    risk: { tier: risk.tier, confirmReasons: risk.confirmReasons },
+    risk: { tier: risk.tier, confirmReasons: risk.confirmReasons, observed: risk.observed },
     dryRun,
   };
 }
@@ -551,7 +553,7 @@ export async function mergeTask({ cwd, branch, dryRun = false, log = console.err
 
     advanceMain({ project, mainRoot, mainRef, mainCommit, newHead, resultTree, bootstrap, branch, log });
 
-    appendLedger(root, { event: "merge", branch, fastForward, head: newHead, tree: resultTree, base: mainCommit, bootstrap });
+    appendLedger(root, { event: "merge", branch, fastForward, head: newHead, tree: resultTree, base: mainCommit, bootstrap, riskObserved: gates.risk.observed });
     log(`[merge] ${mainRef} 已更新到 ${newHead.slice(0, 12)}`);
 
     const { refresh, notes, postMerge } = afterMainUpdate({

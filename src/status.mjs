@@ -184,7 +184,8 @@ export function branchStatus({ cwd, branch }) {
   }
 
   if (risk.active) {
-    if (risk.confirmReasons.length === 0) add("risk", "ok", "没有命中需要人确认的风险信号");
+    if (risk.observed.length > 0) add("risk", "ok", `观察模式，命中 ${risk.observed.length} 项（不拦截）：${risk.observed.join("；")}`);
+    else if (risk.confirmReasons.length === 0) add("risk", "ok", "没有命中需要人确认的风险信号");
     else if (confirmFor(project, root, branch).ok) add("risk", "ok", `风险改动已确认（${risk.confirmReasons.join("；")}）`);
     else {
       add("risk", "fail", `${risk.confirmReasons.join("；")}，${when}需要人工确认：harness confirm --branch ${branch}`);

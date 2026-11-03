@@ -1,6 +1,8 @@
 import { strict as assert } from "node:assert";
 import { afterEach, describe, test } from "node:test";
 import { APPROVE, CONFIG, commit, fakeReviewer, git, makeRepo } from "./helpers.mjs";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 
 let repos = [];
 afterEach(() => {
@@ -13,6 +15,10 @@ const RISK = { paths: [".github/workflows/**", "deploy/**"], deps: ["**/package-
 const QUOTE = "可以，开始实施";
 const WORKFLOW = ".github/workflows/ci.yml";
 const code = (lines) => `${Array.from({ length: lines }, (_, i) => `export const v${i} = ${i};`).join("\n")}\n`;
+function ledgerEvents(repo) {
+  const file = join(repo.env.HARNESS_DATA_DIR, "ledger.jsonl");
+  return existsSync(file) ? readFileSync(file, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line)) : [];
+}
 const acceptanceOf = (branch) => `.harness/acceptance/${branch.replace(/\//g, "-")}.md`;
 
 function setup({ risk = RISK, policy = POLICY, config = {} } = {}) {
@@ -192,6 +198,58 @@ describe("风险分级", () => {
     repo.branch("fix/small", { "src/a.js": code(2) });
     const plan = repo.cli("verify", "--plan", "--branch", "fix/small");
     assert.doesNotMatch(plan.stdout, /RISK/);
+  });
+
+  test("观察模式：命中信号只记录不拦截，输出与账本都留下记录", () => {
+    const repo = setup({ risk: { ...RISK, mode: "observe" } });
+    const branch = "feat/obs";
+    repo.branch(branch, { [WORKFLOW]: "name: ci\n", "package-lock.json": "{}\n" });
+
+    const plan = repo.cli("verify", "--plan", "--branch", branch);
+    assert.match(plan.stdout, /RISK 观察（不拦截）: 敏感路径 \.github\/workflows\/ci\.yml/);
+    assert.match(plan.stdout, /RISK 观察（不拦截）: 依赖清单变化 package-lock\.json/);
+    assert.doesNotMatch(plan.stdout, /RISK 要人确认|RISK 要实施授权/);
+
+    fakeReviewer(repo, APPROVE);
+    for (const step of ["verify", "review"]) assert.equal(repo.cli(step, "--branch", branch).status, 0);
+    const status = repo.cli("status", "--branch", branch).stdout;
+    assert.match(status, /\[ok\] risk: 观察模式，命中 2 项（不拦截）/);
+    assert.doesNotMatch(status, /风险改动待确认|待实施授权/);
+    assert.match(repo.cli("confirm", "--branch", branch).stdout, /风险观察（不拦截）/);
+
+    const merged = repo.cli("merge", "--branch", branch);
+    assert.equal(merged.status, 0, merged.stderr);
+    assert.match(merged.stderr, /风险观察（不拦截）: 敏感路径 \.github\/workflows\/ci\.yml；依赖清单变化 package-lock\.json/);
+
+    const ledger = ledgerEvents(repo).filter((event) => event.event === "merge" && event.branch === branch);
+    assert.equal(ledger.length, 1);
+    assert.deepEqual(ledger[0].riskObserved, ["敏感路径 .github/workflows/ci.yml", "依赖清单变化 package-lock.json"]);
+  });
+
+  test("观察模式不影响原有的授权要求，也不影响没命中的改动", () => {
+    const repo = setup({ risk: { ...RISK, mode: "observe" } });
+    const branch = "feat/obs-big";
+    repo.branch(branch, { "src/big.js": code(10), [acceptanceOf(branch)]: "- 大改动\n" });
+    const refused = landed(repo, branch);
+    assert.match(refused.stderr, /plan_unapproved/, "代码行数等原有信号仍然拦");
+
+    repo.branch("fix/obs-small", { "src/a.js": code(2) });
+    const merged = landed(repo, "fix/obs-small");
+    assert.equal(merged.status, 0, merged.stderr);
+    const event = ledgerEvents(repo).find((item) => item.event === "merge" && item.branch === "fix/obs-small");
+    assert.deepEqual(event.riskObserved ?? [], []);
+  });
+
+  test("mode 写错值时按需要人确认处理；显式 enforce 与不写一样", () => {
+    const bad = setup({ risk: { ...RISK, mode: "off" } });
+    bad.branch("feat/small", { "src/a.js": code(2) });
+    const refused = landed(bad, "feat/small");
+    assert.match(refused.stderr, /risk_unconfirmed/);
+    assert.match(refused.stderr, /risk\.mode/);
+
+    const strict = setup({ risk: { ...RISK, mode: "enforce" } });
+    strict.branch("feat/ci", { [WORKFLOW]: "name: ci\n" });
+    assert.match(landed(strict, "feat/ci").stderr, /risk_unconfirmed/);
   });
 
   test("没有 risk 配置的项目行为不变", () => {

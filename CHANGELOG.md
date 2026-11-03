@@ -16,6 +16,7 @@
   新增 `risk.exclude`，只豁免敏感路径下的文档与测试夹具，不影响依赖清单。
   风险确认排在验证与评审之后核对，门禁改动的确认仍在最前；缺授权又缺确认时，拒绝信息一次列出全部人工项。
   `harness verify --plan` 与 `harness verify --branch` 的输出新增 `RISK` 行，提交前就能看到命中的信号。
+  新增 `risk.mode`：`observe` 只记录 `risk.paths` 与 `risk.deps` 命中的信号、不拦截，记录写进 `status`、`confirm` 摘要、合并与提交日志和账本的 `riskObserved` 字段，用来在真实项目里先观察误报再决定是否执行；默认 `enforce`，行为不变。
 - `harness doctor` 新增 `project:extended` 一项：列出所有 `extended` 检查，提示它们永远记为未执行、依赖它们的验收只能手工补验；缺 `reason` 或 `howToVerify` 的报 `[!!]`。
   以前这样的检查不会被发现，评审只在证据里看到一条没有补验方式的“未执行”。
 
