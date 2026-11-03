@@ -69,6 +69,14 @@ export function testEvidenceChecks(verify) {
   return items;
 }
 
+/** 这次改动里归这一项管的文件：testFirst 看实现文件（含被删除的），coverage 看仍存在的 include 文件。 */
+export function testEvidenceScope(item, changed, exists = () => true) {
+  const cfg = item.config;
+  return item.kind === "tdd"
+    ? changed.filter((path) => matches(path, cfg.source) && !matches(path, cfg.tests))
+    : changed.filter((path) => matches(path, cfg.include) && exists(path));
+}
+
 /** 提交信息里的 `Tdd-Waiver: 原因`（可带 "- " 前缀以符合列表式正文），返回原因，没有则 null。 */
 export function tddWaiver(root, base, head) {
   const log = git(root, ["log", "--format=%B%x00", `${base}..${head}`]);
@@ -221,7 +229,7 @@ const firstFive = (paths) => `${paths.slice(0, 5).join(", ")}${paths.length > 5 
  */
 export async function evaluateTdd({ item, changed, root, checkout, baseCommit, headCommit, env, timeoutMs, execute, link }) {
   const cfg = item.config;
-  const src = changed.filter((path) => matches(path, cfg.source) && !matches(path, cfg.tests));
+  const src = testEvidenceScope(item, changed);
   if (src.length === 0) return null;
   const waiver = tddWaiver(root, baseCommit, headCommit);
   if (waiver) return { pass: true, note: `豁免: ${waiver}`, waived: true };
@@ -265,7 +273,7 @@ export async function evaluateTdd({ item, changed, root, checkout, baseCommit, h
 /** 改动行覆盖率：在检出里跑覆盖率命令，读报告，只看这次改动的行。返回 null 表示没有可统计的改动文件。 */
 export async function evaluateCoverage({ item, changed, root, checkout, baseCommit, headCommit, env, timeoutMs, execute, link }) {
   const cfg = item.config;
-  const files = changed.filter((path) => matches(path, cfg.include) && existsSync(join(checkout, path)));
+  const files = testEvidenceScope(item, changed, (path) => existsSync(join(checkout, path)));
   if (files.length === 0) return null;
   const threshold = cfg.threshold ?? DEFAULT_THRESHOLD;
   const cwdAbs = join(checkout, item.cwd);

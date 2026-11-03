@@ -12,6 +12,7 @@ import { codex } from "./adapters/codex.mjs";
 import { dsh } from "./adapters/dsh.mjs";
 import { generic } from "./adapters/generic.mjs";
 import { planChecks, verify } from "./verify/verify.mjs";
+import { testEvidenceChecks, testEvidenceProblems, testEvidenceScope } from "./verify/testevidence.mjs";
 import { MergeError, mergeTask } from "./merge/merge.mjs";
 import { submitTask } from "./delivery/submit.mjs";
 import { syncTask } from "./delivery/sync.mjs";
@@ -191,15 +192,25 @@ function cmdVerifyPlan({ cwd, branch, base, json }) {
     changed,
     exists: (path) => !deleted.has(path) && existsSync(join(root, path)),
   });
+  invalid.push(...testEvidenceProblems(project.verify));
+  // 测试证据在验证里复算，这里只说明这次会不会涉及；没有改到它管的文件时验证里也不产生这一项。
+  const testEvidence = testEvidenceChecks(project.verify).flatMap((item) => {
+    const scope = testEvidenceScope(item, changed, (path) => !deleted.has(path) && existsSync(join(root, path)));
+    return scope.length === 0 ? [] : [{ id: item.id, cmd: item.cmd, cwd: item.cwd, mode: item.config.mode ?? "enforce", files: scope }];
+  });
   // 有写错的检查时这份计划验证不会通过，非零退出让调用方察觉。
   const status = invalid.length > 0 || requiredUncovered.length > 0 ? 1 : 0;
   if (json) {
-    print(JSON.stringify({ base: mainRef, head, changed, docOnly, plan, notExecuted, advisory, invalid, uncovered, requiredUncovered }, null, 2));
+    print(JSON.stringify({ base: mainRef, head, changed, docOnly, plan, testEvidence, notExecuted, advisory, invalid, uncovered, requiredUncovered }, null, 2));
     return status;
   }
   print(`相对 ${mainRef} 变更 ${changed.length} 个文件${docOnly ? "（仅文档）" : ""}`);
   for (const item of invalid) print(`  ERR  ${item.id}  ${item.reason}；${item.fix}`);
   for (const item of plan) print(`  RUN  ${item.id}  ${item.cmd.join(" ")}${item.cwd && item.cwd !== "." ? `  (cwd ${item.cwd})` : ""}`);
+  for (const item of testEvidence) {
+    const scope = item.id.endsWith("tdd-red") ? `${item.files.length} 个实现文件` : `${item.files.length} 个文件的改动行`;
+    print(`  RUN  ${item.id}  ${item.cmd.join(" ")}  (${item.mode}，${scope}，验证里复算)`);
+  }
   for (const item of notExecuted) print(`  TODO ${item.id}  ${item.reason}`);
   if (requiredUncovered.length > 0) print(`  ERR  required-paths  ${requiredUncovered.length} 个必验路径没有自动检查覆盖: ${requiredUncovered.slice(0, 10).join(", ")}`);
   else if (uncovered.length > 0) print(`  WARN uncovered  ${uncovered.length} 个改动路径没有任何检查覆盖: ${uncovered.slice(0, 10).join(", ")}`);

@@ -533,6 +533,7 @@ harness merge  --branch feat/login   # 本地交付：核对证据与评审，�
 ```
 
 - `harness verify --plan --branch <分支>` 只列出会执行、记为未执行和仅提示的检查，不执行也不写证据；选中了写错的检查时以 `ERR` 列出并附改法，退出码为 1。
+  配置了 `testFirst` 或 `coverage` 且这次改到它们管的文件时，另以 `RUN` 列出（标明 `mode` 与文件数，验证里复算）；`--json` 输出里是 `testEvidence`。`testFirst` 与 `coverage` 写错时同样以 `ERR` 列出。
 - 提交之后、`verify` 之前按 `.harness/rules/method-review.md` 自审：验收清单能逐条对上证据、提交说明与 diff 一致且格式合规、没有漏提交的文件与无关改动、diff 之外的调用方与文档已经一起改。
   自审不是门禁，不留记录，结论也不交给独立评审。
   自审改出的新提交会让证据与评审作废，所以它放在 `verify` 之前，不放在 `verify` 与 `review` 之间。
@@ -1158,6 +1159,9 @@ node ~/github/harness/bin/harness.mjs install --local   # 按新锁定的版本�
 - 被删除的模块不在依赖图里，只删文件时引用它的测试选不中，这类改动靠类型检查或全量测试兜住。
 - 没有受影响的测试时 vitest 正常退出，这项检查算通过；改动有没有补测试，由先红后绿的规则与独立评审把关。
 
+`init` 不生成 `testFirst` 与 `coverage`：测试与覆盖率命令因项目而异，推断不出真实命令就不猜。
+接入规则要求 Agent 按项目真实的工具配置，`mode` 先写 `observe`。
+
 `init` 生成的起始检查：
 
 - `lint` 是 `extended` 占位，配置真实命令之前记入未执行项，不会冒充通过。
@@ -1596,6 +1600,8 @@ harness 防的是 Agent 的误操作，以及被提示注入后常见的绕过�
 | `本机没有安装门禁锁定的版本` | Agent 工具调用被拦截时，由人在项目目录运行 `node ~/github/harness/bin/harness.mjs install --local`，再让 Agent 继续诊断 |
 | `gate_change_unconfirmed` | Agent 展示确认摘要；由人在自己的终端执行它给出的带 `--yes` 的确认命令 |
 | 运行 `confirm --yes` 后主分支没有新提交 | 确认只记录，不合并；告诉 Agent 已确认，让它按交付方式继续：本地交付完成合并，远程交付提交 PR/MR |
+| `harness:tdd-red` 失败 | 看失败输出里的原因：没有新增或修改测试，就补会先失败的测试；测试在还原实现后仍然通过，说明它对旧实现也成立，要改成真正约束新行为的断言；测试在当前实现上就不通过，先修测试。行为不变的重构在提交信息里写 `Tdd-Waiver: 原因`，不要为了过检查凑一个对旧实现也成立的测试 |
+| `harness:changed-line-coverage` 失败 | 输出里列出了没被执行的改动行：补测试覆盖它们；整个文件“不在覆盖率报告里”时，检查覆盖率命令是否包含该文件，没有可执行代码的文件用 `include.exclude` 排除；不要靠调低 `threshold` 或改成 `observe` 过关，这类改动要人确认 |
 | `risk_unconfirmed` | 改动命中了 `risk.paths` 的敏感路径，验证与评审已通过；Agent 展示 `harness confirm` 摘要，由人在自己的终端执行带 `--yes` 的确认，之后让 Agent 重新运行交付命令 |
 | `plan_unapproved` | 大改动没有实施授权记录，或授权后验收清单又改了；补齐方案并提交，向用户说明，用户同意后照录原话运行 `harness approve --branch <分支> --yes --note "<原话>"` |
 | 写代码时被 `plan-before-code` 拦截 | 任务分支里有实施方案但还没有授权记录；用户还没同意就停下等，已经同意就按上一条记录；只是借用了 `docs/changes/` 下的旧方案时，把它移出这次改动 |

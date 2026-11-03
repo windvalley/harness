@@ -144,6 +144,28 @@ describe("先红后绿的机器证据", () => {
     assert.match(prompt, new RegExp(`${TDD}: exit=0.* - .*还原`));
   });
 
+  test("verify --plan 列出会复算的测试证据，不涉及时不列，配置写错时报错", () => {
+    const repo = setup({ tdd: testFirst(), coverage: coverage(), files: coverageFiles });
+    repo.branch("feat/mul", { "src/mul.mjs": MUL, "test/mul.test.mjs": mulTest });
+    const plan = repo.cli("verify", "--plan", "--branch", "feat/mul");
+    assert.equal(plan.status, 0, plan.stderr);
+    assert.match(plan.stdout, new RegExp(`RUN  ${TDD}  .*1 个实现文件`));
+    assert.doesNotMatch(plan.stdout, new RegExp(COVERAGE));
+    repo.branch("feat/web", { "web/src/calc.mjs": CALC_MORE });
+    assert.match(repo.cli("verify", "--plan", "--branch", "feat/web").stdout, new RegExp(`RUN  ${COVERAGE}  .*1 个文件`));
+    repo.branch("docs/x", { "docs/x.md": "说明\n" });
+    const docs = repo.cli("verify", "--plan", "--branch", "docs/x").stdout;
+    assert.doesNotMatch(docs, /harness:/);
+    const json = JSON.parse(repo.cli("verify", "--plan", "--json", "--branch", "feat/mul").stdout);
+    assert.deepEqual(json.testEvidence.map((item) => item.id), [TDD]);
+
+    const broken = setup({ tdd: { source: ["src/**"], cmd: "x" } });
+    broken.branch("feat/mul", { "src/mul.mjs": MUL });
+    const bad = broken.cli("verify", "--plan", "--branch", "feat/mul");
+    assert.equal(bad.status, 1);
+    assert.match(bad.stdout, /ERR  harness:tdd-red/);
+  });
+
   test("配置写错按配置错误失败", () => {
     const repo = setup({ tdd: { source: ["src/**"], cmd: "node --test" } });
     repo.branch("feat/mul", { "src/mul.mjs": MUL, "test/mul.test.mjs": mulTest });

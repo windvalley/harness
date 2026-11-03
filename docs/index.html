@@ -262,6 +262,7 @@ footer { border-top: 1px solid var(--line); color: var(--muted); font-size: .88r
             <li><a href="#token">主分支只认合并令牌</a></li>
             <li><a href="#trust-root">配置只从主分支读取</a></li>
             <li><a href="#selection">按改动选检查</a></li>
+            <li><a href="#test-evidence">测试证据</a></li>
             <li><a href="#review">独立评审</a></li>
             <li><a href="#plan-first">任务分级与实施授权</a></li>
             <li><a href="#pinning">版本锁定的入口</a></li>
@@ -684,7 +685,29 @@ footer { border-top: 1px solid var(--line); color: var(--muted); font-size: .88r
       <li>检查在固定检出 <code>~/.cache/harness/checkouts/&lt;哈希&gt;/work</code> 里执行，它是一个分离头指针的 Linked Worktree，不受你工作区状态影响，增量缓存可以复用。</li>
       <li><code>requires</code> 里的依赖目录（如 <code>node_modules</code>）从主 Worktree 软链接进检出；缺失时证据记为 <code>incomplete</code>，不能评审与合并。</li>
       <li>命令不存在时证据里单独标出“未找到命令”，说明是缺工具，不是代码有问题。</li>
-      <li><code>harness verify --plan --branch &lt;分支&gt;</code> 只列出会执行的检查，不执行。</li>
+      <li><code>harness verify --plan --branch &lt;分支&gt;</code> 只列出会执行的检查，不执行；配置了 <code>testFirst</code>、<code>coverage</code> 时，这次会复算的也一并列出。</li>
+    </ul>
+
+    <h3 id="test-evidence">测试证据：先红后绿与改动行覆盖率</h3>
+    <p>“检查通过”证明不了“测试真的约束了这次改动”。<code>verify.json</code> 里两个可选字段补上这一环，由验证自己复算，不靠 Agent 自述：</p>
+    <div class="code"><span class="label">verify.json 片段</span><pre><code>"testFirst": {
+  "mode": "observe",
+  "source": { "match": ["web/src/**"], "exclude": [] },
+  "tests":  { "match": ["**/*.test.ts"], "exclude": [] },
+  "cwd": "web", "cmd": ["pnpm", "exec", "vitest", "run", "{tests}"]
+},
+"coverage": {
+  "mode": "observe",
+  "include": { "match": ["web/src/**"], "exclude": [] },
+  "cwd": "web", "cmd": ["pnpm", "exec", "vitest", "run", "--coverage"],
+  "report": "coverage/lcov.info", "threshold": 80
+}</code></pre></div>
+    <ul>
+      <li><code>testFirst</code>：改了实现就必须有新增或修改的测试；这些测试在当前实现上要通过，把实现还原成基线后要失败，才算测试先于实现红过。行为不变的重构在提交信息里写 <code>Tdd-Waiver: 原因</code>，只留痕，不是人工放行。</li>
+      <li><code>coverage</code>：只统计 <code>git diff</code> 里新增或修改的行，读 lcov 或 Go coverprofile，低于 <code>threshold</code>（默认 80）失败并列出没覆盖的行。</li>
+      <li><code>mode</code> 先写 <code>observe</code>（只记录不拦截），在真实改动上看过误报再改 <code>enforce</code>。</li>
+      <li>两项在证据里记为 <code>harness:tdd-red</code> 与 <code>harness:changed-line-coverage</code>；它们只证明“有测试会红、改动行被执行过”，不证明断言有效。调低阈值或改成 <code>observe</code> 属于门禁改动，确认摘要会列出改前改后。</li>
+      <li><code>init</code> 不会自动生成这两项，接入时由 Agent 按项目真实的测试与覆盖率工具配置。</li>
     </ul>
 
     <h3 id="review">独立评审</h3>
@@ -872,7 +895,7 @@ dsh plugin --profile web add ~/.local/share/harness/dsh-plugin</code></pre></div
     <p>四个文件决定门禁的行为，Agent 可以直接改，但它们都属于门禁改动，合并前要人确认，合入后才生效。</p>
     <div class="cards">
       <div class="card"><h4><code>config.json</code></h4><p>主分支名、合并要求、提交格式、评审后端、验收清单模式、任务分级阈值、Worktree 清理命令。</p></div>
-      <div class="card"><h4><code>verify.json</code></h4><p>改了哪些路径跑哪些检查、检查的级别、执行目录与依赖。</p></div>
+      <div class="card"><h4><code>verify.json</code></h4><p>改了哪些路径跑哪些检查、检查的级别、执行目录与依赖，以及先红后绿与改动行覆盖率的复算配置。</p></div>
       <div class="card"><h4><code>policy.json</code></h4><p>启用哪些预设、关掉哪些规则、项目自己的拦截规则。</p></div>
       <div class="card"><h4><code>golden/tasks.json</code></h4><p>对规则本身的回归用例，改坏规则的分支在 verify 阶段就被拦下。</p></div>
     </div>
