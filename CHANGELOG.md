@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+## [0.14.1] - 2026-11-03
+
+升级后能看到新增的可选配置：`upgrade` 列出项目里还没配置的 `risk`、`testFirst`、`coverage`、`requiredPaths` 并标明哪些只记录、哪些会拦截，升级规则要求 Agent 据此给出建议。
+`upgrade` 只提示，不改任何配置文件，门禁行为不变。
+
 ### 变更
 
 - `harness upgrade` 结束时列出项目里尚未配置的 `risk`、`testFirst`、`coverage`、`requiredPaths`，并标明前三项有 `observe` 模式、只记录不拦截，`requiredPaths` 配置后会直接拦截；只提示，不改任何配置文件。
