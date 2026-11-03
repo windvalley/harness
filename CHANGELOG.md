@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+## [0.13.1] - 2026-11-03
+
+补上 0.13.0 测试证据的两处遗漏：`verify --plan` 提交前就能看到会复算哪些，教程与常见问题补齐说明。
+没配置 `testFirst`、`coverage` 的项目行为不变。
+
 ### 变更
 
 - `harness verify --plan` 列出这次会复算的 `testFirst` 与 `coverage`（`RUN` 行标明 `mode` 与文件数，`--json` 里是 `testEvidence`），它们写错时同样以 `ERR` 列出；以前这两项只在真正验证时才出现，提交前看不到会不会被拦下。
