@@ -33,7 +33,7 @@ import { unresolvedStop } from "../stop/session.mjs";
 import { entryTouched, followUps } from "../install/followups.mjs";
 import { ensureHooksPath } from "../install/install.mjs";
 import { REVIEW_KIND } from "../review/review.mjs";
-import { approvalState, planEnforced, planRequirement } from "../plan/plan.mjs";
+import { approvalState, assessRisk, planEnforced } from "../plan/plan.mjs";
 import { MERGE_TOKEN_ENV, mainUpdateToken } from "../githook.mjs";
 import { commitRangeProblems, commitRuleErrorAt } from "../policy/commit-message.mjs";
 import { resolvePolicy } from "../policy/resolve.mjs";
@@ -216,6 +216,8 @@ export async function checkGates({ project, root, branch, log = console.error, d
     );
   }
 
+  // 风险：命中的信号各带自己的要求，取并集。要人确认的并入下面的门禁确认，要实施授权的在其后核对。
+  const risk = assessRisk({ root, project, base: baseCommit, head: branchCommit });
   // 门禁改动：需要人确认过这一版内容。
   const gate = gatePaths(project).flatMap((glob) => [glob]);
   const gateTouched = resultPaths.filter((path) => matchAny(path, gate));
@@ -228,8 +230,10 @@ export async function checkGates({ project, root, branch, log = console.error, d
     throw new MergeError(`合并结果里的交付设置无法解析: ${error.message}`, "delivery_invalid");
   }
   const change = deliveryChange(before, after);
-  // 首次接入引入的是信任根本身，不受 confirmOnGateChange 开关影响，一律要人确认。
-  if (bootstrap || change.changed || (governance.confirmOnGateChange !== false && gateTouched.length > 0)) {
+  // 首次接入引入的是信任根本身，不受 confirmOnGateChange 开关影响，一律要人确认；风险信号要求的确认同样不受它影响。
+  const gateNeedsConfirm = bootstrap || change.changed || (governance.confirmOnGateChange !== false && gateTouched.length > 0);
+  const riskNeedsConfirm = !bootstrap && risk.confirmReasons.length > 0;
+  if (gateNeedsConfirm || riskNeedsConfirm) {
     const confirm = readRecord(root, "confirm", resultTree);
     if (!confirm.ok || confirm.record.decision !== "approve") {
       // merge 与 submit 共用这段核对，拒绝信息按调用方说清是哪一步之前要确认。
@@ -238,33 +242,38 @@ export async function checkGates({ project, root, branch, log = console.error, d
         ? `首次接入会把这个分支里的门禁配置变成主分支的信任根，需要人在${when}确认一次。`
         : change.changed
           ? `本次改动改变了交付设置（${describeChange(change)}），需要人在${when}确认一次。`
-          : `本次改动涉及门禁配置或规则(${gateTouched.length} 个文件)，需要人在${when}确认一次。`;
+          : gateNeedsConfirm
+            ? `本次改动涉及门禁配置或规则(${gateTouched.length} 个文件)，需要人在${when}确认一次。`
+            : `本次改动命中高风险信号，需要人在${when}确认一次。`;
+      const listed = gateNeedsConfirm
+        ? (change.changed ? resultPaths.filter((path) => matchAny(path, [".harness/config.json"])) : gateTouched).slice(0, 12)
+        : [];
       throw new MergeError(
         [
           reason,
-          `  ${(change.changed ? resultPaths.filter((path) => matchAny(path, [".harness/config.json"])) : gateTouched).slice(0, 12).join("\n  ")}`,
+          ...(listed.length > 0 ? [`  ${listed.join("\n  ")}`] : []),
+          ...risk.confirmReasons.map((item) => `  风险信号: ${item}`),
           `由人查看并确认: harness confirm --branch ${branch}，确认无误后加 --yes`,
           "Agent 不能代为确认；在 Claude Code 里可以让用户在输入框执行 ! .harness/bin/harness confirm --branch <分支> --yes",
           `确认后重新运行 harness ${label} --branch ${branch}。`,
         ].join("\n"),
-        "gate_change_unconfirmed",
+        gateNeedsConfirm ? "gate_change_unconfirmed" : "risk_unconfirmed",
       );
     }
-    log(`[${label}] 门禁改动已确认(确认人: ${confirm.record.by ?? "user"})`);
+    if (gateNeedsConfirm) log(`[${label}] 门禁改动已确认(确认人: ${confirm.record.by ?? "user"})`);
+    if (riskNeedsConfirm) log(`[${label}] 风险改动已确认(${risk.confirmReasons.join("；")}；确认人: ${confirm.record.by ?? "user"})`);
   }
-
   // 方案：写了实施方案、改了库表或改动超过阈值的任务，必须有用户的实施授权记录，且授权后验收清单没有再改。
   // 实时拦截只能约束走了方案流程的任务，这里兜住没写方案就直接做了大改动的情况。
   let approval = null;
   if (planEnforced(project.policy)) {
-    const need = planRequirement({ root, project, base: baseCommit, head: branchCommit });
-    if (need.reasons.length > 0) {
+    if (risk.reasons.length > 0) {
       const acceptanceText = git(root, ["cat-file", "blob", `${branchCommit}:${acceptancePath(project, branch)}`]);
       const state = approvalState({ root, branch, acceptanceText: acceptanceText.status === 0 ? acceptanceText.stdout : null });
       if (!state.approved) {
         throw new MergeError(
           [
-            `这次改动属于先方案后实施的任务（${need.reasons.join("；")}），没有有效的实施授权: ${state.reason}`,
+            `这次改动属于先方案后实施的任务（${risk.reasons.join("；")}），没有有效的实施授权: ${state.reason}`,
             `先向用户说明方案（验收清单 ${acceptancePath(project, branch)}、行为说明与实施方案）；用户表达开始实施的意思后，`,
             `运行 harness approve --branch ${branch} --yes --note "<用户原话>" 记录授权，再重新运行。`,
             "用户没有同意时不要记录授权。",
@@ -377,6 +386,7 @@ export async function checkGates({ project, root, branch, log = console.error, d
     evidence: evidenceRecord,
     review: reviewRecord,
     approval,
+    risk: { tier: risk.tier, confirmReasons: risk.confirmReasons },
     dryRun,
   };
 }

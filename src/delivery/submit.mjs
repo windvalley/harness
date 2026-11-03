@@ -73,7 +73,7 @@ function validSource({ root, branch, mainRef }) {
   }
 }
 
-function describeGates({ evidence, review, approval }) {
+function describeGates({ evidence, review, approval, risk }) {
   const lines = [];
   const checks = evidence?.checks ?? [];
   const passed = checks.filter((item) => item.exit === 0 && !item.skipped);
@@ -92,10 +92,11 @@ function describeGates({ evidence, review, approval }) {
     }
   }
   lines.push(`- 实施授权: ${approval ? approval : "本任务不需要（未写方案、改动未超过阈值）"}`);
+  if (risk?.confirmReasons?.length > 0) lines.push(`- 风险确认: 已由人确认（${risk.confirmReasons.join("；")}）`);
   return lines;
 }
 
-function sectionBody({ branch, branchCommit, baseCommit, baseRef, resultTree, gateTouched, evidence, review, approval, previous }) {
+function sectionBody({ branch, branchCommit, baseCommit, baseRef, resultTree, gateTouched, evidence, review, approval, risk, previous }) {
   const lines = [
     "## harness 门禁结果",
     "",
@@ -104,7 +105,7 @@ function sectionBody({ branch, branchCommit, baseCommit, baseRef, resultTree, ga
     `- 预期合并结果 tree: \`${resultTree}\``,
     `- 任务分支: \`${branch}\``,
     "",
-    ...describeGates({ evidence, review, approval }),
+    ...describeGates({ evidence, review, approval, risk }),
     "",
     "以上由本机门禁核对，签名记录在本机。它保证这个任务提交相对目标主分支通过了验证与独立评审，",
     "不保证平台最终合入的内容，也不保证此后别人推到这个分支的提交。",
@@ -240,6 +241,7 @@ export async function submitTask({ cwd, branch, log = console.error }) {
     evidence: gates.evidence,
     review: gates.review,
     approval: gates.approval,
+    risk: gates.risk,
     previous: prior.ok ? prior.record : null,
   });
 

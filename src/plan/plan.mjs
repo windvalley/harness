@@ -37,6 +37,42 @@ export function planSettings(config) {
   return { ...DEFAULTS, ...(config?.intent?.plan ?? {}) };
 }
 
+// 风险信号：paths 命中要人确认（T2），deps 命中要实施授权（T1，启用 plan-first 时生效）。
+// 配置里没有 risk 就都不启用，已接入项目升级后行为不变；init 给新项目写入下面的默认值。
+// deps 只放锁文件与不带锁的清单，不放 package.json：只改 scripts 不是依赖变化，真正的依赖变化一定会改锁文件。
+export const RISK_DEFAULTS = {
+  paths: [".github/workflows/**", ".gitlab-ci.yml", ".circleci/**", "**/Jenkinsfile", "**/Dockerfile", "deploy/**"],
+  deps: [
+    "**/go.mod",
+    "**/go.sum",
+    "**/package-lock.json",
+    "**/npm-shrinkwrap.json",
+    "**/pnpm-lock.yaml",
+    "**/yarn.lock",
+    "**/bun.lock",
+    "**/requirements*.txt",
+    "**/poetry.lock",
+    "**/uv.lock",
+    "**/Cargo.lock",
+    "**/Gemfile.lock",
+    "**/composer.lock",
+  ],
+};
+
+/** 读取风险配置；形状不对时返回 error，由调用方按需要人确认处理（出错就按最严处理）。 */
+export function riskSettings(config) {
+  const raw = config?.risk;
+  if (raw === undefined || raw === null) return { paths: [], deps: [], active: false, error: null };
+  const isGlobs = (value) => Array.isArray(value) && value.every((item) => typeof item === "string");
+  if (typeof raw !== "object" || Array.isArray(raw)) return { paths: [], deps: [], active: true, error: "risk 必须是对象" };
+  for (const key of ["paths", "deps"]) {
+    if (raw[key] !== undefined && !isGlobs(raw[key])) return { paths: [], deps: [], active: true, error: `risk.${key} 必须是字符串数组` };
+  }
+  const paths = raw.paths ?? [];
+  const deps = raw.deps ?? [];
+  return { paths, deps, active: paths.length > 0 || deps.length > 0, error: null };
+}
+
 export function planEnforced(policy) {
   return (policy?.presets ?? []).includes(PLAN_PRESET);
 }
@@ -75,7 +111,7 @@ export function codeLines(root, base, head, exclude) {
 }
 
 /** 合并时判断这次改动是否需要实施授权，返回原因列表，空列表表示属于直接实施的范围。 */
-export function planRequirement({ root, project, base, head }) {
+function planRequirement({ root, project, base, head }) {
   const settings = planSettings(project.config);
   const paths = changedPaths(root, base, head);
   const reasons = [];
@@ -86,6 +122,29 @@ export function planRequirement({ root, project, base, head }) {
   const lines = codeLines(root, base, head, settings.exclude);
   if (lines > settings.maxLines) reasons.push(`代码改动 ${lines} 行，超过 ${settings.maxLines} 行`);
   return { reasons, lines, markers, settings };
+}
+
+/**
+ * 机械风险评估。每个信号带着自己的要求，一次改动的要求取并集：
+ * approve 里的原因要实施授权（T1，启用 plan-first 时由调用方执行），confirm 里的原因要人确认（T2），两者互不替代。
+ * 档位只用于显示：有 confirm 为 T2，只有 approve 为 T1，都没有为 T0 自动放行。
+ * 判定读主分支的配置，任务分支放宽不了自己的档位；配置写坏时按需要人确认处理。
+ */
+export function assessRisk({ root, project, base, head }) {
+  const need = planRequirement({ root, project, base, head });
+  const risk = riskSettings(project.config);
+  const approve = [...need.reasons];
+  const confirm = [];
+  if (risk.error) confirm.push(`风险配置无效（${risk.error}），按需要人确认处理`);
+  else if (risk.active) {
+    const paths = changedPaths(root, base, head);
+    const sensitive = paths.filter((path) => matchAny(path, risk.paths));
+    if (sensitive.length > 0) confirm.push(`敏感路径 ${sensitive.slice(0, 3).join(", ")}${sensitive.length > 3 ? ` 等 ${sensitive.length} 个` : ""}`);
+    const deps = paths.filter((path) => matchAny(path, risk.deps));
+    if (deps.length > 0) approve.push(`依赖清单变化 ${deps.slice(0, 3).join(", ")}`);
+  }
+  const tier = confirm.length > 0 ? 2 : approve.length > 0 ? 1 : 0;
+  return { tier, reasons: approve, confirmReasons: confirm, active: risk.active, lines: need.lines, markers: need.markers, settings: need.settings };
 }
 
 /**
@@ -123,7 +182,7 @@ export function planSummary({ cwd, branch }) {
   const base = mergeBase(root, resolveCommit(root, mainRef), branchCommit);
   const rel = acceptancePath(project, branch);
   const acceptance = showBlob(root, branchCommit, rel);
-  const need = planRequirement({ root, project, base, head: branchCommit });
+  const need = assessRisk({ root, project, base, head: branchCommit });
   const dirs = need.markers.map((path) => path.slice(0, path.lastIndexOf("/") + 1));
   const paths = changedPaths(root, base, branchCommit);
   const planFiles = paths.filter((path) => path === rel || dirs.some((dir) => path.startsWith(dir)));

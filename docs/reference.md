@@ -53,6 +53,7 @@ Agent 调用工具 ----> [1] 实时拦截：读写文件、执行命令之前按
 3. `confirm`：改动涉及门禁本身（配置、规则、入口、钩子）时，由人看过摘要后确认一次。
    Agent 执行带 `--yes` 的确认会被拦截。
    启用 `plan-first` 时，大改动还要有你同意实施的记录，见“任务分级与实施授权”。
+   改动命中 `risk.paths` 配置的敏感路径时，同样要人确认，见“风险分级”。
 4. 交付：本地交付用 `merge`，核对上面的记录仍然有效，再更新本地主分支；远程交付用 `submit`，核对同样的条件后推送任务分支并创建或更新 PR/MR，见“交付方式：本地与远程”。
    `reference-transaction` 钩子只放行带合并令牌的写入，令牌由证据密钥对“旧提交、新提交”签名得到，只有 `harness merge` 与 `harness sync` 能生成。
 
@@ -442,6 +443,32 @@ Agent 开始任务前先判断分级，规则写在 `.harness/rules/core.md`，�
 - 合并输出、`harness status` 与 `harness approve --branch <分支>` 的摘要都会显示记录下来的原话，你可以随时核对 Agent 是否真的得到了你的同意。
 - 授权绑定验收清单的内容：之后要改清单，Agent 要先向你说明并重新取得同意；实施方案里的进度记录可以随时更新。
 - 有授权记录后，独立评审把这份清单当作你同意过的需求来核对。
+
+### 风险分级
+
+任务分级的机械部分由 `risk` 配置与 `intent.plan` 共同决定。
+每个信号带着自己的要求，一次改动的要求取并集：
+
+| 信号 | 要求 | 来源 |
+| --- | --- | --- |
+| 写了实施方案 | 实施授权 | `intent.plan.markers` |
+| 改了库表相关文件 | 实施授权 | `intent.plan.triggers` |
+| 代码改动超过阈值 | 实施授权 | `intent.plan.maxLines` |
+| 依赖清单变化 | 实施授权 | `risk.deps` |
+| 命中敏感路径 | 人确认 | `risk.paths` |
+
+- 没有任何信号命中的改动自动放行，只要验证与评审通过。
+- 要实施授权的信号只在启用 `plan-first` 时执行，缺授权报 `plan_unapproved`。
+- 要人确认的信号复用 `harness confirm`，不要求先写方案，缺确认报 `risk_unconfirmed`；它不受 `plan-first` 与 `governance.confirmOnGateChange` 影响。
+- 两类要求互不替代：同时命中时，确认不能代替授权，授权也不能代替确认。
+- 确认摘要列出命中的信号；只命中风险信号时不再显示“无需确认”。
+- 删除或重命名敏感路径下的文件同样命中。
+- 判定读主分支的配置，任务分支放宽不了自己的档位；分支改了 `risk` 或 `intent.plan` 属于门禁改动，确认摘要列出改前改后。
+- `risk` 写错形状（例如 `paths` 不是数组）时按需要人确认处理，不会静默放行。
+- `harness status` 在配置了 `risk` 的项目里多一行 `risk`，`harness submit` 写进 PR/MR 描述的门禁结果里有“风险确认”一行。
+- 没有 `risk` 配置的项目行为不变；`init` 只给新项目写默认值，已接入项目要启用就在任务分支里加上这一项，它本身是门禁改动，要人确认。
+- `risk.deps` 默认不包含 `package.json`，只改 `scripts` 不算依赖变化，真正的依赖变化一定会改锁文件。
+- 默认的敏感路径只放 CI 与部署文件；认证、支付一类目录名因项目而异，接入时按项目补充。
 
 <a id="配合使用的提示词"></a>
 
@@ -980,6 +1007,8 @@ node ~/github/harness/bin/harness.mjs install --local   # 按新锁定的版本�
 | `intent.plan.markers` | `docs/changes/*/plan.md` | 实施方案文件；分支里出现它就按先方案后实施处理 |
 | `intent.plan.triggers` | `**/migrations/**`、`**/*.sql` | 库表相关文件，改了就需要实施授权 |
 | `intent.plan.exclude` | 测试、文档、锁文件与 `.harness/` | 不计入代码改动行数的文件；写了这一项会整个替换默认列表 |
+| `risk.paths` | 新项目由 `init` 写入 CI 与部署文件，没有这一项则不启用 | 敏感路径 glob；分支改动命中任何一个，合并或提交前要人确认（`risk_unconfirmed`），不受 `plan-first` 与 `confirmOnGateChange` 影响，见“风险分级” |
+| `risk.deps` | 新项目由 `init` 写入各语言的锁文件与 `go.mod`、`requirements*.txt`，没有这一项则不启用 | 依赖清单 glob；命中的分支要实施授权，启用 `plan-first` 时生效，不套用 `intent.plan.exclude` |
 | `governance.confirmOnGateChange` | `true` | 门禁改动是否要人工确认；首次接入不受这个开关影响 |
 | `governance.gatePaths` | `[]` | 追加的门禁文件 glob |
 | `escalate.triggers` | 四条 | 建议上报的情形，写给 Agent 看，harness 不据此自动触发 |
@@ -1475,6 +1504,13 @@ harness 防的是 Agent 的误操作，以及被提示注入后常见的绕过�
   写了方案的任务在记录授权前改不了代码，超过阈值或改了库表的分支没有授权记录合不进去。
   授权记录由 Agent 写入，门禁能保证它存在、照录了原话并且清单没有再改，但无法核实你是否真的说过这句话，要靠你在合并输出或 `harness status` 里核对。
   Agent 把大任务误判成直接实施时，要到合并才会被拦下；测试是否先于实现失败过，门禁无法证明，靠评审与你抽查。
+- 风险信号只看路径、依赖清单与行数，有这些已知缺口：
+  把大改动拆成多个小分支，每个分支都不超过阈值，规模信号看不出总量，要靠人在合并输出和 `harness status` 里留意；
+  二进制文件按 0 行计；
+  默认的 `intent.plan.triggers` 只认 `migrations/` 与 `.sql`，Rails 的 `db/migrate` 一类要项目自己补；
+  依赖变化只看清单文件有没有改，不解析内容。
+- 命令规则按去掉引号与反斜杠后的写法再匹配一次，`harness "confirm" --yes` 这类拆写会被拦下；
+  但命令规则终究是文本匹配，用变量拼接、`eval` 等更隐蔽的写法仍可能绕过，所以带 `--yes` 的确认真正的保证是由人在自己的终端执行，规则只是让误操作当场被拦下。
 
 ## 常见问题
 
@@ -1487,6 +1523,7 @@ harness 防的是 Agent 的误操作，以及被提示注入后常见的绕过�
 | `本机没有安装门禁锁定的版本` | Agent 工具调用被拦截时，由人在项目目录运行 `node ~/github/harness/bin/harness.mjs install --local`，再让 Agent 继续诊断 |
 | `gate_change_unconfirmed` | Agent 展示确认摘要；由人在自己的终端执行它给出的带 `--yes` 的确认命令 |
 | 运行 `confirm --yes` 后主分支没有新提交 | 确认只记录，不合并；告诉 Agent 已确认，让它按交付方式继续：本地交付完成合并，远程交付提交 PR/MR |
+| `risk_unconfirmed` | 改动命中了 `risk.paths` 的敏感路径；Agent 展示 `harness confirm` 摘要，由人在自己的终端执行带 `--yes` 的确认，之后让 Agent 重新运行交付命令 |
 | `plan_unapproved` | 大改动没有实施授权记录，或授权后验收清单又改了；补齐方案并提交，向用户说明，用户同意后照录原话运行 `harness approve --branch <分支> --yes --note "<原话>"` |
 | 写代码时被 `plan-before-code` 拦截 | 任务分支里有实施方案但还没有授权记录；用户还没同意就停下等，已经同意就按上一条记录；只是借用了 `docs/changes/` 下的旧方案时，把它移出这次改动 |
 | Claude Code 提示 `Stop hook error occurred` | 收尾检查拦下了结束：Claude Code 把所有拦下结束的 `Stop` 钩子都这样提示，原因在 `Stop hook feedback` 里，Agent 会按它接着做，不是门禁出错 |

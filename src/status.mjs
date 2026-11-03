@@ -6,7 +6,7 @@ import { EVIDENCE_KIND } from "./verify/verify.mjs";
 import { REVIEW_KIND, reviewerSummary } from "./review/review.mjs";
 import { CONFIRM_KIND } from "./confirm/confirm.mjs";
 import { mainWorktreeProblems, planMergeResult, reuseDecision, reviewStaleFiles } from "./merge/merge.mjs";
-import { approvalState, planEnforced, planRequirement } from "./plan/plan.mjs";
+import { approvalState, assessRisk, planEnforced } from "./plan/plan.mjs";
 import { latestSubmit } from "./delivery/submit.mjs";
 import { unresolvedStop } from "./stop/session.mjs";
 import { commitRangeProblems, commitRuleErrorAt } from "./policy/commit-message.mjs";
@@ -139,16 +139,16 @@ export function branchStatus({ cwd, branch }) {
     add("review", "ok", `评审通过（需求符合度 ${review.record.requirementFit?.rating ?? "?"}，工程质量 ${review.record.engineeringQuality?.rating ?? "?"}，清单来源 ${review.record.acceptanceSource ?? "无"}，评审者 ${reviewerSummary(review.record)}）`);
   }
 
+  const riskBase = gitOk(root, ["merge-base", mainCommit, branchCommit]);
+  const risk = assessRisk({ root, project, base: riskBase, head: branchCommit });
   if (planEnforced(project.policy)) {
-    const base = gitOk(root, ["merge-base", mainCommit, branchCommit]);
-    const need = planRequirement({ root, project, base, head: branchCommit });
-    if (need.reasons.length === 0) {
-      add("plan", "ok", `属于直接实施的范围（代码改动 ${need.lines} 行），不需要实施授权`);
+    if (risk.reasons.length === 0) {
+      add("plan", "ok", `属于直接实施的范围（代码改动 ${risk.lines} 行），不需要实施授权`);
     } else {
       const state = approvalState({ root, branch, acceptanceText: showBlob(root, branchCommit, acceptancePath(project, branch)) });
-      if (state.approved) add("plan", "ok", `已有实施授权（${need.reasons.join("；")}；依据：${state.record.note}）`);
+      if (state.approved) add("plan", "ok", `已有实施授权（${risk.reasons.join("；")}；依据：${state.record.note}）`);
       else {
-        add("plan", "fail", `${need.reasons.join("；")}，${state.reason}：用户同意实施后运行 harness approve --branch ${branch} --yes --note "<用户原话>"`);
+        add("plan", "fail", `${risk.reasons.join("；")}，${state.reason}：用户同意实施后运行 harness approve --branch ${branch} --yes --note "<用户原话>"`);
         block("plan_unapproved", "待实施授权");
       }
     }
@@ -180,6 +180,15 @@ export function branchStatus({ cwd, branch }) {
     else {
       add("gate", "fail", `改动涉及门禁 ${gateTouched.length} 个文件，${when}需要人工确认：harness confirm --branch ${branch}`);
       block("gate_unconfirmed", "门禁改动待确认");
+    }
+  }
+
+  if (risk.active) {
+    if (risk.confirmReasons.length === 0) add("risk", "ok", "没有命中需要人确认的风险信号");
+    else if (confirmFor(project, root, branch).ok) add("risk", "ok", `风险改动已确认（${risk.confirmReasons.join("；")}）`);
+    else {
+      add("risk", "fail", `${risk.confirmReasons.join("；")}，${when}需要人工确认：harness confirm --branch ${branch}`);
+      block("risk_unconfirmed", "风险改动待确认");
     }
   }
 

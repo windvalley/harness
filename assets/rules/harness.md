@@ -58,7 +58,7 @@
 
 验证失败、评审拒绝、`review_stale`、合并冲突、`bad_commit_message`、`branch_commit_rule_invalid`、`branch_moved`、`main_moved` 这类拒绝由 Agent 按拒绝原因修改后重新 verify、review，再交付，不需要用户安排。
 修复只能改实现、测试或提交本身：任务分支放宽不了门禁，删测试、弱化断言、跳过检查同样不允许。
-需要人的拒绝停下来说明对象和做法：`gate_change_unconfirmed`（人确认门禁改动）、`plan_unapproved`（用户同意实施）、`platform_missing` 与 `platform_failed`（人安装或登录平台命令）、`version_missing`（人安装版本）、`push_rejected` 与 `not_fast_forward`（远程或本地主分支有来源不明的提交，由人判断）。
+需要人的拒绝停下来说明对象和做法：`gate_change_unconfirmed`（人确认门禁改动）、`risk_unconfirmed`（人确认高风险改动）、`plan_unapproved`（用户同意实施）、`platform_missing` 与 `platform_failed`（人安装或登录平台命令）、`version_missing`（人安装版本）、`push_rejected` 与 `not_fast_forward`（远程或本地主分支有来源不明的提交，由人判断）。
 另外按 `core.md` 的停下条件处理：缺权限、需要业务拍板、改动范围明显超出方案、同一个问题连续三轮没有解决。
 
 ## 交付方式
@@ -141,7 +141,18 @@ harness 保证它提交的 PR/MR 通过了本机门禁；平台上最终合入�
   Agent 运行 `harness approve --branch <任务分支> --yes --note "<用户原话>"` 记录下来，然后连续实施到完成，不需要用户执行任何命令。
 - `--note` 必须照录用户表示同意的原话，合并、`status` 与评审都会显示它；用户没有同意时不得记录，也不得改写或编造原话。
 - 授权绑定验收清单的内容：之后要改清单，先向用户说明改动并取得同意，再重新记录；实施方案里的进度记录可以随时更新。
-- 合并时，写了实施方案、改了库表相关文件（`intent.plan.triggers`）或代码改动超过 `intent.plan.maxLines` 行的分支，必须有授权记录；没写方案就直接做了大改动的分支会在这里被拒绝。
+- 合并时，写了实施方案、改了库表相关文件（`intent.plan.triggers`）、改了依赖清单（`risk.deps`）或代码改动超过 `intent.plan.maxLines` 行的分支，必须有授权记录；没写方案就直接做了大改动的分支会在这里被拒绝。
+
+## 风险确认
+
+`.harness/config.json` 的 `risk.paths` 列出敏感路径（接入时默认放 CI 与部署文件，项目按需补充）。
+分支改动命中其中任何一个时，合并或提交前必须有人的确认记录，缺少时报 `risk_unconfirmed`，不要求先写方案。
+
+- Agent 运行 `harness confirm --branch <任务分支>` 展示只读摘要，摘要列出命中的风险信号，然后停下，说明要人做什么。
+- 带 `--yes` 的确认只能由人在自己的终端执行，Agent 不得执行，也不得用引号、变量等写法拆开命令绕过；对话里的“同意”不能替代。
+- 确认绑定合并结果的 tree，分支再提交或主分支前进让结果变了，要重新确认。
+- 要授权与要确认的信号各管各的：一次改动同时命中两类时，两个要求都要满足，确认不能替代授权，授权也不能替代确认。
+- 判定读主分支的配置；任务分支改了 `risk` 或 `intent.plan` 属于门禁改动，确认摘要会列出改前改后。
 
 ## 被拦截时
 

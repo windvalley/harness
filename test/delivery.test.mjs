@@ -321,6 +321,24 @@ describe("harness submit", () => {
     assert.equal(result.stderr.includes("[merge]"), false, "submit 的日志不用 merge 的前缀");
   });
 
+  test("命中敏感路径时 submit 要人确认，确认后 PR 描述写明风险确认", () => {
+    const repo = setup({ delivery: GITHUB, config: { risk: { paths: [".github/workflows/**"], deps: [] } } });
+    const remote = withRemote(repo);
+    const platform = fakePlatform(repo);
+    const head = task(repo, "task/ci", { ".github/workflows/ci.yml": "name: ci\n" });
+    const refused = repo.cli("submit", "--branch", "task/ci");
+    assert.notEqual(refused.status, 0);
+    assert.match(output(refused), /risk_unconfirmed/);
+    assert.match(output(refused), /提交前/);
+    assert.equal(remoteRef(remote, "refs/heads/task/ci"), null, "没确认时不推送");
+    assert.equal(repo.cli("confirm", "--branch", "task/ci", "--yes").status, 0);
+
+    const result = repo.cli("submit", "--branch", "task/ci");
+    assert.equal(result.status, 0, output(result));
+    assert.equal(remoteRef(remote, "refs/heads/task/ci"), head);
+    assert.match(platform.items()[0].body, /- 风险确认: 已由人确认（敏感路径 \.github\/workflows\/ci\.yml）/);
+  });
+
   test("PR 描述和推送里不出现评审用的端点域名，只说明是自定义端点", () => {
     const repo = setup({ delivery: GITHUB });
     const remote = withRemote(repo);

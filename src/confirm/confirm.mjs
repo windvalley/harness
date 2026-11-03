@@ -1,10 +1,11 @@
 import { userInfo } from "node:os";
 import { deliveryAt, deliveryChange, deliveryGrant, deliverySettings, describeDelivery, gatePaths, loadGateProject, mainBranch } from "../lib/config.mjs";
 import { matchAny } from "../lib/glob.mjs";
-import { changedPaths, gitOk } from "../lib/git.mjs";
+import { changedPaths, gitOk, mergeBase } from "../lib/git.mjs";
 import { appendLedger, writeRecord } from "../lib/store.mjs";
 import { resolvePolicy } from "../policy/resolve.mjs";
 import { planMergeResult } from "../merge/merge.mjs";
+import { assessRisk } from "../plan/plan.mjs";
 
 export const CONFIRM_KIND = "confirm";
 
@@ -25,6 +26,9 @@ export function confirmSummary({ cwd, branch }) {
   const delivery = describeDeliveryChange({ project, root, planned });
   const ruleDiff = describeRuleDiff({ root, mainCommit: planned.mainCommit, resultCommit: planned.resultCommit });
   const checkDiff = describeCheckDiff({ root, project, mainCommit: planned.mainCommit, resultCommit: planned.resultCommit });
+  const assessed = assessRisk({ root, project, base: mergeBase(root, planned.mainCommit, planned.branchCommit), head: planned.branchCommit });
+  const risk = { tier: assessed.tier, confirm: assessed.confirmReasons, approve: assessed.reasons };
+  const riskConfig = describeRiskConfigChange({ root, mainCommit: planned.mainCommit, resultCommit: planned.resultCommit });
 
   return {
     branch,
@@ -40,7 +44,25 @@ export function confirmSummary({ cwd, branch }) {
     codeTouched,
     ruleDiff,
     checkDiff,
+    risk,
+    riskConfig,
   };
+}
+
+/**
+ * 风险配置（risk 与 intent.plan）决定哪些改动要授权、哪些要人确认，改它就是改后续所有分支的门槛，
+ * 所以改前改后要点名，免得一次只看路径的确认把门槛放宽了。判定本身仍按主分支的配置。
+ */
+function describeRiskConfigChange({ root, mainCommit, resultCommit }) {
+  const pick = (commit) => {
+    const config = safeJson(root, commit, ".harness/config.json");
+    return config ? { risk: config.risk ?? null, plan: config.intent?.plan ?? null } : null;
+  };
+  const before = pick(mainCommit);
+  const after = pick(resultCommit);
+  if (!before || !after) return null;
+  const changed = JSON.stringify(before) !== JSON.stringify(after);
+  return changed ? { before, after } : null;
 }
 
 /**
@@ -173,7 +195,7 @@ export function approveConfirm({ cwd, branch, note = "" }) {
     confirmedAt: new Date().toISOString(),
     summary: rest,
   });
-  appendLedger(root, { event: "confirm.approve", branch, tree: resultTree, gateFiles: summary.gateTouched.length });
+  appendLedger(root, { event: "confirm.approve", branch, tree: resultTree, gateFiles: summary.gateTouched.length, riskSignals: summary.risk.confirm.length });
   return { record, summary };
 }
 
@@ -221,6 +243,19 @@ export function formatSummary(summary) {
     if (added.length) lines.push(`  新增: ${added.join(", ")}`);
     if (removed.length) lines.push(`  移除: ${removed.join(", ")}`);
   }
-  if (summary.gateTouched.length === 0) lines.push("本次没有改动门禁文件，无需确认。");
+  if (summary.riskConfig) {
+    const { before, after } = summary.riskConfig;
+    lines.push("风险配置有改动（决定哪些改动要授权、要人确认）:");
+    lines.push(`  risk: ${JSON.stringify(before.risk)} -> ${JSON.stringify(after.risk)}`);
+    lines.push(`  intent.plan: ${JSON.stringify(before.plan)} -> ${JSON.stringify(after.plan)}`);
+  }
+  if (summary.risk.confirm.length > 0) {
+    lines.push(`风险分级: T2（要人确认，按主分支的风险配置判定）`);
+    for (const item of summary.risk.confirm) lines.push(`  ${item}`);
+  } else if (summary.risk.approve.length > 0) {
+    lines.push(`风险分级: T1（要实施授权，不要求人工确认）`);
+  }
+  if (summary.risk.confirm.length > 0 && summary.risk.approve.length > 0) lines.push(`  另有要实施授权的信号: ${summary.risk.approve.join("；")}`);
+  if (summary.gateTouched.length === 0 && summary.risk.confirm.length === 0) lines.push("本次没有改动门禁文件，也没有命中高风险信号，无需确认。");
   return lines.join("\n");
 }
