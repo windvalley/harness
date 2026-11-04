@@ -21,7 +21,7 @@ import { reviewerCommand } from "./review/reviewers-cmd.mjs";
 import { loadLocalReviewers, reviewersFile } from "./review/reviewers.mjs";
 import { approveConfirm, confirmSummary, formatSummary } from "./confirm/confirm.mjs";
 import { approvePlan, formatPlanSummary, planSummary, riskHints } from "./plan/plan.mjs";
-import { reviewPlan } from "./plan/planreview.mjs";
+import { DEFAULT_PLAN_ATTEMPT_TIMEOUT_SECONDS, DEFAULT_PLAN_TIMEOUT_SECONDS, reviewPlan } from "./plan/planreview.mjs";
 import { checkCommitMessage, checkStaged, guardReference } from "./githook.mjs";
 import { branchMessageProblems, commitRuleErrorAt } from "./policy/commit-message.mjs";
 import { answerEscalation, listEscalations, openEscalation, readEscalation, resumePlan } from "./escalate/escalate.mjs";
@@ -47,7 +47,8 @@ const USAGE = `harness <命令> [参数]
 工程流程
   verify   [--head <ref>] [--base <ref>] [--branch <名称>] [--no-reuse] [--plan]   对分支验证并写签名证据；--plan 只列出会执行的检查
   review   --branch <名称>                          独立评审
-  review-plan --branch <名称> [--all]               方案评审：只给建议，不是门禁；默认只展示 high 及以上，--all 展示全部
+  review-plan --branch <名称> [--all]               方案评审：只给建议，默认只展示 high 及以上，--all 展示全部
+              [--timeout-seconds <秒>] [--attempt-timeout-seconds <秒>]  总时限默认 ${DEFAULT_PLAN_TIMEOUT_SECONDS} 秒，单次默认 ${DEFAULT_PLAN_ATTEMPT_TIMEOUT_SECONDS} 秒
   status   --branch <名称>                           只读汇总：还差哪几步才能合并
   confirm  --branch <名称> [--yes]                   查看门禁改动；--yes 记录人工确认
   approve  --branch <名称> [--yes --note <原话>]     查看任务方案；用户同意实施后加 --yes，--note 照录用户原话
@@ -273,19 +274,55 @@ async function cmdReview(argv) {
 }
 
 // 方案评审是建议性的：评审者不可用或结果不可信时只说明原因，不影响分支，也不阻塞方案交付。
-function cmdReviewPlan(argv) {
-  const { values } = parseArgs({ args: argv, options: { branch: { type: "string" }, all: { type: "boolean", default: false } } });
+async function cmdReviewPlan(argv) {
+  const { values } = parseArgs({
+    args: argv,
+    options: {
+      branch: { type: "string" },
+      all: { type: "boolean", default: false },
+      "timeout-seconds": { type: "string" },
+      "attempt-timeout-seconds": { type: "string" },
+    },
+  });
   if (!values.branch) {
-    process.stderr.write("用法: harness review-plan --branch <名称> [--all]\n");
+    process.stderr.write("用法: harness review-plan --branch <名称> [--all] [--timeout-seconds <秒>] [--attempt-timeout-seconds <秒>]\n");
     return 2;
   }
+  for (const flag of ["timeout-seconds", "attempt-timeout-seconds"]) {
+    const value = values[flag];
+    if (value !== undefined && (!/^[1-9]\d*$/.test(value) || Number(value) > 3600)) {
+      process.stderr.write(`--${flag} 必须是 1 到 3600 的整数秒\n`);
+      return 2;
+    }
+  }
+  const controller = new AbortController();
+  const cancel = (signal) => controller.abort(
+    Object.assign(new Error(`方案评审已取消（${signal}）`), { exitCode: signal === "SIGINT" ? 130 : 143 }),
+  );
+  process.on("SIGINT", cancel);
+  process.on("SIGTERM", cancel);
   try {
-    const { text } = reviewPlan({ cwd: process.cwd(), branch: values.branch, all: values.all, log: (line) => process.stderr.write(`${line}\n`) });
+    const { text } = await reviewPlan({
+      cwd: process.cwd(),
+      branch: values.branch,
+      all: values.all,
+      timeoutSeconds: values["timeout-seconds"] && Number(values["timeout-seconds"]),
+      attemptTimeoutSeconds: values["attempt-timeout-seconds"] && Number(values["attempt-timeout-seconds"]),
+      signal: controller.signal,
+      log: (line) => process.stderr.write(`${line}\n`),
+    });
     process.stderr.write(`${text}\n`);
     return 0;
   } catch (error) {
+    if (controller.signal.aborted) {
+      process.stderr.write(`${controller.signal.reason.message}\n`);
+      return controller.signal.reason.exitCode;
+    }
     process.stderr.write(`方案评审失败: ${error.message}\n`);
     return 1;
+  } finally {
+    process.off("SIGINT", cancel);
+    process.off("SIGTERM", cancel);
   }
 }
 

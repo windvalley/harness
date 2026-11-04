@@ -1,4 +1,6 @@
 import { strict as assert } from "node:assert";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { chmodSync, existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
@@ -29,7 +31,7 @@ function setup(files = PLAN_FILES) {
 }
 
 /** 记录参数、提示与工作目录的假 claude；touch 指定时模拟评审者改了工作区里的文件。 */
-function fakePlanClaude(repo, { structured, touch } = {}) {
+function fakePlanClaude(repo, { structured, touch, events = [] } = {}) {
   const bin = join(repo.root, "..", "fake-plan-claude.mjs");
   const log = join(repo.root, "..", "plan-call.json");
   writeFileSync(
@@ -39,7 +41,11 @@ import { readFileSync, writeFileSync } from "node:fs";
 const prompt = readFileSync(0, "utf8");
 writeFileSync(${JSON.stringify(log)}, JSON.stringify({ args: process.argv.slice(2), prompt, cwd: process.cwd() }));
 ${touch ? `writeFileSync(${JSON.stringify(touch)}, "changed\\n");` : ""}
-process.stdout.write(JSON.stringify({ is_error: false, total_cost_usd: 0.02, structured_output: ${JSON.stringify(structured ?? { findings: [] })}, modelUsage: { sonnet: {} } }));
+const result = { is_error: false, total_cost_usd: 0.02, structured_output: ${JSON.stringify(structured ?? { findings: [] })}, modelUsage: { sonnet: {} } };
+if (process.argv.includes("stream-json")) {
+  for (const event of ${JSON.stringify(events)}) process.stdout.write(JSON.stringify(event) + "\\n");
+  process.stdout.write(JSON.stringify({ type: "result", ...result }) + "\\n");
+} else process.stdout.write(JSON.stringify(result));
 `,
   );
   chmodSync(bin, 0o755);
@@ -130,6 +136,84 @@ describe("方案评审", () => {
     assert.match(result.stderr, /没写超时/);
   });
 
+  test("首个评审者无输出时报告等待，单次超时后在总时限内回退", () => {
+    const repo = setup();
+    writeReviewers(repo, { reviewers: [
+      { name: "slow", client: "command", command: ["sh", "-c", "sleep 60 & wait"] },
+      { name: "backup", client: "command", command: [process.execPath, "-e", 'console.log(JSON.stringify({findings: []}))'] },
+    ] });
+    const result = repo.cli("review-plan", "--branch", "task/a", "--timeout-seconds", "6", "--attempt-timeout-seconds", "10");
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stderr, /slow.*已运行.*剩余.*尚无过程输出/);
+    assert.match(result.stderr, /slow.*单次评审超时/);
+    assert.match(result.stderr, /方案评审完成: backup/);
+    assert.equal(ledger(repo).find((item) => item.event === "plan.review").reviewer, "backup");
+  });
+
+  test("总时限耗尽时给出明确原因，且不写成功事件", () => {
+    const repo = setup();
+    writeReviewers(repo, { reviewers: [
+      { name: "slow", client: "command", command: ["sh", "-c", "exec sleep 60"] },
+    ] });
+    const result = repo.cli("review-plan", "--branch", "task/a", "--timeout-seconds", "1");
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stderr, /方案评审总时限耗尽/);
+    assert.ok(!ledger(repo).some((item) => item.event === "plan.review"));
+  });
+
+  test("Claude 的流式事件显示阶段，结论取自 result，过程内容不输出", () => {
+    const repo = setup();
+    const call = fakePlanClaude(repo, { structured: { findings: [HIGH] }, events: [
+      { type: "system", subtype: "init" },
+      { type: "stream_event", event: { type: "message_start" } },
+      { type: "assistant", message: { content: [{ type: "tool_use", name: "Read", id: "r1", input: { file_path: "PRIVATE-PATH" } }] } },
+      { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "r1", content: "PRIVATE-CONTENT" }] } },
+      { type: "system", subtype: "api_retry", error: "PRIVATE-ERROR" },
+    ] });
+    const result = repo.cli("review-plan", "--branch", "task/a");
+    assert.equal(result.status, 0, result.stderr);
+    assert.ok(call().args.includes("stream-json"));
+    assert.match(result.stderr, /评审会话已初始化[\s\S]*收到首个模型响应[\s\S]*仓库查询开始（Read）[\s\S]*仓库查询结束（Read）[\s\S]*模型请求重试[\s\S]*方案评审完成/);
+    assert.doesNotMatch(result.stderr, /PRIVATE-/);
+    assert.match(result.stderr, /没写超时/);
+  });
+
+  test("调用方取消时终止评审进程并跳过备选", { timeout: 15000 }, async () => {
+    const repo = setup();
+    const marker = join(repo.root, "..", "reviewer.pid");
+    writeReviewers(repo, { reviewers: [
+      { name: "slow", client: "command", command: ["sh", "-c", 'echo "$$" > "$1"; exec sleep 60', "sh", marker] },
+      { name: "backup", client: "command", command: [process.execPath, "-e", 'console.log(JSON.stringify({findings: []}))'] },
+    ] });
+    const child = spawn(join(repo.root, ".harness/bin/harness"), ["review-plan", "--branch", "task/a"], {
+      cwd: repo.root, env: { ...process.env, ...repo.env }, stdio: ["ignore", "ignore", "pipe"],
+    });
+    const closed = once(child, "close");
+    let output = "";
+    let reviewerPid;
+    try {
+      child.stderr.setEncoding("utf8");
+      child.stderr.on("data", (chunk) => { output += chunk; });
+      for (let elapsed = 0; elapsed < 5000 && !existsSync(marker) && child.exitCode === null; elapsed += 25) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      assert.ok(existsSync(marker), output);
+      reviewerPid = Number(readFileSync(marker, "utf8"));
+      child.kill("SIGTERM");
+      assert.deepEqual(await closed, [143, null]);
+      assert.match(output, /方案评审已取消.*SIGTERM/);
+      assert.doesNotMatch(output, /开始评审者 backup|方案评审完成/);
+      assert.throws(() => process.kill(reviewerPid, 0), { code: "ESRCH" });
+      reviewerPid = undefined;
+      assert.ok(!ledger(repo).some((item) => item.event === "plan.review"));
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+      if (reviewerPid) {
+        try { process.kill(reviewerPid, "SIGKILL"); } catch (error) { if (error.code !== "ESRCH") throw error; }
+      }
+    }
+  });
+
   test("没有可用评审者时非 0 退出并说明原因，不影响分支", () => {
     const repo = setup();
     writeReviewers(repo, { reviewers: [{ name: "ghost", client: "command", command: ["harness-no-such-reviewer-bin"] }] });
@@ -159,7 +243,13 @@ describe("方案评审", () => {
 
   test("codex 评审者也在任务分支的 Worktree 里运行并读仓库", () => {
     const repo = setup();
-    const log = fakeCodex(repo, { findings: [HIGH] });
+    const log = fakeCodex(repo, { findings: [HIGH] }, { events: [
+      { type: "thread.started" },
+      { type: "turn.started" },
+      { type: "item.started", item: { type: "command_execution", command: "PRIVATE-COMMAND" } },
+      { type: "item.completed", item: { type: "command_execution", aggregated_output: "PRIVATE-OUTPUT" } },
+      { type: "turn.completed" },
+    ] });
     writeReviewers(repo, { reviewers: [{ name: "cx", client: "codex" }] });
     const result = repo.cli("review-plan", "--branch", "task/a");
     assert.equal(result.status, 0, result.stderr);
@@ -169,7 +259,9 @@ describe("方案评审", () => {
     assert.equal(call.args[call.args.indexOf("--sandbox") + 1], "read-only");
     assert.match(call.stdin, /PLAN-TEXT/);
     assert.ok(call.schema.properties.findings);
-    assert.match(result.stderr, /读了仓库/);
+    assert.ok(call.args.includes("--json"));
+    assert.match(result.stderr, /评审回合已开始[\s\S]*评审命令开始[\s\S]*评审命令结束[\s\S]*评审回合已结束[\s\S]*可读仓库/);
+    assert.doesNotMatch(result.stderr, /PRIVATE-/);
     assert.equal(ledger(repo).find((item) => item.event === "plan.review").readsRepo, true);
   });
 

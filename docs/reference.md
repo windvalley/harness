@@ -488,15 +488,23 @@ Agent 开始任务前先判断分级，规则写在 `.harness/rules/core.md`，�
 ```sh
 harness review-plan --branch feat/login        # 默认只展示 high 及以上的发现
 harness review-plan --branch feat/login --all  # 展示全部
+harness review-plan --branch feat/login --timeout-seconds 300 --attempt-timeout-seconds 90
 ```
 
 代码评审发生在实施之后，并且把验收清单当作既定标准；清单本身有遗漏或理解偏差时，实现会照着错的标准通过评审。
 方案评审补的就是这一段：失败路径与边界有没有漏、验收条目能不能判定对错、与已有实现是否冲突、有没有范围蔓延、三份文件之间是否矛盾。
 
 - 它是建议，不是门禁：不写评审或证据记录，不影响 `approve`、`merge`、`submit`，也不会让已有评审过期。
-  账本只追加一条 `plan.review` 事件（评审者、模型、各级别发现的数量、是否读了仓库、费用），用于统计方案评审值不值。
-- 评审者复用本机 `reviewers.json`，排序、回退和密钥擦除与代码评审一致。
+  账本只追加一条 `plan.review` 事件（评审者、模型、各级别发现的数量、是否有仓库可读、费用），用于统计方案评审值不值。
+- 评审者复用本机 `reviewers.json` 的排序和密钥擦除规则，前一个失败或超时后尝试下一位。
   没有配置评审者、全部失败或结果不可信时，Agent 把原因告诉你并继续交付方案，不会为此换更弱的评审者。
+- 评审阶段默认共享 360 秒总时限，每位最多 120 秒。
+  `--timeout-seconds` 和 `--attempt-timeout-seconds` 接受 1 到 3600 的整数秒。
+  单次实际时限同时受评审者配置中的 `timeoutMinutes` 和按剩余可用人数分配的时间约束，给备选评审者预留机会。
+  单次超时会回退，总时限耗尽会结束评审，收到 Ctrl-C 或 SIGTERM 会取消并终止当前评审进程。
+- 运行中定期显示当前评审者、已用时间、剩余总预算和最近活动。
+  Claude 提供模型响应、只读查询与重试等事件，Codex 提供回合与命令事件，通用命令以子进程输出作为活动信号。
+  进度只显示事件摘要，最终结论仍需通过结构校验。
 - claude 评审者在任务分支的 Worktree 里运行，可以读整个仓库来核对已有实现，但没有任何写入类工具：只开 Read、Grep、Glob 和只读的 git 查询（`log`、`show`、`diff`、`grep`、`blame`、`ls-files`、`status`），`Edit`、`Write` 被禁用。
   `.env`、`*.pem`、`*.key`、`id_rsa*`、`credentials*` 在工具层被屏蔽，评审者的系统提示也要求不碰这类文件。
   评审前后会比对 Worktree 的 HEAD 与 `git status`，发现被改动时报错，不采信这次结果。
@@ -1553,7 +1561,7 @@ harness reviewer set mine --client command --command-json '["my-reviewer","--jso
 | --- | --- |
 | `verify [--branch <分支>] [--head <ref>] [--base <ref>] [--plan] [--no-reuse] [--json]` | 验证并写签名证据；`--plan` 只列计划，`--no-reuse` 不复用已有结果，`--json` 输出 JSON |
 | `review --branch <分支>` | 独立评审 |
-| `review-plan --branch <分支> [--all]` | 方案评审：另一个模型审验收清单、行为说明与实施方案，只给建议，不是门禁；默认只展示 high 及以上，见“方案评审” |
+| `review-plan --branch <分支> [--all] [--timeout-seconds <秒>] [--attempt-timeout-seconds <秒>]` | 方案评审，实时报告进度与回退，默认只展示 high 及以上的发现，见“方案评审” |
 | `reviewer list`、`set`、`remove`、`prefer`、`test` | 管理本机评审者：客户端、模型、推理强度、端点与 key，见“独立评审的后端” |
 | `status [--branch <分支>]` | 只读汇总还差哪几步才能交付，默认看当前分支 |
 | `confirm --branch <分支> [--yes] [--note <说明>]` | 查看门禁改动摘要；带 `--yes` 由人记录确认 |

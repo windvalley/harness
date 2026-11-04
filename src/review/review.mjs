@@ -7,6 +7,7 @@ import { appendLedger, readRecord, writeRecord } from "../lib/store.mjs";
 import { approvalState } from "../plan/plan.mjs";
 import { endpointHost, loadLocalReviewers, orderReviewers } from "./reviewers.mjs";
 import { detectSessionModel } from "./session.mjs";
+import { runPlanProcess } from "./plan-process.mjs";
 
 export const REVIEW_KIND = "review";
 // diff 上限可以在 review.maxDiffChars 里调整；提交说明与文件统计各自另有上限，不挤占 diff 的额度。
@@ -72,7 +73,7 @@ export function userSettingsFile(home = homedir()) {
 // 评审档位：代码评审只看材料，方案评审允许读仓库，两者的 schema、提示词与工具参数都不同。
 const CODE_PROFILE = { schema: REVIEW_SCHEMA, system: SYSTEM_PROMPT, tools: [], parse: (structured) => parseVerdict(structured) };
 
-export function reviewerArgs({ model, maxBudgetUsd, effort }, settingsFile = "", profile = CODE_PROFILE) {
+export function reviewerArgs({ model, maxBudgetUsd, effort }, settingsFile = "", profile = CODE_PROFILE, stream = false) {
   return [
     "-p",
     "--no-session-persistence",
@@ -82,7 +83,8 @@ export function reviewerArgs({ model, maxBudgetUsd, effort }, settingsFile = "",
     ...(settingsFile ? ["--settings", settingsFile] : []),
     ...(profile.tools.length > 0 ? profile.tools : ["--tools", ""]),
     "--output-format",
-    "json",
+    stream ? "stream-json" : "json",
+    ...(stream ? ["--verbose", "--include-partial-messages"] : []),
     "--json-schema",
     JSON.stringify(profile.schema),
     "--system-prompt",
@@ -233,67 +235,52 @@ const PROVIDER_SWITCHES = [
   "CLAUDE_CODE_USE_MANTLE",
 ];
 
-function runClaude({ cwd, prompt, entry, bin, profile = CODE_PROFILE }) {
-  const scratch = entry.baseUrl ? mkdtempSync(join(tmpdir(), "harness-review-")) : null;
-  try {
-    const env = { ...process.env };
-    // 重试次数不限制时，key 失效要等四分多钟才报错，回退到下一个评审者就被拖住。
-    // 只在本机评审者文件的路径上限制：旧字段只有一个评审者，没有可回退的对象，保持客户端默认。
-    if (entry.source === "local") env.CLAUDE_CODE_MAX_RETRIES ??= "2";
-    let settingsFile = userSettingsFile();
-    if (scratch) {
-      // 继承来的 ANTHROPIC_* 会和评审者自己的端点、key 混在一起：实测里配错 key 照样成功，分不清这次用的是哪一把。
-      // 会话跑在 Bedrock、Vertex、Foundry 上时，选择提供商的 CLAUDE_CODE_USE_* 开关同样要清掉，否则请求不走评审者指定的端点。
-      for (const name of Object.keys(env)) if (name.startsWith("ANTHROPIC_") || PROVIDER_SWITCHES.includes(name)) delete env[name];
-      settingsFile = join(scratch, "settings.json");
-      writeFileSync(
-        settingsFile,
-        JSON.stringify({ env: { ANTHROPIC_BASE_URL: entry.baseUrl }, apiKeyHelper: `printf %s "$${KEY_ENV}"` }),
-        { mode: 0o600 },
-      );
-      env[KEY_ENV] = entry.apiKey;
-    }
-    const result = run(bin, reviewerArgs({ model: entry.model, maxBudgetUsd: entry.maxBudgetUsd, effort: entry.effort }, settingsFile, profile), {
-      cwd,
-      input: prompt,
-      timeout: timeoutMs(entry),
-      env,
-    });
-    ensureNotTimedOut(result, entry);
-    let payload = null;
-    try {
-      payload = JSON.parse(result.stdout);
-    } catch {
-      payload = null;
-    }
-    // 出错时 claude 以非零退出码结束，但 stdout 里仍有带 subtype 的结果，优先用它说明原因。
-    if (payload?.is_error) throw new Error(claudeFailure(payload, entry));
-    ensureOk(result, bin);
-    if (!payload) throw new Error(`评审进程输出不是 JSON: ${result.stdout.slice(0, 200)}`);
-    return { structured: payload.structured_output, costUsd: payload.total_cost_usd ?? null, models: Object.keys(payload.modelUsage ?? {}) };
-  } finally {
-    if (scratch) rmSync(scratch, { recursive: true, force: true });
+function claudeInvocation({ cwd, prompt, entry, profile, scratch, stream }) {
+  const env = { ...process.env };
+  // 本机有备选评审者时限制重试次数，避免单个无效端点长时间拖住回退。
+  if (entry.source === "local") env.CLAUDE_CODE_MAX_RETRIES ??= "2";
+  let settingsFile = userSettingsFile();
+  if (scratch) {
+    // 评审者自带端点与 key 时，不继承其他提供商的认证与路由设置。
+    for (const name of Object.keys(env)) if (name.startsWith("ANTHROPIC_") || PROVIDER_SWITCHES.includes(name)) delete env[name];
+    settingsFile = join(scratch, "settings.json");
+    writeFileSync(
+      settingsFile,
+      JSON.stringify({ env: { ANTHROPIC_BASE_URL: entry.baseUrl }, apiKeyHelper: `printf %s "$${KEY_ENV}"` }),
+      { mode: 0o600 },
+    );
+    env[KEY_ENV] = entry.apiKey;
   }
+  return {
+    cmd: entry.bin,
+    args: reviewerArgs(entry, settingsFile, profile, stream),
+    options: { cwd, input: prompt, env },
+    parse(result) {
+      let payload = result.payload ?? null;
+      if (!stream) {
+        try {
+          payload = JSON.parse(result.stdout);
+        } catch {
+          payload = null;
+        }
+      }
+      // 出错时 claude 可能仍给出结构化原因，优先用它说明失败。
+      if (payload?.is_error) throw new Error(claudeFailure(payload, entry));
+      ensureOk(result, entry.bin);
+      if (!payload) {
+        throw new Error(stream ? "claude 没有写出最终评审事件" : `评审进程输出不是 JSON: ${result.stdout.slice(0, 200)}`);
+      }
+      return { structured: payload.structured_output, costUsd: payload.total_cost_usd ?? null, models: Object.keys(payload.modelUsage ?? {}) };
+    },
+  };
 }
 
-// codex 与通用命令默认在空的临时目录里运行：代码评审只依据给出的材料，不读项目文件，也不加载项目里的钩子与规则。
-// 方案评审在档位里给出 repoDir 时，它们改到那个目录里运行，核对仓库不再只靠提示里的材料。
-function withScratch(fn, profile = CODE_PROFILE) {
-  const dir = mkdtempSync(join(tmpdir(), "harness-review-"));
-  try {
-    writeFileSync(join(dir, "schema.json"), JSON.stringify(strictSchema(profile.schema), null, 2));
-    writeFileSync(join(dir, "system.md"), profile.system);
-    return fn({ dir, schema: join(dir, "schema.json"), system: join(dir, "system.md"), output: join(dir, "output.json") });
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-}
-
-function runCodex({ prompt, entry, bin, profile = CODE_PROFILE }) {
-  return withScratch(({ dir, schema, output }) => {
-    // 给了 repoDir 就在仓库里跑，只读靠沙箱与事后比对；schema 与输出文件仍在临时目录，用绝对路径。
-    const cwd = profile.repoDir ?? dir;
-    const args = [
+// 方案评审在任务分支的 Worktree 里读仓库，代码评审只在临时目录里看给出的材料。
+function codexInvocation({ prompt, entry, profile, scratch, schema, output, stream }) {
+  const cwd = profile.repoDir ?? scratch;
+  return {
+    cmd: entry.bin,
+    args: [
       "exec",
       "--ephemeral",
       "--skip-git-repo-check",
@@ -303,6 +290,7 @@ function runCodex({ prompt, entry, bin, profile = CODE_PROFILE }) {
       cwd,
       "--color",
       "never",
+      ...(stream ? ["--json"] : []),
       "--output-schema",
       schema,
       "--output-last-message",
@@ -310,44 +298,67 @@ function runCodex({ prompt, entry, bin, profile = CODE_PROFILE }) {
       ...(entry.model ? ["--model", entry.model] : []),
       ...(entry.effort ? ["-c", `model_reasoning_effort="${entry.effort}"`] : []),
       "-",
-    ];
-    const result = run(bin, args, { cwd, input: `${profile.system}\n\n${prompt}`, timeout: timeoutMs(entry) });
-    ensureNotTimedOut(result, entry);
-    ensureOk(result, bin);
-    if (!existsSync(output)) throw new Error("codex 没有写出评审结果");
-    return { structured: dropNulls(extractJson(readFileSync(output, "utf8"))), costUsd: null, models: [] };
-  }, profile);
+    ],
+    options: { cwd, input: `${profile.system}\n\n${prompt}` },
+    parse(result) {
+      ensureOk(result, entry.bin);
+      if (!existsSync(output)) throw new Error("codex 没有写出评审结果");
+      return { structured: dropNulls(extractJson(readFileSync(output, "utf8"))), costUsd: null, models: [] };
+    },
+  };
 }
 
-function runCommand({ prompt, entry, profile = CODE_PROFILE }) {
-  return withScratch((files) => {
-    const argv = entry.command;
-    const usesOutput = argv.some((arg) => arg.includes("{output}"));
-    const expanded = argv.map((arg) =>
-      arg.replaceAll("{schema}", files.schema).replaceAll("{system}", files.system).replaceAll("{output}", files.output),
-    );
-    const [cmd, ...args] = expanded;
-    // 命令自己决定怎么用模型与推理强度，这里只通过环境变量告知。
-    const env = {
-      ...process.env,
-      ...(entry.effort ? { HARNESS_REVIEW_EFFORT: entry.effort } : {}),
-      ...(entry.model ? { HARNESS_REVIEW_MODEL: entry.model } : {}),
-    };
-    // 与 codex 一致：给了 repoDir 就在仓库里跑，只读靠约定与事后比对，命令本身不受约束。
-    const cwd = profile.repoDir ?? files.dir;
-    const result = run(cmd, args, { cwd, input: `${profile.system}\n\n${prompt}`, timeout: timeoutMs(entry), env });
-    ensureNotTimedOut(result, entry);
-    ensureOk(result, cmd);
-    const text = usesOutput && existsSync(files.output) ? readFileSync(files.output, "utf8") : result.stdout;
-    const payload = extractJson(text);
-    return { structured: dropNulls(payload.structured_output ?? payload), costUsd: payload.total_cost_usd ?? null, models: [] };
-  }, profile);
+function commandInvocation({ prompt, entry, profile, scratch, schema, system, output }) {
+  const usesOutput = entry.command.some((arg) => arg.includes("{output}"));
+  const [cmd, ...args] = entry.command.map((arg) =>
+    arg.replaceAll("{schema}", schema).replaceAll("{system}", system).replaceAll("{output}", output),
+  );
+  const env = {
+    ...process.env,
+    ...(entry.effort ? { HARNESS_REVIEW_EFFORT: entry.effort } : {}),
+    ...(entry.model ? { HARNESS_REVIEW_MODEL: entry.model } : {}),
+  };
+  return {
+    cmd,
+    args,
+    options: { cwd: profile.repoDir ?? scratch, input: `${profile.system}\n\n${prompt}`, env },
+    parse(result) {
+      ensureOk(result, cmd);
+      const text = usesOutput && existsSync(output) ? readFileSync(output, "utf8") : result.stdout;
+      const payload = extractJson(text);
+      return { structured: dropNulls(payload.structured_output ?? payload), costUsd: payload.total_cost_usd ?? null, models: [] };
+    },
+  };
 }
 
-function runEntry({ cwd, prompt, entry, profile = CODE_PROFILE }) {
-  if (entry.client === "claude") return runClaude({ cwd, prompt, entry, bin: entry.bin, profile });
-  if (entry.client === "codex") return runCodex({ prompt, entry, bin: entry.bin, profile });
-  return runCommand({ prompt, entry, profile });
+function prepareInvocation({ cwd, prompt, entry, profile, scratch, stream }) {
+  if (entry.client === "claude") return claudeInvocation({ cwd, prompt, entry, profile, scratch, stream });
+  const schema = join(scratch, "schema.json");
+  const system = join(scratch, "system.md");
+  const output = join(scratch, "output.json");
+  writeFileSync(schema, JSON.stringify(strictSchema(profile.schema), null, 2));
+  writeFileSync(system, profile.system);
+  const options = { prompt, entry, profile, scratch, schema, system, output, stream };
+  return entry.client === "codex" ? codexInvocation(options) : commandInvocation(options);
+}
+
+function runEntry({ cwd, prompt, entry, profile = CODE_PROFILE, planProcess }) {
+  const scratch = entry.client !== "claude" || entry.baseUrl ? mkdtempSync(join(tmpdir(), "harness-review-")) : null;
+  const cleanup = () => {
+    if (scratch) rmSync(scratch, { recursive: true, force: true });
+  };
+  try {
+    const { cmd, args, options, parse } = prepareInvocation({ cwd, prompt, entry, profile, scratch, stream: Boolean(planProcess) });
+    if (planProcess) return runPlanProcess(cmd, args, { ...options, ...planProcess, client: entry.client }).then(parse).finally(cleanup);
+    const result = run(cmd, args, { ...options, timeout: timeoutMs(entry) });
+    ensureNotTimedOut(result, entry);
+    const outcome = parse(result);
+    cleanup();
+    return outcome;
+  } catch (error) {
+    cleanup();
+    throw error;
+  }
 }
 
 // 没有本机文件时按项目里的旧字段运行，只有一个评审者，行为和以前一致。
@@ -467,6 +478,78 @@ export function runReviewer({ cwd, prompt, config = {}, log = () => {}, plan = p
   }
   const lines = attempts.map((item) => `- ${item.name}: ${item.outcome === "skipped" ? "跳过" : "失败"}，${item.reason}`);
   throw new Error(`没有评审者给出结论：\n${lines.join("\n")}\n用 harness reviewer list 查看本机评审者，harness reviewer set 新增或补全`);
+}
+
+function planProgress(entry, started, deadline, log) {
+  let latest = "尚无过程输出";
+  let lastAt;
+  const status = () => {
+    const now = performance.now();
+    const age = lastAt === undefined ? "" : `（${Math.floor((now - lastAt) / 1000)} 秒前）`;
+    log(`[plan-review] ${entry.name} 已运行 ${Math.floor((now - started) / 1000)} 秒，剩余总预算 ${Math.max(0, Math.ceil((deadline - now) / 1000))} 秒，最近状态 ${latest}${age}`);
+  };
+  return {
+    status,
+    report(label, announce = true) {
+      const changed = label !== latest;
+      latest = label;
+      lastAt = performance.now();
+      if (changed && announce) status();
+    },
+  };
+}
+
+export async function runPlanReviewer({
+  cwd, prompt, config, profile, log, deadline, attemptTimeoutMs, signal,
+}) {
+  signal?.throwIfAborted();
+  const plan = planReviewers(config);
+  log(`[review] 评审者（${plan.source === "local" ? "本机文件 " + plan.file : "项目配置"}）: ${describePlan(plan)}`);
+  const failures = [];
+  let remaining = plan.candidates.filter((entry) => !entry.skip).length;
+  const totalTimeout = () => new Error(["方案评审总时限耗尽", ...failures].join("\n"));
+  const secrets = [...plan.secrets, ...inheritedSecrets()];
+  for (const entry of plan.candidates) {
+    if (entry.skip) {
+      failures.push(`- ${entry.name}: 跳过，${entry.skip}`);
+      log(`[review] 跳过 ${entry.name}: ${entry.skip}`);
+      continue;
+    }
+    signal?.throwIfAborted();
+    const started = performance.now();
+    if (started >= deadline) throw totalTimeout();
+    // 按可用人数分配剩余时间，给后面的评审者保留尝试机会。
+    const shareDeadline = remaining === 1 ? deadline : started + (deadline - started) / remaining;
+    remaining -= 1;
+    const configuredMs = entry.timeoutMinutes === undefined ? Infinity : timeoutMs(entry);
+    const attemptDeadline = Math.min(shareDeadline, started + Math.min(attemptTimeoutMs, configuredMs));
+    const duration = attemptDeadline - started;
+    log(`[plan-review] 开始评审者 ${entry.name}，本次时限 ${Math.ceil(duration / 1000)} 秒，剩余总预算 ${Math.ceil((deadline - started) / 1000)} 秒`);
+    const progress = planProgress(entry, started, deadline, log);
+    const heartbeat = setInterval(progress.status, Math.min(10_000, Math.max(1_000, duration / 2)));
+    try {
+      const outcome = await runEntry({
+        cwd, prompt, entry, profile,
+        planProcess: { deadline: attemptDeadline, signal, report: progress.report },
+      });
+      signal?.throwIfAborted();
+      const structured = profile.parse(outcome.structured);
+      return {
+        structured,
+        costUsd: outcome.costUsd,
+        reviewer: { name: entry.name, client: entry.client, requestedModel: entry.model ?? null, actualModels: outcome.models },
+      };
+    } catch (error) {
+      signal?.throwIfAborted();
+      const reason = error.code === "ETIMEDOUT" ? "单次评审超时，已终止" : scrub(error.message, secrets);
+      failures.push(`- ${entry.name}: ${reason.slice(0, 600)}`);
+      if (performance.now() >= deadline) throw totalTimeout();
+      log(`[review] ${entry.name} 失败${remaining ? "，换下一个" : ""}: ${reason.split("\n")[0].slice(0, 200)}`);
+    } finally {
+      clearInterval(heartbeat);
+    }
+  }
+  throw new Error(["没有评审者给出结论", ...failures, "用 harness reviewer list 查看本机评审者"].join("\n"));
 }
 
 const REQUIREMENT_RATINGS = ["met", "partial", "unmet", "unknown"];

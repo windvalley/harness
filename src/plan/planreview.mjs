@@ -2,7 +2,10 @@ import { loadGateProject } from "../lib/config.mjs";
 import { gitOk, resolveCommit } from "../lib/git.mjs";
 import { appendLedger } from "../lib/store.mjs";
 import { planSummary } from "./plan.mjs";
-import { runReviewer } from "../review/review.mjs";
+import { runPlanReviewer } from "../review/review.mjs";
+
+export const DEFAULT_PLAN_TIMEOUT_SECONDS = 360;
+export const DEFAULT_PLAN_ATTEMPT_TIMEOUT_SECONDS = 120;
 
 export const PLAN_REVIEW_SCHEMA = {
   type: "object",
@@ -147,7 +150,7 @@ export function formatPlanReview(result, { all = false } = {}) {
   const shown = all ? findings : findings.filter((item) => SEVERITY_ORDER[item.severity] <= SEVERITY_ORDER.high);
   const hidden = findings.filter((item) => !shown.includes(item));
   const lines = [
-    `方案评审完成: ${describeReviewer(result)}${result.readsRepo ? "，读了仓库" : "，没有读仓库，只看了方案文件"}`,
+    `方案评审完成: ${describeReviewer(result)}${result.readsRepo ? "，可读仓库" : "，没有读仓库，只看了方案文件"}`,
   ];
   for (const item of shown) {
     lines.push(`  [${item.severity}] ${item.category} ${item.ref} ${item.summary}`);
@@ -172,7 +175,11 @@ function workspaceState(dir) {
  * 方案评审只给建议，不写评审或证据记录，也不参与任何门禁判定；只追加一条账本事件用于度量试运行效果。
  * 评审者在检出目录里只读仓库，前后比对工作区，发现被改动时不采信这次结果。
  */
-export function reviewPlan({ cwd, branch, all = false, log = () => {}, reviewer = runReviewer }) {
+export async function reviewPlan({
+  cwd, branch, all = false, log = () => {}, signal,
+  timeoutSeconds = DEFAULT_PLAN_TIMEOUT_SECONDS,
+  attemptTimeoutSeconds = DEFAULT_PLAN_ATTEMPT_TIMEOUT_SECONDS,
+}) {
   if (!branch) throw new Error("用法: harness review-plan --branch <任务分支>");
   const project = loadGateProject(cwd, { branch });
   const root = project.root;
@@ -184,13 +191,17 @@ export function reviewPlan({ cwd, branch, all = false, log = () => {}, reviewer 
   log(`[plan-review] ${branch} (${commit.slice(0, 10)})，方案文件 ${planFiles.length} 个，${worktree ? `评审者可读仓库 ${worktree}` : "没有检出目录，评审者不看仓库，只读方案文件"}`);
 
   const before = worktree ? workspaceState(worktree) : null;
-  const result = reviewer({
+  const result = await runPlanReviewer({
     cwd: worktree ?? root,
     prompt,
     config: project.config.review ?? {},
     log,
     profile: planReviewProfile({ worktree }),
+    deadline: performance.now() + timeoutSeconds * 1000,
+    attemptTimeoutMs: attemptTimeoutSeconds * 1000,
+    signal,
   });
+  signal?.throwIfAborted();
   if (worktree && workspaceState(worktree) !== before) {
     throw new Error(`评审者改动了工作区 ${worktree}，这次评审结果不可信，请检查 git status 后重跑`);
   }

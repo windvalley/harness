@@ -263,17 +263,19 @@ appendFileSync(${JSON.stringify(calls)}, JSON.stringify({
   model, args, env, promptLength: prompt.length,
   settings: settings && existsSync(settings) ? readFileSync(settings, "utf8") : null,
 }) + "\\n");
+const stream = at("--output-format") === "stream-json";
+const writeResult = (result) => process.stdout.write(JSON.stringify(stream ? { type: "result", ...result } : result) + (stream ? "\\n" : ""));
 if (behavior.mode === "fail") {
   process.stderr.write("warning: auth source\\n");
-  process.stdout.write(JSON.stringify({ is_error: true, subtype: "error", result: behavior.message ?? "Failed to authenticate. API Error: 401" }));
+  writeResult({ is_error: true, subtype: "error", result: behavior.message ?? "Failed to authenticate. API Error: 401" });
   process.exit(1);
 }
-process.stdout.write(JSON.stringify({
+writeResult({
   is_error: false,
   total_cost_usd: 0.01,
   structured_output: behavior.structured ?? ${JSON.stringify({ verdict: "approve", requirementFit: { rating: "met", evidence: "满足" }, engineeringQuality: { rating: "good", evidence: "无问题" }, findings: [] })},
   modelUsage: { [behavior.actual ?? model]: { inputTokens: 1, outputTokens: 1 } },
-}));
+});
 `,
   );
   chmodSync(bin, 0o755);
@@ -298,7 +300,7 @@ export function readReviewRecord(repo, oid) {
 }
 
 /** 假的 codex：记录参数、工作目录、输入与结构定义，再把给定结果写到 --output-last-message。 */
-export function fakeCodex(repo, structured) {
+export function fakeCodex(repo, structured, { events = [] } = {}) {
   const dir = join(repo.root, "..", "fakebin");
   mkdirSync(dir, { recursive: true });
   const log = join(repo.root, "..", "codex-call.json");
@@ -313,6 +315,9 @@ const stdin = readFileSync(0, "utf8");
 const schema = JSON.parse(readFileSync(at("--output-schema"), "utf8"));
 writeFileSync(${JSON.stringify(log)}, JSON.stringify({ args, cwd: process.cwd(), stdin, schema }));
 writeFileSync(at("--output-last-message"), JSON.stringify(${JSON.stringify(structured)}));
+if (args.includes("--json")) {
+  for (const event of ${JSON.stringify(events)}) process.stdout.write(JSON.stringify(event) + "\\n");
+}
 `,
   );
   chmodSync(bin, 0o755);
