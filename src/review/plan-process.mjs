@@ -24,7 +24,7 @@ function streamPhase(report) {
   };
 }
 
-function claudeProgress(report) {
+function claudeProgress(report, onQuery) {
   const tools = new Map();
   const phase = streamPhase(report);
   let sawResponse = false;
@@ -43,6 +43,7 @@ function claudeProgress(report) {
       if (message.type === "assistant" && block?.type === "tool_use" && REPO_TOOLS.has(block.name)) {
         tools.set(block.id, block.name);
         report("仓库查询开始（" + block.name + "）");
+        onQuery();
       }
       if (message.type === "user" && block?.type === "tool_result" && tools.has(block.tool_use_id)) {
         report("仓库查询结束（" + tools.get(block.tool_use_id) + "）");
@@ -52,10 +53,13 @@ function claudeProgress(report) {
   };
 }
 
-function codexProgress(message, report) {
+function codexProgress(message, report, onQuery) {
   if (message.type === "thread.started") report("评审会话已初始化");
   if (message.type === "turn.started") report("评审回合已开始");
-  if (message.type === "item.started" && message.item?.type === "command_execution") report("评审命令开始");
+  if (message.type === "item.started" && message.item?.type === "command_execution") {
+    report("评审命令开始");
+    onQuery();
+  }
   if (message.type === "item.completed" && message.item?.type === "command_execution") report("评审命令结束");
   if (message.type === "turn.completed") report("评审回合已结束");
 }
@@ -71,7 +75,7 @@ function readJsonLine(line, receive) {
 }
 
 // 方案评审独立管理子进程组，取消或超时时把普通后代一起收掉，避免它们继续占用管道。
-export function runPlanProcess(cmd, args, { cwd, env, input, client, deadline, signal, report }) {
+export function runPlanProcess(cmd, args, { cwd, env, input, client, deadline, signal, report, maxQueries }) {
   signal?.throwIfAborted();
   return new Promise((resolve, reject) => {
     const processGroup = process.platform !== "win32";
@@ -84,11 +88,17 @@ export function runPlanProcess(cmd, args, { cwd, env, input, client, deadline, s
     let processError;
     let stopped;
     let stopping;
-    const reportClaude = client === "claude" ? claudeProgress(report) : null;
+    let queries = 0;
+    const onQuery = () => {
+      if (maxQueries && ++queries > maxQueries) {
+        stop(Object.assign(new Error(`仓库查询超过 ${maxQueries} 次，已终止`), { code: "QUERY_LIMIT", maxQueries }));
+      }
+    };
+    const reportClaude = client === "claude" ? claudeProgress(report, onQuery) : null;
 
     const receive = (message) => {
       if (client === "codex") {
-        codexProgress(message, report);
+        codexProgress(message, report, onQuery);
         let failure;
         if (message.type === "turn.failed") failure = message.error?.message;
         if (message.type === "error") failure = message.message;

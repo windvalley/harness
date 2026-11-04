@@ -500,7 +500,7 @@ function planProgress(entry, started, deadline, log) {
 }
 
 export async function runPlanReviewer({
-  cwd, prompt, config, profile, log, deadline, attemptTimeoutMs, signal,
+  cwd, prompt, config, profile, log, deadline, attemptTimeoutMs, signal, maxQueries, promptWithoutRepo,
 }) {
   signal?.throwIfAborted();
   const plan = planReviewers(config);
@@ -531,15 +531,32 @@ export async function runPlanReviewer({
     const progress = planProgress(entry, started, deadline, log);
     const heartbeat = setInterval(progress.status, Math.min(10_000, Math.max(1_000, duration / 2)));
     try {
-      const outcome = await runEntry({
-        cwd, prompt, entry, profile,
-        planProcess: { deadline: attemptDeadline, signal, report: progress.report },
-      });
+      let outcome;
+      let queryLimited = false;
+      try {
+        outcome = await runEntry({
+          cwd, prompt, entry, profile,
+          planProcess: { deadline: attemptDeadline, signal, report: progress.report, maxQueries },
+        });
+      } catch (error) {
+        // 查询次数超限时不放弃这位评审者：保留预取的方案引用，关掉仓库工具让它直接交卷。
+        if (error.code !== "QUERY_LIMIT" || !profile.repoDir || !promptWithoutRepo) throw error;
+        signal?.throwIfAborted();
+        queryLimited = true;
+        log(`[plan-review] ${entry.name} 仓库查询超过 ${error.maxQueries} 次，改为不读仓库重试`);
+        progress.report("仓库查询超限，不读仓库重试");
+        outcome = await runEntry({
+          cwd, prompt: promptWithoutRepo, entry,
+          profile: { ...profile, tools: [], repoDir: undefined },
+          planProcess: { deadline: attemptDeadline, signal, report: progress.report },
+        });
+      }
       signal?.throwIfAborted();
       const structured = profile.parse(outcome.structured);
       return {
         structured,
         costUsd: outcome.costUsd,
+        queryLimited,
         reviewer: { name: entry.name, client: entry.client, requestedModel: entry.model ?? null, actualModels: outcome.models },
       };
     } catch (error) {

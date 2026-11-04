@@ -9,8 +9,10 @@ import {
   DEFAULT_PLAN_ATTEMPT_TIMEOUT_SECONDS,
   DEFAULT_PLAN_TIMEOUT_SECONDS,
   parsePlanReview,
+  PLAN_MAX_QUERIES,
   PLAN_REVIEW_SCHEMA,
 } from "../src/plan/planreview.mjs";
+import { extractRefs, isSecretPath } from "../src/plan/refs.mjs";
 
 let repos = [];
 afterEach(() => {
@@ -36,7 +38,7 @@ function setup(files = PLAN_FILES) {
 }
 
 /** 记录参数、提示与工作目录的假 claude；touch 指定时模拟评审者改了工作区里的文件。 */
-function fakePlanClaude(repo, { structured, touch, events = [] } = {}) {
+function fakePlanClaude(repo, { structured, touch, events = [], repoToolUses = 0 } = {}) {
   const bin = join(repo.root, "..", "fake-plan-claude.mjs");
   const log = join(repo.root, "..", "plan-call.json");
   writeFileSync(
@@ -48,6 +50,11 @@ writeFileSync(${JSON.stringify(log)}, JSON.stringify({ args: process.argv.slice(
 ${touch ? `writeFileSync(${JSON.stringify(touch)}, "changed\\n");` : ""}
 const result = { is_error: false, total_cost_usd: 0.02, structured_output: ${JSON.stringify(structured ?? { findings: [] })}, modelUsage: { sonnet: {} } };
 if (process.argv.includes("stream-json")) {
+  if (process.argv.includes("Read,Grep,Glob,Bash")) {
+    for (let i = 0; i < ${repoToolUses}; i++) {
+      process.stdout.write(JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", name: "Read", id: "q" + i, input: {} }] } }) + "\\n");
+    }
+  }
   for (const event of ${JSON.stringify(events)}) process.stdout.write(JSON.stringify(event) + "\\n");
   process.stdout.write(JSON.stringify({ type: "result", ...result }) + "\\n");
 } else process.stdout.write(JSON.stringify(result));
@@ -235,6 +242,64 @@ describe("方案评审", () => {
     assert.match(result.stderr, /模型输出思考（累计 12 字符）[\s\S]*模型输出正文（累计 10 字符）[\s\S]*模型输出结论（累计 10 字符）/);
     assert.doesNotMatch(result.stderr, /模型输出思考（累计 16 字符）/);
     assert.doesNotMatch(result.stderr, /PRIVATE-/);
+  });
+
+  test("方案里的代码引用被预取进提示，密钥类、方案自身与不存在的路径不预取", () => {
+    const lines = Array.from({ length: 100 }, (_, i) => `line ${i + 1}`).join("\n") + "\n";
+    const repo = setup({
+      ...PLAN_FILES,
+      "docs/changes/a/plan.md": "复用 [x](../../../src/foo.mjs#L20) 与 foo.mjs:90，不要碰 frontend/.env.production、missing.go#L3 和 docs/changes/a/spec.md\n",
+      "src/foo.mjs": lines,
+      "frontend/.env.production": "SECRET-VALUE\n",
+    });
+    const call = fakePlanClaude(repo);
+    const result = repo.cli("review-plan", "--branch", "task/a");
+    assert.equal(result.status, 0, result.stderr);
+    const { prompt } = call();
+    assert.match(prompt, /## 方案引用的现有代码片段/);
+    assert.match(prompt, /### src\/foo\.mjs:5-65\n[\s\S]*line 20\n[\s\S]*line 65\n/);
+    assert.match(prompt, /### src\/foo\.mjs:75-100\n/);
+    const fetched = prompt.slice(prompt.indexOf("## 方案引用的现有代码片段"));
+    assert.doesNotMatch(prompt, /SECRET-VALUE/);
+    assert.doesNotMatch(fetched, /missing\.go|\.env|### docs\/changes/);
+    assert.match(result.stderr, /预取引用片段 2 个/);
+  });
+
+  test("引用提取支持行号与行区间，识别密钥类路径", () => {
+    const text = "见 a/b.go#L12-L30、c.go:7、d.md，忽略 https://x.com/e.go，相对链接 [x](../../src/f.go#L9) 与 ../../../../outside.go";
+    assert.deepEqual(extractRefs([{ path: "docs/changes/a/plan.md", text }]), [
+      { path: "a/b.go", start: 12, end: 30 },
+      { path: "c.go", start: 7, end: 7 },
+      { path: "d.md", start: null, end: null },
+      { path: "docs/src/f.go", start: 9, end: 9 },
+    ]);
+    for (const path of [".env", "a/.env.production", "k.pem", "a/id_rsa.pub", "x/credentials.json"]) assert.ok(isSecretPath(path), path);
+    assert.ok(!isSecretPath("src/foo.mjs"));
+  });
+
+  test("仓库查询超过上限时终止，同一评审者降级为不读仓库重试并标注", () => {
+    const repo = setup();
+    const call = fakePlanClaude(repo, { structured: { findings: [HIGH] }, repoToolUses: PLAN_MAX_QUERIES + 1 });
+    const result = repo.cli("review-plan", "--branch", "task/a");
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stderr, new RegExp(`仓库查询超过 ${PLAN_MAX_QUERIES} 次，改为不读仓库重试`));
+    assert.match(result.stderr, /仓库查询超限，改为只看方案文件与预取片段/);
+    const { args, prompt } = call();
+    assert.equal(args[args.indexOf("--tools") + 1], "");
+    assert.match(prompt, /你看不到仓库/);
+    const event = ledger(repo).find((item) => item.event === "plan.review");
+    assert.equal(event.readsRepo, false);
+    assert.equal(event.queryLimited, true);
+  });
+
+  test("查询次数没超上限时保持读仓库，不降级", () => {
+    const repo = setup();
+    const call = fakePlanClaude(repo, { repoToolUses: PLAN_MAX_QUERIES });
+    const result = repo.cli("review-plan", "--branch", "task/a");
+    assert.equal(result.status, 0, result.stderr);
+    assert.doesNotMatch(result.stderr, /改为不读仓库重试/);
+    assert.equal(call().args[call().args.indexOf("--tools") + 1], "Read,Grep,Glob,Bash");
+    assert.equal(ledger(repo).find((item) => item.event === "plan.review").readsRepo, true);
   });
 
   test("调用方取消时终止评审进程并跳过备选", { timeout: 15000 }, async () => {
