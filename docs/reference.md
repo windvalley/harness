@@ -503,7 +503,7 @@ harness review-plan --branch feat/login --timeout-seconds 300 --attempt-timeout-
   首个评审者只预留一次备选评审时段，不会因配置了多个评审者而把首轮时间继续均分；前一位快速失败时仍会继续尝试后续评审者。
   单次超时会回退，总时限耗尽会结束评审，收到 Ctrl-C 或 SIGTERM 会取消并终止当前评审进程。
 - 运行中定期显示当前评审者、已用时间、剩余总预算和最近活动。
-  Claude 提供模型响应、只读查询与重试等事件，Codex 提供回合与命令事件，通用命令以子进程输出作为活动信号。
+  Claude 提供模型响应、只读查询与重试等事件，并区分思考、正文、工具参数与结论四类输出，只显示各自的累计字符数；Codex 提供回合与命令事件，通用命令以子进程输出作为活动信号。
   进度只显示事件摘要，最终结论仍需通过结构校验。
 - claude 评审者在任务分支的 Worktree 里运行，可以读整个仓库来核对已有实现，但没有任何写入类工具：只开 Read、Grep、Glob 和只读的 git 查询（`log`、`show`、`diff`、`grep`、`blame`、`ls-files`、`status`），`Edit`、`Write` 被禁用。
   `.env`、`*.pem`、`*.key`、`id_rsa*`、`credentials*` 在工具层被屏蔽，评审者的系统提示也要求不碰这类文件。

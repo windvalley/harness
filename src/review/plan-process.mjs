@@ -4,10 +4,32 @@ const MAX_OUTPUT_BYTES = 256 * 1024 * 1024;
 const REPO_TOOLS = new Set(["Read", "Grep", "Glob", "Bash"]);
 const STOP_GRACE_MS = 200;
 
+const DELTA_FIELDS = { thinking_delta: "thinking", text_delta: "text", input_json_delta: "partial_json" };
+
+// 区分思考、正文、工具参数和结构化结论，只报累计字符数，不输出内容；阶段切换时才播报，同阶段只更新状态。
+function streamPhase(report) {
+  const sizes = {};
+  let toolName = "";
+  let lastKind = "";
+  return (event) => {
+    if (event.type === "content_block_start") toolName = event.content_block?.type === "tool_use" ? event.content_block.name : "";
+    if (event.type !== "content_block_delta") return;
+    const field = DELTA_FIELDS[event.delta?.type];
+    const text = field ? event.delta[field] : undefined;
+    if (typeof text !== "string") return;
+    const kind = field === "partial_json" ? (toolName === "StructuredOutput" ? "结论" : "工具参数") : field === "thinking" ? "思考" : "正文";
+    sizes[kind] = (sizes[kind] ?? 0) + text.length;
+    report(`模型输出${kind}（累计 ${sizes[kind]} 字符）`, kind !== lastKind);
+    lastKind = kind;
+  };
+}
+
 function claudeProgress(report) {
   const tools = new Map();
+  const phase = streamPhase(report);
   let sawResponse = false;
   return (message) => {
+    if (message.type === "stream_event") phase(message.event ?? {});
     if (message.type === "system" && message.subtype === "init") report("评审会话已初始化");
     if (message.type === "system" && message.subtype === "api_retry") report("模型请求重试");
     if (message.type === "assistant" || (message.type === "stream_event" && message.event?.type === "message_start")) {
@@ -15,7 +37,6 @@ function claudeProgress(report) {
       else if (message.type === "stream_event") report("收到模型响应");
       sawResponse = true;
     }
-    if (message.type === "stream_event" && message.event?.type === "content_block_delta") report("收到模型流式输出", false);
     const blocks = message.message?.content;
     if (!Array.isArray(blocks)) return;
     for (const block of blocks) {

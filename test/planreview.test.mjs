@@ -218,6 +218,25 @@ describe("方案评审", () => {
     assert.match(result.stderr, /没写超时/);
   });
 
+  test("流式输出区分思考、正文与结论并累计字符数，不输出内容", () => {
+    const repo = setup();
+    const delta = (type, field, value) => ({ type: "stream_event", event: { type: "content_block_delta", delta: { type, [field]: value } } });
+    fakePlanClaude(repo, { events: [
+      { type: "stream_event", event: { type: "content_block_start", content_block: { type: "thinking" } } },
+      delta("thinking_delta", "thinking", "PRIVATE-AAAA"),
+      delta("thinking_delta", "thinking", "BBBB"),
+      { type: "stream_event", event: { type: "content_block_start", content_block: { type: "text" } } },
+      delta("text_delta", "text", "PRIVATE-CC"),
+      { type: "stream_event", event: { type: "content_block_start", content_block: { type: "tool_use", name: "StructuredOutput" } } },
+      delta("input_json_delta", "partial_json", "PRIVATE-{}"),
+    ] });
+    const result = repo.cli("review-plan", "--branch", "task/a");
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stderr, /模型输出思考（累计 12 字符）[\s\S]*模型输出正文（累计 10 字符）[\s\S]*模型输出结论（累计 10 字符）/);
+    assert.doesNotMatch(result.stderr, /模型输出思考（累计 16 字符）/);
+    assert.doesNotMatch(result.stderr, /PRIVATE-/);
+  });
+
   test("调用方取消时终止评审进程并跳过备选", { timeout: 15000 }, async () => {
     const repo = setup();
     const marker = join(repo.root, "..", "reviewer.pid");
