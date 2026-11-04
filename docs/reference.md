@@ -489,6 +489,7 @@ Agent 开始任务前先判断分级，规则写在 `.harness/rules/core.md`，�
 harness review-plan --branch feat/login        # 默认只展示 high 及以上的发现
 harness review-plan --branch feat/login --all  # 展示全部
 harness review-plan --branch feat/login --timeout-seconds 300 --attempt-timeout-seconds 90
+harness review-plan --branch feat/login --max-queries 25  # 调整读仓库的查询次数上限
 ```
 
 代码评审发生在实施之后，并且把验收清单当作既定标准；清单本身有遗漏或理解偏差时，实现会照着错的标准通过评审。
@@ -498,7 +499,7 @@ harness review-plan --branch feat/login --timeout-seconds 300 --attempt-timeout-
   账本只追加一条 `plan.review` 事件（评审者、模型、各级别发现的数量、是否有仓库可读、费用），用于统计方案评审值不值。
 - 评审者复用本机 `reviewers.json` 的排序和密钥擦除规则，前一个失败或超时后尝试下一位。
   没有配置评审者、全部失败或结果不可信时，Agent 把原因告诉你并继续交付方案，不会为此换更弱的评审者。
-- 评审阶段默认共享 600 秒总时限，每位最多 300 秒。
+- 评审阶段默认共享 1200 秒总时限，每位最多 600 秒。
   `--timeout-seconds` 和 `--attempt-timeout-seconds` 接受 1 到 3600 的整数秒。
   首个评审者只预留一次备选评审时段，不会因配置了多个评审者而把首轮时间继续均分；前一位快速失败时仍会继续尝试后续评审者。
   单次超时会回退，总时限耗尽会结束评审，收到 Ctrl-C 或 SIGTERM 会取消并终止当前评审进程。
@@ -508,7 +509,7 @@ harness review-plan --branch feat/login --timeout-seconds 300 --attempt-timeout-
 - 评审前 harness 先把方案里引用的现有代码预取进提示：从验收清单、spec、plan 里识别 `路径`、`路径#L12`、`路径#L12-L30`、`路径:12` 与相对链接，按分支提交截取引用行前后的片段。
   最多 30 处、总量 8 万字符，只读提交里的文件；密钥类路径、方案自身、不存在或有歧义的引用一律不预取。
   评审者先用这些片段核对，不必自己在仓库里翻找。
-- 读仓库有次数上限：评审者最多做 8 次仓库查询（Claude 的工具调用、Codex 的命令），超过就终止这一次评审，同一位评审者保留预取片段、关掉仓库工具重试一次，结果会标注“仓库查询超限，改为只看方案文件与预取片段”，账本里 `readsRepo` 为 `false`、`queryLimited` 为 `true`。
+- 读仓库有次数上限：评审者默认最多做 15 次仓库查询（Claude 的工具调用、Codex 的命令），用 `--max-queries` 调整，接受 1 到 100 的整数，超过就终止这一次评审，同一位评审者保留预取片段、关掉仓库工具重试一次，结果会标注“仓库查询超限，改为只看方案文件与预取片段”，账本里 `readsRepo` 为 `false`、`queryLimited` 为 `true`。
   评审者在读仓库上反复核对而迟迟不交出发现时，这是兜底，避免把整个单次时限耗在查询上。
 - claude 评审者在任务分支的 Worktree 里运行，可以读整个仓库来核对已有实现，但没有任何写入类工具：只开 Read、Grep、Glob 和只读的 git 查询（`log`、`show`、`diff`、`grep`、`blame`、`ls-files`、`status`），`Edit`、`Write` 被禁用。
   `.env`、`*.pem`、`*.key`、`id_rsa*`、`credentials*` 在工具层被屏蔽，评审者的系统提示也要求不碰这类文件。
@@ -1566,7 +1567,7 @@ harness reviewer set mine --client command --command-json '["my-reviewer","--jso
 | --- | --- |
 | `verify [--branch <分支>] [--head <ref>] [--base <ref>] [--plan] [--no-reuse] [--json]` | 验证并写签名证据；`--plan` 只列计划，`--no-reuse` 不复用已有结果，`--json` 输出 JSON |
 | `review --branch <分支>` | 独立评审 |
-| `review-plan --branch <分支> [--all] [--timeout-seconds <秒>] [--attempt-timeout-seconds <秒>]` | 方案评审，实时报告进度与回退，默认只展示 high 及以上的发现，见“方案评审” |
+| `review-plan --branch <分支> [--all] [--timeout-seconds <秒>] [--attempt-timeout-seconds <秒>] [--max-queries <次>]` | 方案评审，实时报告进度与回退，默认只展示 high 及以上的发现，见“方案评审” |
 | `reviewer list`、`set`、`remove`、`prefer`、`test` | 管理本机评审者：客户端、模型、推理强度、端点与 key，见“独立评审的后端” |
 | `status [--branch <分支>]` | 只读汇总还差哪几步才能交付，默认看当前分支 |
 | `confirm --branch <分支> [--yes] [--note <说明>]` | 查看门禁改动摘要；带 `--yes` 由人记录确认 |

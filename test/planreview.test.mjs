@@ -9,7 +9,7 @@ import {
   DEFAULT_PLAN_ATTEMPT_TIMEOUT_SECONDS,
   DEFAULT_PLAN_TIMEOUT_SECONDS,
   parsePlanReview,
-  PLAN_MAX_QUERIES,
+  DEFAULT_PLAN_MAX_QUERIES,
   PLAN_REVIEW_SCHEMA,
 } from "../src/plan/planreview.mjs";
 import { extractRefs, isSecretPath } from "../src/plan/refs.mjs";
@@ -71,9 +71,10 @@ function ledger(repo) {
 }
 
 describe("方案评审", () => {
-  test("默认总时限为 10 分钟，单次上限为 5 分钟", () => {
-    assert.equal(DEFAULT_PLAN_TIMEOUT_SECONDS, 600);
-    assert.equal(DEFAULT_PLAN_ATTEMPT_TIMEOUT_SECONDS, 300);
+  test("默认总时限为 20 分钟，单次上限为 10 分钟，读仓库最多 15 次", () => {
+    assert.equal(DEFAULT_PLAN_TIMEOUT_SECONDS, 1200);
+    assert.equal(DEFAULT_PLAN_ATTEMPT_TIMEOUT_SECONDS, 600);
+    assert.equal(DEFAULT_PLAN_MAX_QUERIES, 15);
   });
 
   test("parsePlanReview 只认完整的发现结构，没有 verdict 字段", () => {
@@ -279,10 +280,10 @@ describe("方案评审", () => {
 
   test("仓库查询超过上限时终止，同一评审者降级为不读仓库重试并标注", () => {
     const repo = setup();
-    const call = fakePlanClaude(repo, { structured: { findings: [HIGH] }, repoToolUses: PLAN_MAX_QUERIES + 1 });
+    const call = fakePlanClaude(repo, { structured: { findings: [HIGH] }, repoToolUses: DEFAULT_PLAN_MAX_QUERIES + 1 });
     const result = repo.cli("review-plan", "--branch", "task/a");
     assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stderr, new RegExp(`仓库查询超过 ${PLAN_MAX_QUERIES} 次，改为不读仓库重试`));
+    assert.match(result.stderr, new RegExp(`仓库查询超过 ${DEFAULT_PLAN_MAX_QUERIES} 次，改为不读仓库重试`));
     assert.match(result.stderr, /仓库查询超限，改为只看方案文件与预取片段/);
     const { args, prompt } = call();
     assert.equal(args[args.indexOf("--tools") + 1], "");
@@ -292,9 +293,24 @@ describe("方案评审", () => {
     assert.equal(event.queryLimited, true);
   });
 
+  test("--max-queries 调整上限并写进提示，非法值被拒绝", () => {
+    const repo = setup();
+    const call = fakePlanClaude(repo, { repoToolUses: 4 });
+    const result = repo.cli("review-plan", "--branch", "task/a", "--max-queries", "3");
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stderr, /最多查询 3 次/);
+    assert.match(result.stderr, /仓库查询超过 3 次，改为不读仓库重试/);
+    assert.match(call().prompt, /你看不到仓库/);
+    for (const bad of ["0", "101", "x", "1.5"]) {
+      const rejected = repo.cli("review-plan", "--branch", "task/a", "--max-queries", bad);
+      assert.equal(rejected.status, 2, bad);
+      assert.match(rejected.stderr, /--max-queries 必须是 1 到 100 的整数/);
+    }
+  });
+
   test("查询次数没超上限时保持读仓库，不降级", () => {
     const repo = setup();
-    const call = fakePlanClaude(repo, { repoToolUses: PLAN_MAX_QUERIES });
+    const call = fakePlanClaude(repo, { repoToolUses: DEFAULT_PLAN_MAX_QUERIES });
     const result = repo.cli("review-plan", "--branch", "task/a");
     assert.equal(result.status, 0, result.stderr);
     assert.doesNotMatch(result.stderr, /改为不读仓库重试/);

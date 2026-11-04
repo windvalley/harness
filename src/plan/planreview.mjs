@@ -5,9 +5,9 @@ import { planSummary } from "./plan.mjs";
 import { prefetchRefs } from "./refs.mjs";
 import { runPlanReviewer } from "../review/review.mjs";
 
-export const DEFAULT_PLAN_TIMEOUT_SECONDS = 600;
-export const DEFAULT_PLAN_ATTEMPT_TIMEOUT_SECONDS = 300;
-export const PLAN_MAX_QUERIES = 8;
+export const DEFAULT_PLAN_TIMEOUT_SECONDS = 1200;
+export const DEFAULT_PLAN_ATTEMPT_TIMEOUT_SECONDS = 600;
+export const DEFAULT_PLAN_MAX_QUERIES = 15;
 
 export const PLAN_REVIEW_SCHEMA = {
   type: "object",
@@ -129,7 +129,7 @@ function readMaterials(root, branch, acceptancePath) {
   return { acceptance: summary.acceptance, planFiles: files, reasons: summary.reasons };
 }
 
-export function buildPlanPrompt({ branch, acceptance, acceptancePath, planFiles, worktree, snippets = [], maxQueries = PLAN_MAX_QUERIES }) {
+export function buildPlanPrompt({ branch, acceptance, acceptancePath, planFiles, worktree, snippets = [], maxQueries = DEFAULT_PLAN_MAX_QUERIES }) {
   const parts = [
     `# 方案评审对象: ${branch}`,
     worktree
@@ -188,6 +188,7 @@ export async function reviewPlan({
   cwd, branch, all = false, log = () => {}, signal,
   timeoutSeconds = DEFAULT_PLAN_TIMEOUT_SECONDS,
   attemptTimeoutSeconds = DEFAULT_PLAN_ATTEMPT_TIMEOUT_SECONDS,
+  maxQueries = DEFAULT_PLAN_MAX_QUERIES,
 }) {
   if (!branch) throw new Error("用法: harness review-plan --branch <任务分支>");
   const project = loadGateProject(cwd, { branch });
@@ -201,9 +202,9 @@ export async function reviewPlan({
     sources: [{ path: summary.acceptancePath, text: acceptance ?? "" }, ...planFiles],
     excludePaths: [...planFiles.map((file) => file.path), summary.acceptancePath],
   });
-  const material = { branch, acceptance, acceptancePath: summary.acceptancePath, planFiles, snippets };
+  const material = { branch, acceptance, acceptancePath: summary.acceptancePath, planFiles, snippets, maxQueries };
   const prompt = buildPlanPrompt({ ...material, worktree });
-  log(`[plan-review] ${branch} (${commit.slice(0, 10)})，方案文件 ${planFiles.length} 个，预取引用片段 ${snippets.length} 个，${worktree ? `评审者可读仓库 ${worktree}，最多查询 ${PLAN_MAX_QUERIES} 次` : "没有检出目录，评审者不看仓库，只读方案文件"}`);
+  log(`[plan-review] ${branch} (${commit.slice(0, 10)})，方案文件 ${planFiles.length} 个，预取引用片段 ${snippets.length} 个，${worktree ? `评审者可读仓库 ${worktree}，最多查询 ${maxQueries} 次` : "没有检出目录，评审者不看仓库，只读方案文件"}`);
 
   const before = worktree ? workspaceState(worktree) : null;
   const result = await runPlanReviewer({
@@ -212,7 +213,7 @@ export async function reviewPlan({
     config: project.config.review ?? {},
     log,
     profile: planReviewProfile({ worktree }),
-    maxQueries: worktree ? PLAN_MAX_QUERIES : undefined,
+    maxQueries: worktree ? maxQueries : undefined,
     promptWithoutRepo: worktree ? buildPlanPrompt({ ...material, worktree: null }) : undefined,
     deadline: performance.now() + timeoutSeconds * 1000,
     attemptTimeoutMs: attemptTimeoutSeconds * 1000,

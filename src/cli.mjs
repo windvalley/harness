@@ -21,7 +21,7 @@ import { reviewerCommand } from "./review/reviewers-cmd.mjs";
 import { loadLocalReviewers, reviewersFile } from "./review/reviewers.mjs";
 import { approveConfirm, confirmSummary, formatSummary } from "./confirm/confirm.mjs";
 import { approvePlan, formatPlanSummary, planSummary, riskHints } from "./plan/plan.mjs";
-import { DEFAULT_PLAN_ATTEMPT_TIMEOUT_SECONDS, DEFAULT_PLAN_TIMEOUT_SECONDS, reviewPlan } from "./plan/planreview.mjs";
+import { DEFAULT_PLAN_ATTEMPT_TIMEOUT_SECONDS, DEFAULT_PLAN_MAX_QUERIES, DEFAULT_PLAN_TIMEOUT_SECONDS, reviewPlan } from "./plan/planreview.mjs";
 import { checkCommitMessage, checkStaged, guardReference } from "./githook.mjs";
 import { branchMessageProblems, commitRuleErrorAt } from "./policy/commit-message.mjs";
 import { answerEscalation, listEscalations, openEscalation, readEscalation, resumePlan } from "./escalate/escalate.mjs";
@@ -48,7 +48,8 @@ const USAGE = `harness <命令> [参数]
   verify   [--head <ref>] [--base <ref>] [--branch <名称>] [--no-reuse] [--plan]   对分支验证并写签名证据；--plan 只列出会执行的检查
   review   --branch <名称>                          独立评审
   review-plan --branch <名称> [--all]               方案评审：只给建议，默认只展示 high 及以上，--all 展示全部
-              [--timeout-seconds <秒>] [--attempt-timeout-seconds <秒>]  总时限默认 ${DEFAULT_PLAN_TIMEOUT_SECONDS} 秒，单次默认 ${DEFAULT_PLAN_ATTEMPT_TIMEOUT_SECONDS} 秒
+              [--timeout-seconds <秒>] [--attempt-timeout-seconds <秒>] [--max-queries <次>]
+                                                    总时限默认 ${DEFAULT_PLAN_TIMEOUT_SECONDS} 秒，单次默认 ${DEFAULT_PLAN_ATTEMPT_TIMEOUT_SECONDS} 秒，读仓库最多 ${DEFAULT_PLAN_MAX_QUERIES} 次
   status   --branch <名称>                           只读汇总：还差哪几步才能合并
   confirm  --branch <名称> [--yes]                   查看门禁改动；--yes 记录人工确认
   approve  --branch <名称> [--yes --note <原话>]     查看任务方案；用户同意实施后加 --yes，--note 照录用户原话
@@ -282,10 +283,11 @@ async function cmdReviewPlan(argv) {
       all: { type: "boolean", default: false },
       "timeout-seconds": { type: "string" },
       "attempt-timeout-seconds": { type: "string" },
+      "max-queries": { type: "string" },
     },
   });
   if (!values.branch) {
-    process.stderr.write("用法: harness review-plan --branch <名称> [--all] [--timeout-seconds <秒>] [--attempt-timeout-seconds <秒>]\n");
+    process.stderr.write("用法: harness review-plan --branch <名称> [--all] [--timeout-seconds <秒>] [--attempt-timeout-seconds <秒>] [--max-queries <次>]\n");
     return 2;
   }
   for (const flag of ["timeout-seconds", "attempt-timeout-seconds"]) {
@@ -294,6 +296,10 @@ async function cmdReviewPlan(argv) {
       process.stderr.write(`--${flag} 必须是 1 到 3600 的整数秒\n`);
       return 2;
     }
+  }
+  if (values["max-queries"] !== undefined && (!/^[1-9]\d*$/.test(values["max-queries"]) || Number(values["max-queries"]) > 100)) {
+    process.stderr.write("--max-queries 必须是 1 到 100 的整数\n");
+    return 2;
   }
   const controller = new AbortController();
   const cancel = (signal) => controller.abort(
@@ -308,6 +314,7 @@ async function cmdReviewPlan(argv) {
       all: values.all,
       timeoutSeconds: values["timeout-seconds"] && Number(values["timeout-seconds"]),
       attemptTimeoutSeconds: values["attempt-timeout-seconds"] && Number(values["attempt-timeout-seconds"]),
+      maxQueries: values["max-queries"] && Number(values["max-queries"]),
       signal: controller.signal,
       log: (line) => process.stderr.write(`${line}\n`),
     });
