@@ -507,6 +507,7 @@ export async function runPlanReviewer({
   log(`[review] 评审者（${plan.source === "local" ? "本机文件 " + plan.file : "项目配置"}）: ${describePlan(plan)}`);
   const failures = [];
   let remaining = plan.candidates.filter((entry) => !entry.skip).length;
+  let fallbackReserved = false;
   const totalTimeout = () => new Error(["方案评审总时限耗尽", ...failures].join("\n"));
   const secrets = [...plan.secrets, ...inheritedSecrets()];
   for (const entry of plan.candidates) {
@@ -518,8 +519,10 @@ export async function runPlanReviewer({
     signal?.throwIfAborted();
     const started = performance.now();
     if (started >= deadline) throw totalTimeout();
-    // 按可用人数分配剩余时间，给后面的评审者保留尝试机会。
-    const shareDeadline = remaining === 1 ? deadline : started + (deadline - started) / remaining;
+    const reserveFallback = !fallbackReserved && remaining > 1;
+    const fallbackReserveMs = reserveFallback ? Math.min(attemptTimeoutMs, (deadline - started) / 2) : 0;
+    const shareDeadline = deadline - fallbackReserveMs;
+    fallbackReserved = true;
     remaining -= 1;
     const configuredMs = entry.timeoutMinutes === undefined ? Infinity : timeoutMs(entry);
     const attemptDeadline = Math.min(shareDeadline, started + Math.min(attemptTimeoutMs, configuredMs));

@@ -4,8 +4,8 @@ import { appendLedger } from "../lib/store.mjs";
 import { planSummary } from "./plan.mjs";
 import { runPlanReviewer } from "../review/review.mjs";
 
-export const DEFAULT_PLAN_TIMEOUT_SECONDS = 360;
-export const DEFAULT_PLAN_ATTEMPT_TIMEOUT_SECONDS = 120;
+export const DEFAULT_PLAN_TIMEOUT_SECONDS = 600;
+export const DEFAULT_PLAN_ATTEMPT_TIMEOUT_SECONDS = 300;
 
 export const PLAN_REVIEW_SCHEMA = {
   type: "object",

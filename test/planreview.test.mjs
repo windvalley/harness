@@ -5,7 +5,12 @@ import { chmodSync, existsSync, readFileSync, realpathSync, writeFileSync } from
 import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
 import { fakeClaudes, fakeCodex, git, makeRepo, writeReviewers } from "./helpers.mjs";
-import { parsePlanReview, PLAN_REVIEW_SCHEMA } from "../src/plan/planreview.mjs";
+import {
+  DEFAULT_PLAN_ATTEMPT_TIMEOUT_SECONDS,
+  DEFAULT_PLAN_TIMEOUT_SECONDS,
+  parsePlanReview,
+  PLAN_REVIEW_SCHEMA,
+} from "../src/plan/planreview.mjs";
 
 let repos = [];
 afterEach(() => {
@@ -59,6 +64,11 @@ function ledger(repo) {
 }
 
 describe("方案评审", () => {
+  test("默认总时限为 10 分钟，单次上限为 5 分钟", () => {
+    assert.equal(DEFAULT_PLAN_TIMEOUT_SECONDS, 600);
+    assert.equal(DEFAULT_PLAN_ATTEMPT_TIMEOUT_SECONDS, 300);
+  });
+
   test("parsePlanReview 只认完整的发现结构，没有 verdict 字段", () => {
     assert.ok(!("verdict" in PLAN_REVIEW_SCHEMA.properties));
     assert.doesNotThrow(() => parsePlanReview({ findings: [HIGH, LOW] }));
@@ -148,6 +158,36 @@ describe("方案评审", () => {
     assert.match(result.stderr, /slow.*单次评审超时/);
     assert.match(result.stderr, /方案评审完成: backup/);
     assert.equal(ledger(repo).find((item) => item.event === "plan.review").reviewer, "backup");
+  });
+
+  test("明确失败时立即切换到备选，不等待单次时限", () => {
+    const repo = setup();
+    writeReviewers(repo, { reviewers: [
+      { name: "first", client: "command", command: [process.execPath, "-e", "process.stderr.write('failed'); process.exit(1)"] },
+      { name: "backup", client: "command", command: [process.execPath, "-e", "console.log(JSON.stringify({findings: []}))"] },
+    ] });
+    const result = repo.cli("review-plan", "--branch", "task/a", "--timeout-seconds", "6", "--attempt-timeout-seconds", "5");
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stderr, /first 失败，换下一个/);
+    assert.doesNotMatch(result.stderr, /单次评审超时/);
+    assert.match(result.stderr, /方案评审完成: backup/);
+  });
+
+  test("只为一次回退预留时间，不按全部候选者均分", () => {
+    const repo = setup();
+    const failingCommand = [process.execPath, "-e", "process.exit(1)"];
+    writeReviewers(repo, { reviewers: [
+      { name: "first", client: "command", command: failingCommand },
+      { name: "second", client: "command", command: failingCommand },
+      { name: "third", client: "command", command: failingCommand },
+    ] });
+    const result = repo.cli("review-plan", "--branch", "task/a", "--timeout-seconds", "6", "--attempt-timeout-seconds", "10");
+    assert.equal(result.status, 1);
+    const starts = result.stderr.split("\n").filter((line) => line.includes("开始评审者"));
+    assert.equal(starts.length, 3);
+    assert.match(starts[0], /本次时限 3 秒/);
+    assert.match(starts[1], /本次时限 6 秒/);
+    assert.match(starts[2], /本次时限 6 秒/);
   });
 
   test("总时限耗尽时给出明确原因，且不写成功事件", () => {
