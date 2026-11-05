@@ -56,6 +56,8 @@ describe("风险分级", () => {
     assert.match(refused.stderr, /risk_unconfirmed/);
     assert.match(refused.stderr, /敏感路径 \.github\/workflows\/ci\.yml/);
     assert.match(refused.stderr, /harness confirm --branch feat\/ci/);
+    assert.match(refused.stderr, /! \.harness\/bin\/harness confirm --branch feat\/ci --yes/, "给出填好分支名的完整 ! 命令");
+    assert.doesNotMatch(refused.stderr, /--branch <分支>/, "不留占位符");
     const status = repo.cli("status", "--branch", "feat/ci").stdout;
     assert.match(status, /\[FAIL\] risk: .*敏感路径/);
     assert.match(status, /风险改动待确认/);

@@ -647,6 +647,8 @@ describe("合并门禁", () => {
     const refused = repo.cli("merge", "--branch", "task/gate");
     assert.notEqual(refused.status, 0);
     assert.match(refused.stderr, /gate_change_unconfirmed/);
+    assert.match(refused.stderr, /! \.harness\/bin\/harness confirm --branch task\/gate --yes/, "给出填好分支名的完整 ! 命令");
+    assert.doesNotMatch(refused.stderr, /--branch <分支>/, "不留占位符");
 
     const summary = repo.cli("confirm", "--branch", "task/gate");
     assert.equal(summary.status, 0, summary.stderr);
