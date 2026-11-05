@@ -763,6 +763,7 @@ footer { border-top: 1px solid var(--line); color: var(--muted); font-size: .88r
         <h4>查看接入方案与检查配置</h4>
         <p>Agent 调查并预览接入改动，按项目规则准备任务分支和工作环境，再写入配置、提交、验证与独立评审。用户不需要先创建 Worktree，也不一律需要新建一个；同目录任务分支、已有隔离工作区或新建 Linked Worktree 都按实际约束选择。</p>
         <p><code>init</code> 会写入配置、规则、入口、git 钩子、客户端配置和 <code>AGENTS.md</code> 托管块。起始检查需要对照项目真实命令核实，占位与未执行项应明确列出。</p>
+        <p>接入的关键一步，是把项目自己要求通过的检查（lint、build、test 等）配成验证里的必过项（<code>gate</code>）。Agent 会先在接入前的代码上逐条试跑这些检查：能通过的配成 <code>gate</code>，之后任何一项失败都合不进主分支；接入前就已经失败的，Agent 列给你，由你决定先修好、暂时豁免还是改为手工验收。没有配成 <code>gate</code> 的检查拦不住任何交付。例如 <code>init</code> 生成的 <code>lint</code> 只是占位，要换成项目真实的 lint 命令并设为 <code>gate</code> 才会生效。</p>
         <p>已有 husky、自定义钩子等其他门禁时，Agent 应说明保留或迁移方式，需要舍弃现有规则时先由你决定。详细命令见<a href="https://github.com/windvalley/harness/blob/main/docs/reference.md#首次接入">参考手册</a>。</p>
       </li>
       <li>
