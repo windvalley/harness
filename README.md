@@ -21,7 +21,7 @@ harness 是跑在本机的 AI-Native 研发流程：Agent 高度自动地完成�
 
 ### 1. 安装 harness 并接入项目
 
-harness 没有 npm 依赖，也不需要全局安装，由 Agent 在接入时获取；手工获取见[安装](docs/reference.md#安装)。
+首次接入时，Agent 会从 GitHub 获取 harness，并将所需版本安装到本机共享目录。各项目通过仓库内的入口锁定版本，多个项目可以共享同一安装版本，无需重复安装。手工获取方式见[安装](docs/reference.md#安装)。
 
 在 AI 编程客户端里打开待接入的项目，对 Agent 说：
 

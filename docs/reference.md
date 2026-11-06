@@ -107,8 +107,8 @@ Agent 可以把获取与[首次接入](#首次接入)连续完成；需要你登
 git clone https://github.com/windvalley/harness.git ~/github/harness
 ```
 
-harness 没有 npm 依赖，也不需要全局安装。
-接入项目之前用 `node ~/github/harness/bin/harness.mjs <命令>` 运行；接入之后用项目里的入口 `.harness/bin/harness <命令>`，它随仓库分发，每个 Linked Worktree 检出即可用。
+首次接入时，Agent 会从 GitHub 获取 harness，并将所需版本安装到本机共享目录 `~/.local/share/harness/versions/<版本>/`；多个项目可以共享同一安装版本。
+手工接入时，可以先用 `node ~/github/harness/bin/harness.mjs <命令>` 运行；接入之后用项目里的入口 `.harness/bin/harness <命令>`，它随仓库分发、锁定版本并转发到本机共享安装目录，每个 Linked Worktree 检出即可用。
 克隆到别的目录也可以，把命令里的路径换掉即可。
 
 下文写作 `harness <命令>` 的地方，都指项目里的入口 `.harness/bin/harness <命令>`。
