@@ -17,11 +17,11 @@ harness 是跑在本机的 AI-Native 研发流程：Agent 高度自动地完成�
 需要：
 
 - macOS 或 Linux，Node.js 20 及以上，git 2.38 及以上。
-- 至少一个可用的评审者，用来做独立评审和方案评审：本机已登录的 `claude`（Claude Code CLI）或 `codex`，也可以是你自己写的命令；评审用的模型、推理强度和第三方端点用 `harness reviewer` 在本机配置，见[独立评审的后端](docs/reference.md#独立评审的后端)。
+- 一个独立评审的后端：本机已登录的 `claude`（Claude Code CLI）或 `codex`，也可以是你自己写的命令，见[独立评审的后端](docs/reference.md#独立评审的后端)。
+
+### 1. 安装 harness 并接入项目
 
 harness 没有 npm 依赖，也不需要全局安装，由 Agent 在接入时获取；手工获取见[安装](docs/reference.md#安装)。
-
-### 1. 接入项目
 
 在 AI 编程客户端里打开待接入的项目，对 Agent 说：
 
