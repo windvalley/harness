@@ -333,6 +333,9 @@ async function cmdReviewPlan(argv) {
   }
 }
 
+/** 本地主分支已经更新、后续步骤失败的错误码，退出码 3 提醒不要当成“没合并”重来。 */
+const MERGED_THEN_FAILED = new Set(["post_merge_failed", "push_rejected", "push_failed", "push_skipped"]);
+
 async function cmdMerge(argv) {
   const { values } = parseArgs({
     args: argv,
@@ -348,7 +351,7 @@ async function cmdMerge(argv) {
   } catch (error) {
     if (error instanceof MergeError) {
       process.stderr.write(`合并被拒绝(${error.code}): ${error.message}\n`);
-      return error.code === "post_merge_failed" ? 3 : 1;
+      return MERGED_THEN_FAILED.has(error.code) ? 3 : 1;
     }
     throw error;
   }

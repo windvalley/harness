@@ -71,7 +71,7 @@
 
 验证失败、评审拒绝、`review_stale`、合并冲突、`bad_commit_message`、`branch_commit_rule_invalid`、`branch_moved`、`main_moved` 这类拒绝由 Agent 按拒绝原因修改后重新 verify、review，再交付，不需要用户安排。
 修复只能改实现、测试或提交本身：任务分支放宽不了门禁，删测试、弱化断言、跳过检查同样不允许。
-需要人的拒绝停下来说明对象和做法：`gate_change_unconfirmed`（人确认门禁改动）、`risk_unconfirmed`（人确认高风险改动）、`plan_unapproved`（用户同意实施）、`platform_missing` 与 `platform_failed`（人安装或登录平台命令）、`version_missing`（人安装版本）、`push_rejected` 与 `not_fast_forward`（远程或本地主分支有来源不明的提交，由人判断）。
+需要人的拒绝停下来说明对象和做法：`gate_change_unconfirmed`（人确认门禁改动）、`risk_unconfirmed`（人确认高风险改动）、`plan_unapproved`（用户同意实施）、`platform_missing` 与 `platform_failed`（人安装或登录平台命令）、`version_missing`（人安装版本）、`push_rejected` 与 `not_fast_forward`（远程或本地主分支有来源不明的提交，由人判断）、`push_failed` 与 `push_skipped`（本地交付开启 `push` 后合并已完成但推送没有成功，由人推送）。
 另外按 `core.md` 的停下条件处理：缺权限、需要业务拍板、改动范围明显超出方案、同一个问题连续三轮没有解决。
 
 ## 交付方式
@@ -79,8 +79,11 @@
 门禁通过后怎样把改动送进主分支，由主分支上 `.harness/config.json` 的 `delivery` 决定。
 两种交付方式只能选一种，同一时间只按其中一种交付：
 
-- 本地交付（`"mode": "local"`）：`harness merge` 合入本地主分支，需要时由人推送。
+- 本地交付（`"mode": "local"`）：`harness merge` 合入本地主分支，默认由人推送。
   没有这一段时按本地交付，`init` 也会写出 `{ "mode": "local" }`。
+  人可以在其中加 `"push": true`，之后 `harness merge` 合入后把核对过的提交普通推送到 `remote` 的主分支，不强推、不推标签。
+  Agent 不要自行添加 `push`：它授予推送主分支的权限，改它要人确认，开启的那次合并不推送。
+  合并已完成而推送失败时（`push_rejected`、`push_failed`、`push_skipped`，退出码 3），本地主分支已经更新，不要重复合并，把报错交给人处理。
 - 远程交付（`"mode": "remote"`，`provider` 填 `github` 或 `gitlab`）：`harness submit` 推送任务分支并创建或更新 PR/MR，由用户或团队在平台上合并，合入后 `harness sync` 快进本地主分支。
 
 本地交付下 `submit` 以 `delivery_local` 拒绝，远程交付下 `merge` 以 `delivery_remote` 拒绝；`sync` 只同步，两种方式下都能用。

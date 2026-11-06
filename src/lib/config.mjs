@@ -209,6 +209,7 @@ const DELIVERY_PROVIDERS = { github: "gh", gitlab: "glab" };
  * 交付设置（config.delivery），缺省按本地交付。
  * local：harness merge 合入本地主分支；remote：harness submit 推送任务分支并创建或更新 PR/MR，由团队在平台上合并。
  * 两种模式都可以用 harness sync 把本地主分支快进到 remote 指向的远程主分支。
+ * push 只属于本地交付：为 true 时 harness merge 合入后把核对过的提交普通推送到 remote 的主分支，缺省 false；远程交付下写 push 是配置错误。
  * 只保留影响行为的字段，本地交付下的 provider 不起作用，比较时不计入，只写出缺省值也不算改动。
  */
 export function deliverySettings(config) {
@@ -225,22 +226,38 @@ export function deliverySettings(config) {
     throw new Error(`.harness/config.json 的 delivery.provider 只能是 ${Object.keys(DELIVERY_PROVIDERS).join(" 或 ")}，当前是 ${JSON.stringify(provider)}`);
   }
   if (mode === "remote" && provider === null) throw new Error(".harness/config.json 的 delivery.mode 为 remote 时必须指定 delivery.provider：github 或 gitlab");
-  return { mode, remote, provider: mode === "remote" ? provider : null };
+  const push = raw.push ?? false;
+  if (typeof push !== "boolean") throw new Error(`.harness/config.json 的 delivery.push 必须是 true 或 false，当前是 ${JSON.stringify(push)}`);
+  if (mode === "remote" && push) {
+    throw new Error(".harness/config.json 的 delivery.push 只用于本地交付；远程交付由 harness submit 推送任务分支、harness sync 同步主分支，删除 push 或把 mode 改为 local");
+  }
+  return { mode, remote, provider: mode === "remote" ? provider : null, push };
 }
 
 export function sameDelivery(a, b) {
-  return a.mode === b.mode && a.remote === b.remote && a.provider === b.provider;
+  return a.mode === b.mode && a.remote === b.remote && a.provider === b.provider && a.push === b.push;
 }
 
 export function describeDelivery(settings) {
-  return settings.mode === "remote" ? `远程交付（${settings.provider}，远程 ${settings.remote}）` : `本地交付（同步远程 ${settings.remote}）`;
+  if (settings.mode === "remote") return `远程交付（${settings.provider}，远程 ${settings.remote}）`;
+  return `本地交付（同步远程 ${settings.remote}${settings.push ? "，合并后推送主分支" : ""}）`;
 }
 
 /** 开启远程交付时授予的权限，写进确认摘要，由人看过再确认。 */
 export function deliveryGrant(settings) {
   return settings.mode === "remote"
     ? `harness submit 可以把任务分支普通推送到 ${settings.remote} 并创建或更新 PR/MR；不包括在平台上合并、推送主分支和强推`
-    : "harness merge 合入本地主分支；harness submit 不推送任务分支，也不创建 PR/MR";
+    : settings.push
+      ? `harness merge 合入本地主分支后，把核对过的提交普通推送到 ${settings.remote} 的主分支；不包括强推、推送标签和在平台上合并；harness submit 不推送任务分支，也不创建 PR/MR`
+      : "harness merge 合入本地主分支；harness submit 不推送任务分支，也不创建 PR/MR";
+}
+
+/**
+ * 开启推送的那次改动，确认记录必须写明授予了推送。
+ * 旧版本忽略 push 字段，它签发的确认摘要里没有这一项，不能当作推送授权复用。
+ */
+export function pushGrantMissing(change, record) {
+  return Boolean(change.changed && change.after.push && record?.summary?.delivery?.after?.push !== true);
 }
 
 /** 某个提交上的交付设置；那里没有 .harness/config.json 时返回 null。 */

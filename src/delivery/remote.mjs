@@ -3,7 +3,8 @@ import { tail } from "../lib/redact.mjs";
 
 /**
  * 远程操作只在这里发生，命令与参数集中一处，便于核对 harness 到底能对远程做哪些事。
- * 全部是普通推送与普通读取：不强推，不推主分支，不在平台上合并。
+ * 全部是普通推送与普通读取：不强推，不在平台上合并。
+ * 主分支只在本地交付开启 delivery.push 时由 harness merge 推送，见 pushMain；submit 与 sync 不推主分支。
  */
 
 /** 取得远程主分支的最新提交，同时更新远程跟踪引用。失败时抛 fetch_failed。 */
@@ -46,6 +47,43 @@ export function pushCommit({ root, remote, branch, commit, run }) {
     ].join("\n"),
   );
   error.code = diverged ? "push_rejected" : "push_failed";
+  throw error;
+}
+
+/**
+ * 本地交付开启 delivery.push 后，把 harness merge 核对并合入的那个提交普通推送到远程主分支。
+ * 按提交号推，不按分支名推：合并之后主分支再动也影响不到推上去的内容；--no-follow-tags 防止 push.followTags 把标签带出去。
+ * 失败后问一次远程的真实状态，区分“已经更新”“没有更新”“无法确认”，调用方据此提示由人做什么。
+ */
+export function pushMain({ root, remote, mainRef, commit, previous, run }) {
+  const result = run("git", ["push", "--porcelain", "--no-follow-tags", remote, `${commit}:refs/heads/${mainRef}`], { cwd: root });
+  if (result.status === 0) return { pushed: true };
+  const combined = tail(`${result.stdout}\n${result.stderr}`, 8);
+  let tip;
+  try {
+    tip = remoteBranchTip({ root, remote, branch: mainRef, run });
+  } catch {
+    tip = undefined;
+  }
+  if (tip === commit) return { pushed: true, recovered: true };
+  const state = tip === undefined ? "unknown" : tip === previous ? "unchanged" : "moved";
+  const diverged = /non-fast-forward|\[rejected\]|fetch first|remote contains work/i.test(combined);
+  const stateText = {
+    unchanged: "远程 " + mainRef + " 没有变化",
+    unknown: `无法确认远程 ${mainRef} 是否已经更新，先用 git ls-remote ${remote} ${mainRef} 查看`,
+    moved: `远程 ${mainRef} 现在指向 ${String(tip).slice(0, 10)}，不是刚才推送的提交`,
+  }[state];
+  const error = new Error(
+    [
+      `本地 ${mainRef} 已更新到 ${commit.slice(0, 10)}，但推送到 ${remote} 失败（${stateText}）:`,
+      combined,
+      diverged
+        ? "远程主分支已有本地没有的提交，harness 不强推；先运行 harness sync 弄清差异，由人判断怎么处理。"
+        : "确认远程可写、主分支没有被保护规则拦住后，由人推送主分支。",
+    ].join("\n"),
+  );
+  error.code = diverged ? "push_rejected" : "push_failed";
+  error.remoteState = state;
   throw error;
 }
 

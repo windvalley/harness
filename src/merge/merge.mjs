@@ -10,6 +10,8 @@ import {
   gitHooksConfig,
   loadGateProject,
   mainBranch,
+  pushGrantMissing,
+  sameDelivery,
 } from "../lib/config.mjs";
 import { matchAny } from "../lib/glob.mjs";
 import { environmentDigests, environmentItems } from "../verify/environment.mjs";
@@ -37,6 +39,7 @@ import { ensureHooksPath } from "../install/install.mjs";
 import { REVIEW_KIND } from "../review/review.mjs";
 import { approvalState, assessRisk, planEnforced } from "../plan/plan.mjs";
 import { MERGE_TOKEN_ENV, mainUpdateToken } from "../githook.mjs";
+import { fetchRemoteMain, pushMain } from "../delivery/remote.mjs";
 import { commitRangeProblems, commitRuleErrorAt } from "../policy/commit-message.mjs";
 import { resolvePolicy } from "../policy/resolve.mjs";
 import { leftoverWorktrees } from "../worktree/clean.mjs";
@@ -251,7 +254,8 @@ export async function checkGates({ project, root, branch, log = console.error, d
   const riskNeedsConfirm = !bootstrap && risk.confirmReasons.length > 0;
   if (gateNeedsConfirm) {
     const confirm = confirmRecord;
-    if (!confirmed) {
+    // 旧版本不认识 delivery.push，它签发的确认摘要里没有推送授权，开启推送时要按新摘要重新确认。
+    if (!confirmed || pushGrantMissing(change, confirmRecord.record)) {
       // merge 与 submit 共用这段核对，拒绝信息按调用方说清是哪一步之前要确认。
       const reason = bootstrap
         ? `首次接入会把这个分支里的门禁配置变成主分支的信任根，需要人在${when}确认一次。`
@@ -503,6 +507,49 @@ export function afterMainUpdate({ project, root, mainRoot, resultPaths, bootstra
   return { refresh, notes, postMerge };
 }
 
+/** 推送前先看远程主分支：它必须已经包含在本地主分支里，否则合并后推不上去，本地与远程会分叉。 */
+function preflightPush({ root, remote, mainRef, mainCommit }) {
+  let relay;
+  try {
+    relay = fetchRemoteMain({ root, remote, mainRef, run });
+  } catch (error) {
+    throw new MergeError(`${error.message}\n本项目开启了 delivery.push，合并后要推送主分支，所以先确认远程可访问；本地主分支保持原样。`, error.code ?? "fetch_failed");
+  }
+  const remoteMain = resolveCommit(root, relay);
+  if (remoteMain !== mainCommit && !isAncestor(root, remoteMain, mainCommit)) {
+    throw new MergeError(
+      [
+        `${remote}/${mainRef}(${remoteMain.slice(0, 10)}) 有本地 ${mainRef}(${mainCommit.slice(0, 10)}) 没有的提交，现在合并后无法推送，本地与远程会分叉。`,
+        `先运行 harness sync 把本地 ${mainRef} 快进到远程，再重新 merge；本地主分支保持原样。`,
+      ].join("\n"),
+      "not_fast_forward",
+    );
+  }
+  return { remote, previous: remoteMain };
+}
+
+/** 主分支已更新、合并后命令也成功之后，把核对过的提交推到远程；失败不回滚本地合并，由人处理。 */
+function publishMain({ root, mainRef, newHead, plan, branch, log }) {
+  const { remote, previous } = plan;
+  const current = resolveCommit(root, mainRef);
+  if (current !== newHead) {
+    appendLedger(root, { event: "merge.push_skipped", branch, head: newHead, current });
+    throw new MergeError(
+      `合并后 ${mainRef} 已不是核对过的提交(${newHead.slice(0, 10)} -> ${current.slice(0, 10)})，没有推送；由人确认 ${mainRef} 的状态后再推送。`,
+      "push_skipped",
+    );
+  }
+  try {
+    const result = pushMain({ root, remote, mainRef, commit: newHead, previous, run });
+    appendLedger(root, { event: "merge.pushed", branch, head: newHead, remote, recovered: Boolean(result.recovered) });
+    log(`[merge] 已推送 ${mainRef} 到 ${remote}（${newHead.slice(0, 12)}）`);
+    return { pushed: true, remote, head: newHead };
+  } catch (error) {
+    appendLedger(root, { event: "merge.push_failed", branch, head: newHead, remote, code: error.code ?? "push_failed", remoteState: error.remoteState ?? "unknown" });
+    throw new MergeError(error.message, error.code ?? "push_failed");
+  }
+}
+
 export async function mergeTask({ cwd, branch, dryRun = false, log = console.error }) {
   // 首次接入时主分支还没有配置，按接入分支提议的配置执行，并强制要求人工确认。
   const project = loadGateProject(cwd, { branch });
@@ -552,6 +599,14 @@ export async function mergeTask({ cwd, branch, dryRun = false, log = console.err
       );
     }
 
+    // 推送只看合并前主分支上的交付设置：开启推送的那次合并读到的还是 push 为 false，不推；
+    // 合并结果里关闭推送、换远程的合并同样不推，授权以人确认过的配置为准。设置必须来自这次核对的基线提交。
+    const pinned = deliveryAt(root, mainCommit) ?? deliverySettings(undefined);
+    if (!sameDelivery(pinned, gates.delivery.before ?? pinned)) {
+      throw new MergeError(`${mainRef} 上的交付设置在合并过程中变了，重新运行 harness merge 即可复用已有证据`, "main_moved");
+    }
+    const pushPlan = !bootstrap && pinned.mode === "local" && pinned.push && sameDelivery(pinned, gates.delivery.after) ? preflightPush({ root, remote: pinned.remote, mainRef, mainCommit }) : null;
+
     advanceMain({ project, mainRoot, mainRef, mainCommit, newHead, resultTree, bootstrap, branch, log });
 
     appendLedger(root, { event: "merge", branch, fastForward, head: newHead, tree: resultTree, base: mainCommit, bootstrap, riskObserved: gates.risk.observed });
@@ -570,6 +625,8 @@ export async function mergeTask({ cwd, branch, dryRun = false, log = console.err
       branch,
     });
 
+    const push = pushPlan ? publishMain({ root, mainRef, newHead, plan: pushPlan, branch, log }) : null;
+
     // 任务 Worktree 合并后保留：会话常常还停在里面，也可能要回来补改。需要时由用户运行 harness worktree clean 清理。
     try {
       const own = worktreeEntries(mainRoot).find((entry) => entry.branch === branch);
@@ -581,7 +638,7 @@ export async function mergeTask({ cwd, branch, dryRun = false, log = console.err
       // 只是提示，读不到 Worktree 列表不影响合并结果。
     }
 
-    return { dryRun: false, bootstrap, fastForward, newHead, resultTree, gateTouched, postMerge, refresh, followUps: notes };
+    return { dryRun: false, bootstrap, fastForward, newHead, resultTree, gateTouched, postMerge, refresh, push, followUps: notes };
   } finally {
     release();
   }

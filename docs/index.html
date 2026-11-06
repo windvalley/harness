@@ -337,6 +337,7 @@ footer { border-top: 1px solid var(--line); color: var(--muted); font-size: .88r
         <tr><td>适合</td><td>主分支在本机，需要时由你推送</td><td>主分支在 GitHub 或 GitLab 上，合并走 PR/MR 与平台的保护规则</td></tr>
         <tr><td>门禁通过后</td><td><code>harness merge</code> 合入本地主分支</td><td><code>harness submit</code> 推送任务分支，创建或更新 PR/MR</td></tr>
         <tr><td>谁来合并</td><td>Agent，在项目授权范围内</td><td>你或团队在平台上合并，harness 不代为合并</td></tr>
+        <tr><td>推送主分支</td><td>默认由你推送；配置 <code>"push": true</code> 后由 <code>harness merge</code> 合入后推送</td><td>不适用，推送与合并走 <code>submit</code>、<code>sync</code> 和平台</td></tr>
         <tr><td>本地主分支怎么更新</td><td><code>harness merge</code></td><td>平台合入后用 <code>harness sync</code> 快进</td></tr>
         <tr><td>需要准备</td><td>无</td><td>本机安装并登录 <code>gh</code>（GitHub）或 <code>glab</code>（GitLab）</td></tr>
       </tbody>
@@ -945,6 +946,7 @@ node ~/github/harness/bin/harness.mjs install --local
     <p>Agent 应检查差异并说明同步方式和影响，在项目授权范围内处理，最后汇报结果。</p>
     <p>远程写入仍须按项目规则单独取得授权，请求本地接入或合并不代表允许推送。下面是同步机制与命令参考。</p>
     <p>harness 只管本地主分支。Agent 推送主分支会被拦截，由人推送；Agent 可以推送任务分支，但不能强推。</p>
+    <p>本地交付下，想让合并后自动推送，在 <code>delivery</code> 里加 <code>"push": true</code>：<code>harness merge</code> 随后把核对过的提交普通推送到远程主分支，不强推、不推标签。它授予推送主分支的权限，所以要人确认，开启的那次合并不推送；主分支受保护、只接受 PR/MR 的仓库请改用远程交付。</p>
     <p>接入后优先用 <code>harness sync</code>：它把本地主分支快进到远程主分支，核对远程带来的门禁改动（需要时由人运行 <code>harness confirm --branch origin/main</code>），刷新本机安装并执行 <code>merge.postMergeCommand</code>。本地有远程没有的提交时它拒绝，不改写历史。两种交付方式下都能用，远程交付下它是更新本地主分支的唯一方式，见<a href="#delivery-modes">两种交付方式</a>。</p>
     <p>需要人工判断时，也可以用下面两种做法同步远端主分支：</p>
     <div class="code"><span class="label">做法一：走一遍本机门禁</span><pre><code>git fetch origin

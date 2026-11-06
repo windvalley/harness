@@ -366,7 +366,15 @@ export function deliveryCheck(root) {
     return { id: "delivery", ok: false, detail: error.message };
   }
   if (settings.mode === "local") {
-    return { id: "delivery", ok: true, detail: `本地交付：由 harness merge 合入本地主分支，同步远程 ${settings.remote}` };
+    if (settings.push && git(root, ["remote", "get-url", settings.remote]).status !== 0) {
+      return {
+        id: "delivery",
+        ok: false,
+        detail: `本地交付（合并后推送主分支）：远程 ${settings.remote} 不存在，先 git remote add ${settings.remote} <地址>，否则 harness merge 会在合并前拒绝`,
+      };
+    }
+    const pushText = settings.push ? `，合并后把核对过的提交推送到 ${settings.remote} 的主分支` : "";
+    return { id: "delivery", ok: true, detail: `本地交付：由 harness merge 合入本地主分支${pushText}，同步远程 ${settings.remote}` };
   }
   const url = git(root, ["remote", "get-url", settings.remote]);
   if (url.status !== 0) {

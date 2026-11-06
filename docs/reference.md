@@ -877,6 +877,10 @@ Agent 运行 `harness confirm --branch <分支>` 并展示只读摘要：涉及�
   主分支在平台上，合并走 PR/MR 与平台的保护规则。
   这时 `harness merge` 以 `delivery_remote` 拒绝，改用 `harness submit`。
 - `remote` 是远程名，默认 `origin`，`submit` 与 `sync` 都用它。
+- `push` 只属于本地交付，默认 `false`：改为 `true` 后，`harness merge` 在合入本地主分支、执行完合并后命令之后，把核对过的那个提交普通推送到 `remote` 的主分支。
+  不强推，不带标签（即使配置了 `push.followTags`），按提交号推送，合并后主分支再动也不影响推上去的内容。
+  远程交付下写 `push` 是配置错误，由 `submit` 与 `sync` 负责远程写入。
+  主分支受保护、只接受 PR/MR 的仓库不要开启，改用远程交付。
 - `harness sync` 只把本地主分支快进到远程主分支，两种方式下都能用。
 - 本地主分支仍是唯一的信任根，配置一律从它读。
   远程模式下本地主分支只由 `sync` 快进。
@@ -884,6 +888,17 @@ Agent 运行 `harness confirm --branch <分支>` 并展示只读摘要：涉及�
 交付设置的实际变化都要人工确认，不受 `governance.confirmOnGateChange` 影响：它决定 Agent 能对远程做什么。
 只把缺省值写成显式的 `local` 不算变化。
 确认摘要里单独列一行“交付设置”，写明改前改后与由此授予的权限。
+开启 `push` 时，确认记录必须写明授予了推送：旧版本签发的确认没有这一项，需要按新摘要重新确认。
+
+开启 `push` 之后的合并按下面的规则执行：
+
+- 推送依据合并前主分支上的交付设置。开启 `push` 的那次合并读到的还是关闭状态，不推送；合并结果里关闭 `push`、换远程的合并同样不推送。首次接入不推送。
+- 合并前先取得远程主分支。远程有本地没有的提交时以 `not_fast_forward` 拒绝，本地主分支保持原样，先运行 `harness sync`。
+- 合并后命令失败时不推送（`post_merge_failed`）。
+- 合并后主分支已不是核对过的提交时不推送（`push_skipped`）。
+- 推送失败不回滚本地合并，以 `push_rejected` 或 `push_failed` 退出，退出码 3；提示会说明远程主分支是“没有变化”“已经移动”还是“无法确认”，由人处理。
+  账本记录 `merge.pushed`、`merge.push_failed` 或 `merge.push_skipped`。
+- 预检用读取地址取得远程，推送用写入地址；配置了不同的 `pushurl` 时，预检只能尽力判断，推送仍可能被拒。
 
 已经接入、正在用本地交付的项目改用远程交付：
 
@@ -932,6 +947,7 @@ Agent 应检查差异并说明同步方式和影响，在项目授权范围内�
 远程写入仍须按项目规则单独取得授权，不能把请求本地接入或本地合并理解为允许推送。
 
 - 推送：Agent 推送主分支会被拦截，由人推送；Agent 可以推送任务分支，但不能强推。
+  本地交付配置了 `delivery.push` 时例外：`harness merge` 自己推送它核对过的主分支提交，见“交付方式”。
 - 拉取：本地主分支受保护，在主分支上 `git pull` 会被 `reference-transaction` 拒绝。
   快进拉取被拒时 git 已经把远端的文件检出到工作区，主 Worktree 会留下这些改动。
   拉取前主 Worktree 是洁净的，残留的就只是远端改动，由人运行 `git reset --hard HEAD` 恢复。
@@ -1112,7 +1128,8 @@ node ~/github/harness/bin/harness.mjs install --local   # 按新锁定的版本�
 | `worktree.cleanup` | `[]` | `harness worktree clean` 删除 Worktree 前在里面依次运行的命令，见“清理任务 Worktree” |
 | `delivery.mode` | `local` | 交付方式：`local` 由 `harness merge` 合入本地主分支，`remote` 由 `harness submit` 推送并创建 PR/MR，见“交付方式” |
 | `delivery.provider` | `null` | `remote` 必填：`github` 用 `gh`，`gitlab` 用 `glab` |
-| `delivery.remote` | `"origin"` | `submit` 与 `sync` 使用的远程名 |
+| `delivery.remote` | `"origin"` | `submit`、`sync` 与本地交付推送使用的远程名 |
+| `delivery.push` | `false` | 仅本地交付：`harness merge` 合入后把核对过的提交推送到远程主分支；改它要人确认，开启的那次合并不推送；远程交付下写它是配置错误 |
 | `git.hooksDir`、`git.projectHooks` | 不设置 | 由 harness 接管 git 钩子目录，见下文 |
 
 ### verify.json：检查映射

@@ -1002,3 +1002,173 @@ describe("开启、关闭与首次接入", () => {
     assert.match(repo.cli("merge", "--branch", "chore/harness-onboard").stderr, /delivery_remote|already_merged/);
   });
 });
+
+describe("本地交付 delivery.push", () => {
+  const PUSH = { mode: "local", remote: "origin", push: true };
+  const mainHead = (repo) => git(repo.root, "rev-parse", "main");
+
+  /** 已开启推送的项目：配置在主分支上，远程是本地裸仓库。 */
+  function pushing() {
+    const repo = setup({ delivery: PUSH });
+    const remote = withRemote(repo);
+    return { repo, remote };
+  }
+
+  test("缺省不推送，远程主分支保持不变", () => {
+    const repo = setup();
+    const remote = withRemote(repo);
+    const before = remoteRef(remote, "refs/heads/main");
+    task(repo);
+    const merged = repo.cli("merge", "--branch", "task/a");
+    assert.equal(merged.status, 0, merged.stderr);
+    assert.equal(JSON.parse(merged.stdout).push, null);
+    assert.equal(remoteRef(remote, "refs/heads/main"), before);
+  });
+
+  test("开启后合并并把核对过的提交推到远程主分支，不推标签", () => {
+    const { repo, remote } = pushing();
+    git(repo.root, "config", "push.followTags", "true");
+    git(repo.root, "tag", "-a", "v9.9.9", "-m", "release", "main");
+    task(repo);
+    const merged = repo.cli("merge", "--branch", "task/a");
+    assert.equal(merged.status, 0, merged.stderr);
+    assert.equal(JSON.parse(merged.stdout).push.pushed, true);
+    assert.equal(remoteRef(remote, "refs/heads/main"), mainHead(repo));
+    assert.equal(remoteRef(remote, "refs/tags/v9.9.9"), null, "push.followTags 不能把标签带出去");
+    assert.match(readFileSync(join(repo.env.HARNESS_DATA_DIR, "ledger.jsonl"), "utf8"), /merge\.pushed/);
+  });
+
+  test("开启推送的那次合并不推，授权要人确认，下一次才推", () => {
+    const repo = setup();
+    const remote = withRemote(repo);
+    const before = remoteRef(remote, "refs/heads/main");
+    setDelivery(repo, "chore/push-on", PUSH);
+    const refused = repo.cli("merge", "--branch", "chore/push-on");
+    assert.notEqual(refused.status, 0);
+    assert.match(refused.stderr, /gate_change_unconfirmed/);
+    assert.equal(repo.cli("confirm", "--branch", "chore/push-on", "--yes").status, 0);
+    const enabled = repo.cli("merge", "--branch", "chore/push-on");
+    assert.equal(enabled.status, 0, enabled.stderr);
+    assert.equal(JSON.parse(enabled.stdout).push, null, "开启那次读到的主分支配置还是不推送");
+    assert.equal(remoteRef(remote, "refs/heads/main"), before);
+
+    task(repo);
+    const next = repo.cli("merge", "--branch", "task/a");
+    assert.equal(next.status, 0, next.stderr);
+    assert.equal(remoteRef(remote, "refs/heads/main"), mainHead(repo));
+  });
+
+  test("确认摘要写明由此授予推送主分支", () => {
+    const repo = setup();
+    withRemote(repo);
+    setDelivery(repo, "chore/push-on", PUSH);
+    const summary = repo.cli("confirm", "--branch", "chore/push-on");
+    assert.match(output(summary), /合并后推送主分支/);
+    assert.match(output(summary), /由此授予: .*普通推送到 origin 的主分支/);
+  });
+
+  test("旧版本签发的确认摘要没有推送授权，不能复用", async () => {
+    const repo = setup();
+    withRemote(repo);
+    setDelivery(repo, "chore/push-on", PUSH);
+    const { writeRecord } = await import("../src/lib/store.mjs");
+    const { planMergeResult } = await import("../src/merge/merge.mjs");
+    const { loadGateProject } = await import("../src/lib/config.mjs");
+    const planned = planMergeResult({ project: loadGateProject(repo.root), root: repo.root, branch: "chore/push-on" });
+    const confirmWith = (after) =>
+      writeRecord(repo.root, "confirm", planned.resultTree, {
+        decision: "approve",
+        by: "tester",
+        confirmedAt: new Date().toISOString(),
+        summary: { delivery: { before: { mode: "local", remote: "origin", provider: null }, after, changed: true } },
+      });
+    // 旧版本不认识 push，摘要里的交付设置只有 mode、remote、provider。
+    const prior = { mode: "local", remote: "origin", provider: null };
+    const names = ["HARNESS_DATA_DIR", "HARNESS_KEY_DIR"];
+    const saved = Object.fromEntries(names.map((name) => [name, process.env[name]]));
+    for (const name of names) process.env[name] = repo.env[name];
+    try {
+      confirmWith(prior);
+      const refused = repo.cli("merge", "--branch", "chore/push-on");
+      assert.notEqual(refused.status, 0);
+      assert.match(refused.stderr, /gate_change_unconfirmed/);
+
+      confirmWith({ ...prior, push: true });
+      const allowed = repo.cli("merge", "--branch", "chore/push-on");
+      assert.equal(allowed.status, 0, `写明推送授权的记录应当放行: ${allowed.stderr}`);
+    } finally {
+      for (const name of names) {
+        if (saved[name] === undefined) delete process.env[name];
+        else process.env[name] = saved[name];
+      }
+    }
+  });
+
+  test("合并结果关闭推送的那次合并不推送", () => {
+    const { repo, remote } = pushing();
+    const before = remoteRef(remote, "refs/heads/main");
+    setDelivery(repo, "chore/push-off", { mode: "local", remote: "origin" });
+    assert.equal(repo.cli("confirm", "--branch", "chore/push-off", "--yes").status, 0);
+    const merged = repo.cli("merge", "--branch", "chore/push-off");
+    assert.equal(merged.status, 0, merged.stderr);
+    assert.equal(JSON.parse(merged.stdout).push, null);
+    assert.equal(remoteRef(remote, "refs/heads/main"), before);
+  });
+
+  test("远程主分支领先时合并前拒绝，本地主分支不变", () => {
+    const { repo, remote } = pushing();
+    remoteCommit(repo, remote, { "other.txt": "x\n" });
+    task(repo);
+    const before = mainHead(repo);
+    const refused = repo.cli("merge", "--branch", "task/a");
+    assert.notEqual(refused.status, 0);
+    assert.match(refused.stderr, /not_fast_forward/);
+    assert.match(refused.stderr, /harness sync/);
+    assert.equal(mainHead(repo), before);
+  });
+
+  test("推送被拒时本地已经合并，错误码与退出码说明情况，不强推", () => {
+    const { repo, remote } = pushing();
+    task(repo);
+    const hook = join(remote, "hooks/pre-receive");
+    writeFileSync(hook, "#!/bin/sh\necho 'protected branch' >&2\nexit 1\n");
+    chmodSync(hook, 0o755);
+    const before = remoteRef(remote, "refs/heads/main");
+    const result = repo.cli("merge", "--branch", "task/a");
+    assert.equal(result.status, 3, result.stderr);
+    assert.match(result.stderr, /push_failed|push_rejected/);
+    assert.match(result.stderr, /本地 main 已更新/);
+    assert.match(result.stderr, /远程 main 没有变化/);
+    assert.notEqual(mainHead(repo), before, "本地合并不回滚");
+    assert.equal(remoteRef(remote, "refs/heads/main"), before);
+  });
+
+  test("合并后命令失败时不推送", () => {
+    const repo = setup({ delivery: PUSH, config: { merge: { postMergeCommand: ["false"] } } });
+    const remote = withRemote(repo);
+    const before = remoteRef(remote, "refs/heads/main");
+    task(repo);
+    const result = repo.cli("merge", "--branch", "task/a");
+    assert.equal(result.status, 3);
+    assert.match(result.stderr, /post_merge_failed/);
+    assert.equal(remoteRef(remote, "refs/heads/main"), before);
+  });
+
+  test("远程交付下配置 push 是配置错误，非布尔值同样报错", () => {
+    const remoteWithPush = setup({ delivery: { ...GITHUB, push: true } });
+    task(remoteWithPush);
+    const refused = remoteWithPush.cli("doctor");
+    assert.match(refused.stdout, /\[!!\] delivery: .*delivery\.push 只用于本地交付/);
+
+    const bad = setup({ delivery: { mode: "local", push: "yes" } });
+    assert.match(bad.cli("doctor").stdout, /\[!!\] delivery: .*delivery\.push 必须是 true 或 false/);
+  });
+
+  test("doctor 在开启推送时检查远程是否存在，不要求平台命令", () => {
+    const repo = setup({ delivery: PUSH });
+    assert.match(repo.cli("doctor").stdout, /\[!!\] delivery: .*远程 origin 不存在/);
+    withRemote(repo);
+    const ready = repo.cli("doctor");
+    assert.match(ready.stdout, /\[ok\] delivery: 本地交付.*推送到 origin 的主分支/);
+  });
+});
