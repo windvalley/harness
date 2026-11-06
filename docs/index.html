@@ -523,7 +523,7 @@ footer { border-top: 1px solid var(--line); color: var(--muted); font-size: .88r
     <p>每一步都会留下一条签名记录，并且<strong>绑定到具体的内容</strong>上。自动检查与独立评审绑定分支提交；外部证据绑定检查定义和它覆盖的文件；合并后证据绑定实际集成结果。相关内容变化后旧证据失效，无关文档变化则不必重验。这样核对的永远是“这一份代码”的证据，而不是“某个时候跑过一次”。</p>
     <figure>
       <div class="diagram">
-        <svg viewBox="0 18 900 450" role="img" aria-label="任务生命周期：合并前依次经过授权、实现提交、verify、review、按需 confirm 和交付；外部 extended 检查成功后由 attest 登记并交给 review；本地 merge 或远程平台合入并 sync 后进入 main；配置合并后检查时，再执行 post-merge 并用 attest 登记，最后完成。相关记录分别绑定验收清单、分支提交、检查覆盖文件、合并结果或实际集成结果。">
+        <svg viewBox="0 18 900 500" role="img" aria-label="任务生命周期：合并前依次经过授权、实现提交、verify、review、按需 confirm 和交付；外部 extended 检查成功后由 attest 登记并交给 review；本地 merge 或远程平台合入并 sync 后进入 main；配置合并后检查时，再执行 post-merge，成功后用 attest 登记并完成。验收失败则保持待完成，新建修复分支，重新实现、验证、评审、合入并验收，形成修复闭环。相关记录分别绑定验收清单、分支提交、检查覆盖文件、合并结果或实际集成结果。">
           <path class="d-line dash" d="M455,96 C455,40 197,40 197,96" marker-end="url(#ar)"/>
           <text class="d-l" x="326" y="36" text-anchor="middle">被拒或再提交：重新评审，证据按内容核对</text>
           <path class="d-line dash" d="M680,98 C680,58 735,58 735,98" marker-end="url(#ar)"/>
@@ -603,10 +603,12 @@ footer { border-top: 1px solid var(--line); color: var(--muted); font-size: .88r
           <text class="d-t" x="820" y="370" text-anchor="middle">完成</text>
           <text class="d-tag" x="650" y="414" text-anchor="middle">绑定实际集成结果</text>
 
-          <text class="d-l" x="450" y="450" text-anchor="middle">虚线框表示按条件出现的步骤；每一条记录都用本机密钥签名，存进 .git/harness/</text>
+          <path class="d-line deny" d="M550,390 L550,432 L150,432 L150,156" marker-end="url(#ar-deny)"/>
+          <text class="d-l deny" x="350" y="458" text-anchor="middle">验收失败：保持待完成，新建修复分支，重新走门禁与验收</text>
+          <text class="d-l" x="450" y="492" text-anchor="middle">虚线框表示按条件出现的步骤；每一条记录都用本机密钥签名，存进 .git/harness/</text>
         </svg>
       </div>
-      <figcaption>图 3　任务从合并前门禁到实际完成。上方是通用门禁，中间是 PR/MR 的替代交付路径；下方左侧把外部证据交给评审，右侧是仅配置时才出现的合并后验收。记录分别绑定清单、提交、覆盖文件或实际集成结果，相关内容变化后才需要重验。</figcaption>
+      <figcaption>图 3　任务从合并前门禁到实际完成。上方是通用门禁，中间是 PR/MR 的替代交付路径；下方左侧把外部证据交给评审，右侧是仅配置时才出现的合并后验收。红色虚线表示验收失败后的修复回路：新建修复分支，重新走门禁、合入并验收。</figcaption>
     </figure>
     <ul>
       <li><strong>verify</strong> 在固定检出里检出分支提交，只验证已提交的内容；工作区里没提交的改动不算。</li>
