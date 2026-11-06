@@ -262,6 +262,7 @@ footer { border-top: 1px solid var(--line); color: var(--muted); font-size: .88r
             <li><a href="#token">主分支只认合并令牌</a></li>
             <li><a href="#trust-root">配置只从主分支读取</a></li>
             <li><a href="#selection">按改动选检查</a></li>
+            <li><a href="#external-evidence">外部验证与合并后验收</a></li>
             <li><a href="#test-evidence">测试证据</a></li>
             <li><a href="#review">独立评审</a></li>
             <li><a href="#plan-first">任务分级与实施授权</a></li>
@@ -322,10 +323,10 @@ footer { border-top: 1px solid var(--line); color: var(--muted); font-size: .88r
       <tbody>
         <tr><td>理解与澄清</td><td>读仓库、判断任务分级；大需求逐个澄清关键问题，写出验收清单、行为说明与实施方案，配置了评审者时先让另一个模型审一轮方案（只给建议，不是门禁），然后停下，等你同意实施</td><td>方案获同意前写不了测试和代码，没有授权记录的大改动合并时被拒</td></tr>
         <tr><td>实施</td><td>先把每条验收标准写成单元、集成或 E2E 测试并确认失败，再实现到全部通过；只在缺权限、需要业务拍板等情况下停下</td><td>读取密钥、不可逆的 git 操作等危险调用当场被拦下，Agent 按提示改道继续</td></tr>
-        <tr><td>验证</td><td>在固定检出里按改动路径执行项目配置的检查；未通过时修复后重跑</td><td>结果写成绑定提交的签名证据，提交一变就要重跑</td></tr>
-        <tr><td>独立评审</td><td>由不了解实现过程的评审进程按验收清单核对需求符合度，并评工程质量；被拒时按发现修改后重新验证、评审</td><td>需求未满足或有高危发现即拒绝</td></tr>
+        <tr><td>验证</td><td>在固定检出里按改动路径执行自动检查；需要真实浏览器或登录态的检查在外部运行后，用 <code>attest</code> 登记结果</td><td>自动证据绑定提交；外部证据绑定检查定义和它覆盖的文件，改到相关内容才需要重验</td></tr>
+        <tr><td>独立评审</td><td>由不了解实现过程的评审进程按合并前验收清单核对需求符合度，并评工程质量；被拒时按发现修改后重新验证、评审</td><td>合并前需求未满足或有高危发现即拒绝；合并后验收单独跟踪</td></tr>
         <tr><td>交付到主分支</td><td>本地交付运行 <code>harness merge</code> 合入主分支；远程交付运行 <code>harness submit</code> 推送核对过的提交并创建或更新 PR/MR，由你或团队在平台上合并</td><td>两条路都先核对证据与评审对最新提交仍然有效；本地主分支只接受 <code>harness merge</code> 与 <code>harness sync</code> 写入</td></tr>
-        <tr><td>交付</td><td>逐条给出验收证据、交付状态与待处理项</td><td>由你最终验收</td></tr>
+        <tr><td>交付</td><td>逐条给出验收证据、交付状态与待处理项；有合并后检查时，在实际合入后继续完成并登记</td><td>由你最终验收；<code>status</code> 会分清“已合入”和“合并后验收完成”</td></tr>
       </tbody>
     </table></div>
     <p>小需求核实范围后跳过方案，直接从实施开始。任务分级和先红后绿由 Agent 按项目规范执行，门禁兜底其中能机械判定的部分：配置了 <code>testFirst</code> 与 <code>coverage</code> 的项目，验证会复算“还原实现后新增的测试必须失败”和“改动行必须被测试执行到”，见<a href="#limits">信任模型与限制</a>。</p>
@@ -519,12 +520,12 @@ footer { border-top: 1px solid var(--line); color: var(--muted); font-size: .88r
     <h2 id="principles">核心原理</h2>
 
     <h3 id="lifecycle">一次任务的生命周期</h3>
-    <p>每一步都会留下一条签名记录，并且<strong>绑定到具体的内容</strong>上。内容一变，对应的记录就作废，需要重跑那一步。这样合并时核对的永远是“这一份代码”的证据，而不是“某个时候跑过一次”。</p>
+    <p>每一步都会留下一条签名记录，并且<strong>绑定到具体的内容</strong>上。自动检查与独立评审绑定分支提交；外部证据绑定检查定义和它覆盖的文件；合并后证据绑定实际集成结果。相关内容变化后旧证据失效，无关文档变化则不必重验。这样核对的永远是“这一份代码”的证据，而不是“某个时候跑过一次”。</p>
     <figure>
       <div class="diagram">
         <svg viewBox="0 18 900 312" role="img" aria-label="任务生命周期：approve（大任务）、实现并提交、verify、review、confirm（仅门禁改动）、merge、main，远程交付时 merge 换成 submit，经 PR/MR 在平台合并后由 sync 快进主分支；每一步的记录绑定到具体内容，评审被拒后修复再提交，证据与评审重新生成；主分支前进时 merge 只重跑被波及的检查。">
           <path class="d-line dash" d="M455,96 C455,40 197,40 197,96" marker-end="url(#ar)"/>
-          <text class="d-l" x="326" y="36" text-anchor="middle">被拒或再提交：证据与评审作废，重新 verify、review</text>
+          <text class="d-l" x="326" y="36" text-anchor="middle">被拒或再提交：重新评审，证据按内容核对</text>
           <path class="d-line dash" d="M680,98 C680,58 735,58 735,98" marker-end="url(#ar)"/>
           <text class="d-l" x="707" y="50" text-anchor="middle">主分支前进：只重跑被波及的检查</text>
 
@@ -577,7 +578,7 @@ footer { border-top: 1px solid var(--line); color: var(--muted); font-size: .88r
           <text class="d-l" x="450" y="322" text-anchor="middle">虚线框表示按条件出现的步骤；每一条记录都用本机密钥签名，存进 .git/harness/</text>
         </svg>
       </div>
-      <figcaption>图 3　每条记录绑定什么。分支上再提交，证据与评审作废；主分支前进导致合并结果变化，确认也要重做。下方一行是远程交付的路径。</figcaption>
+      <figcaption>图 3　每条记录绑定什么。分支上再提交，自动证据与评审作废，外部证据按覆盖内容重新核对；主分支前进导致合并结果变化，确认也要重做。下方一行是远程交付的路径。</figcaption>
     </figure>
     <ul>
       <li><strong>verify</strong> 在固定检出里检出分支提交，只验证已提交的内容；工作区里没提交的改动不算。</li>
@@ -678,7 +679,7 @@ footer { border-top: 1px solid var(--line); color: var(--muted); font-size: .88r
       <thead><tr><th>tier</th><th>含义</th></tr></thead>
       <tbody>
         <tr><td><code>gate</code></td><td>必过，失败就不能合并</td></tr>
-        <tr><td><code>extended</code></td><td>不自动执行，记入证据的“未执行”清单，并附补验方式</td></tr>
+        <tr><td><code>extended</code></td><td>在外部环境执行；成功后用 <code>attest</code> 登记为正式证据，未登记时明确列为未执行</td></tr>
         <tr><td><code>advisory</code></td><td>只提示，不计入未执行</td></tr>
       </tbody>
     </table></div>
@@ -687,6 +688,24 @@ footer { border-top: 1px solid var(--line); color: var(--muted); font-size: .88r
       <li><code>requires</code> 里的依赖目录（如 <code>node_modules</code>）从主 Worktree 软链接进检出；缺失时证据记为 <code>incomplete</code>，不能评审与合并。</li>
       <li>命令不存在时证据里单独标出“未找到命令”，说明是缺工具，不是代码有问题。</li>
       <li><code>harness verify --plan --branch &lt;分支&gt;</code> 只列出会执行的检查，不执行；配置了 <code>testFirst</code>、<code>coverage</code> 时，这次会复算的也一并列出。</li>
+    </ul>
+
+    <h3 id="external-evidence">外部验证与合并后验收</h3>
+    <p>有些检查需要真实浏览器、登录态或已经集成的环境，不适合由 <code>verify</code> 在固定检出里直接运行。harness 把这类情况分成“外部验证”和“合并后验收”，既不把没跑说成通过，也不要求在合并前提供只有合并后才能取得的证据。</p>
+    <div class="cards">
+      <div class="card"><h4>自动检查</h4><p><code>gate</code> 仍由 <code>verify</code> 自动运行，失败就不能交付，流程不变。</p></div>
+      <div class="card"><h4>外部验证</h4><p>Agent 或你在真实环境执行 <code>extended</code> 检查，成功后用 <code>attest</code> 登记实际命令和报告，不需要把报告提交进仓库。</p></div>
+      <div class="card"><h4>合并后验收</h4><p>只有必须等代码进入主分支才能验证的项目才标为 <code>post-merge</code>，例如主 Worktree 集成冒烟测试；能在任务 Worktree 验证的仍在合并前完成。</p></div>
+    </div>
+    <div class="code"><span class="label">外部检查已成功执行后登记</span><pre tabindex="0"><code>harness attest --branch feat/login --check browser \
+  --command "pnpm ui:verify" \
+  --report frontend/output/report.md</code></pre></div>
+    <ul>
+      <li><strong>不是再跑一遍</strong>：<code>attest</code> 只登记已经成功的验证。证据包含实际命令、报告哈希和脱敏摘要，评审可以据此核对，而不是只看 Agent 自述。</li>
+      <li><strong>无关改动不重验</strong>：只改文档时外部证据继续有效；检查定义或覆盖文件变化后，旧证据自动失效。</li>
+      <li><strong>两种交付都一样</strong>：本地项目在 <code>merge</code> 后验收；PR/MR 项目在平台合入并 <code>sync</code> 后验收。没有配置合并后检查的项目不增加任何步骤。</li>
+      <li><strong>发现问题继续修</strong>：验收失败会保持待完成，Agent 新建修复分支并重新走门禁；需要回滚、业务取舍或其他用户决策时，才上报并等待。</li>
+      <li><strong>注意脱敏</strong>：报告摘要会提供给评审者；原始命令不会写进 PR/MR 描述，平台只看到检查名和报告哈希。</li>
     </ul>
 
     <h3 id="test-evidence">测试证据：先红后绿与改动行覆盖率</h3>
@@ -846,6 +865,7 @@ dsh plugin --profile web add ~/.local/share/harness/dsh-plugin</code></pre></div
 
     <h3 id="acceptance">验收清单</h3>
     <p>清单放在 <code>.harness/acceptance/&lt;分支名&gt;.md</code>，分支名里的 <code>/</code> 等字符换成 <code>-</code>，例如 <code>feat/login</code> 对应 <code>feat-login.md</code>。每条写成能用测试或命令验证的结果。没有清单时评审只评工程质量；<code>intent.mode</code> 设为 <code>required</code> 时没有清单不能合并。</p>
+    <p>默认都是合并前验收。确实需要目标分支集成状态时，把条目写进“合并后验收”章节，并配置对应的 <code>post-merge</code> 检查；只写章节却没有对应检查时，验证会明确失败，不会让这条义务悄悄漏掉。</p>
 
     <h3 id="commit-msg">提交信息</h3>
     <p>提交信息规范只在 <code>.harness/policy.json</code> 的 <code>commit-message</code> 规则里定义一处，<code>commit-msg</code> 钩子、<code>verify</code> 与 <code>review</code> 的前置检查、<code>status</code> 和合并共用同一份判定。可以直接约定描述用什么语言（<code>lang</code> 取 <code>zh</code>、<code>en</code> 或 <code>any</code>）、允许的类型、标题长度与正文格式。</p>
@@ -981,6 +1001,7 @@ HARNESS_MAIN_BYPASS=1 git merge --ff-only origin/main</code></pre></div>
       <tbody>
         <tr><td><code>init [--dry-run] [--take-over] [--force]</code></td><td>接入当前项目，<code>--dry-run</code> 只预览</td></tr>
         <tr><td><code>verify --branch &lt;分支&gt; [--plan] [--no-reuse]</code></td><td>验证并写签名证据；<code>--plan</code> 只列计划，<code>--no-reuse</code> 不复用已有结果</td></tr>
+        <tr><td><code>attest --branch &lt;分支&gt; --check &lt;检查ID&gt; --command &lt;实际命令&gt; --report &lt;报告&gt;</code></td><td>登记已经成功的外部检查，供验证状态与独立评审使用</td></tr>
         <tr><td><code>review --branch &lt;分支&gt;</code></td><td>独立评审</td></tr>
         <tr><td><code>status [--branch &lt;分支&gt;]</code></td><td>只读汇总还差哪几步才能交付</td></tr>
         <tr><td><code>confirm --branch &lt;分支&gt; [--yes]</code></td><td>查看门禁改动摘要；带 <code>--yes</code> 由人记录确认</td></tr>
