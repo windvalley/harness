@@ -523,7 +523,7 @@ footer { border-top: 1px solid var(--line); color: var(--muted); font-size: .88r
     <p>每一步都会留下一条签名记录，并且<strong>绑定到具体的内容</strong>上。自动检查与独立评审绑定分支提交；外部证据绑定检查定义和它覆盖的文件；合并后证据绑定实际集成结果。相关内容变化后旧证据失效，无关文档变化则不必重验。这样核对的永远是“这一份代码”的证据，而不是“某个时候跑过一次”。</p>
     <figure>
       <div class="diagram">
-        <svg viewBox="0 18 900 312" role="img" aria-label="任务生命周期：approve（大任务）、实现并提交、verify、review、confirm（仅门禁改动）、merge、main，远程交付时 merge 换成 submit，经 PR/MR 在平台合并后由 sync 快进主分支；每一步的记录绑定到具体内容，评审被拒后修复再提交，证据与评审重新生成；主分支前进时 merge 只重跑被波及的检查。">
+        <svg viewBox="0 18 900 450" role="img" aria-label="任务生命周期：合并前依次经过授权、实现提交、verify、review、按需 confirm 和交付；外部 extended 检查成功后由 attest 登记并交给 review；本地 merge 或远程平台合入并 sync 后进入 main；配置合并后检查时，再执行 post-merge 并用 attest 登记，最后完成。相关记录分别绑定验收清单、分支提交、检查覆盖文件、合并结果或实际集成结果。">
           <path class="d-line dash" d="M455,96 C455,40 197,40 197,96" marker-end="url(#ar)"/>
           <text class="d-l" x="326" y="36" text-anchor="middle">被拒或再提交：重新评审，证据按内容核对</text>
           <path class="d-line dash" d="M680,98 C680,58 735,58 735,98" marker-end="url(#ar)"/>
@@ -575,10 +575,38 @@ footer { border-top: 1px solid var(--line); color: var(--muted); font-size: .88r
           <text class="d-s" x="605" y="268" text-anchor="middle">快进本地主分支</text>
           <path class="d-line accent" d="M670,253 L840,253 L840,160" marker-end="url(#ar-accent)"/>
           <line class="d-line dash" x1="10" y1="296" x2="890" y2="296"/>
-          <text class="d-l" x="450" y="322" text-anchor="middle">虚线框表示按条件出现的步骤；每一条记录都用本机密钥签名，存进 .git/harness/</text>
+
+          <text class="d-l" x="20" y="322">合并前：外部证据</text>
+          <rect class="d-box opt" x="20" y="340" width="120" height="50" rx="8"/>
+          <text class="d-t" x="80" y="361" text-anchor="middle">外部检查</text>
+          <text class="d-s" x="80" y="379" text-anchor="middle">extended</text>
+          <line class="d-line" x1="140" y1="365" x2="166" y2="365" marker-end="url(#ar)"/>
+          <rect class="d-box accent" x="170" y="340" width="100" height="50" rx="8"/>
+          <text class="d-t" x="220" y="361" text-anchor="middle">attest</text>
+          <text class="d-s" x="220" y="379" text-anchor="middle">登记证据</text>
+          <line class="d-line" x1="270" y1="365" x2="296" y2="365" marker-end="url(#ar)"/>
+          <rect class="d-box" x="300" y="340" width="120" height="50" rx="8"/>
+          <text class="d-t" x="360" y="361" text-anchor="middle">交给 review</text>
+          <text class="d-s" x="360" y="379" text-anchor="middle">参与独立评审</text>
+          <text class="d-tag" x="220" y="414" text-anchor="middle">绑定检查定义与覆盖文件</text>
+
+          <text class="d-l" x="480" y="322">实际进入 main 后：可选验收</text>
+          <rect class="d-box opt" x="480" y="340" width="140" height="50" rx="8"/>
+          <text class="d-t" x="550" y="361" text-anchor="middle">post-merge</text>
+          <text class="d-s" x="550" y="379" text-anchor="middle">合并后检查</text>
+          <line class="d-line" x1="620" y1="365" x2="646" y2="365" marker-end="url(#ar)"/>
+          <rect class="d-box accent" x="650" y="340" width="90" height="50" rx="8"/>
+          <text class="d-t" x="695" y="361" text-anchor="middle">attest</text>
+          <text class="d-s" x="695" y="379" text-anchor="middle">登记结果</text>
+          <line class="d-line allow" x1="740" y1="365" x2="766" y2="365" marker-end="url(#ar-allow)"/>
+          <rect class="d-box allow" x="770" y="340" width="100" height="50" rx="8"/>
+          <text class="d-t" x="820" y="370" text-anchor="middle">完成</text>
+          <text class="d-tag" x="650" y="414" text-anchor="middle">绑定实际集成结果</text>
+
+          <text class="d-l" x="450" y="450" text-anchor="middle">虚线框表示按条件出现的步骤；每一条记录都用本机密钥签名，存进 .git/harness/</text>
         </svg>
       </div>
-      <figcaption>图 3　每条记录绑定什么。分支上再提交，自动证据与评审作废，外部证据按覆盖内容重新核对；主分支前进导致合并结果变化，确认也要重做。下方一行是远程交付的路径。</figcaption>
+      <figcaption>图 3　任务从合并前门禁到实际完成。上方是通用门禁，中间是 PR/MR 的替代交付路径；下方左侧把外部证据交给评审，右侧是仅配置时才出现的合并后验收。记录分别绑定清单、提交、覆盖文件或实际集成结果，相关内容变化后才需要重验。</figcaption>
     </figure>
     <ul>
       <li><strong>verify</strong> 在固定检出里检出分支提交，只验证已提交的内容；工作区里没提交的改动不算。</li>
