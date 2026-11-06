@@ -1,4 +1,5 @@
-import { closeSync, existsSync, openSync, readFileSync, rmSync, writeSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { closeSync, existsSync, linkSync, openSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   acceptancePath,
@@ -51,26 +52,94 @@ export class MergeError extends Error {
   }
 }
 
+/** 内容读不出进程号的锁（旧版本半途创建的空文件）在这段时间内按持有中处理，更久才算失效。 */
+const LOCK_GRACE_MS = 5000;
+/** 清理失效锁的守卫只持有毫秒级，超过这个时间说明清理者已经崩溃。 */
+const LOCK_GUARD_STALE_MS = 10000;
+
+function pidAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code === "EPERM";
+  }
+}
+
+function lockHolder(file) {
+  let text;
+  let mtimeMs;
+  try {
+    text = readFileSync(file, "utf8");
+    mtimeMs = statSync(file).mtimeMs;
+  } catch {
+    return { gone: true };
+  }
+  const pid = Number.parseInt(text.split("\n")[0].trim(), 10);
+  if (Number.isInteger(pid) && pid > 0) return { pid, alive: pidAlive(pid) };
+  return { pid: null, alive: Date.now() - mtimeMs < LOCK_GRACE_MS };
+}
+
+/**
+ * 合并锁。锁文件用 link 一次性发布，出现时就带着持有者的进程号，其他进程不会读到半成品。
+ * 清理失效锁要先拿到接管守卫并在守卫内重新判断，两个进程不会各自删掉对方刚拿到的锁；
+ * 锁文件存在时 link 必然失败，所以清理者删掉失效锁之前，没有人能换上新锁。
+ * 释放时只删内容仍是自己的锁。
+ */
 export function acquireLock(root) {
   const file = join(dataDir(root), "merge.lock");
-  if (existsSync(file)) {
-    const pid = Number.parseInt(readFileSync(file, "utf8").trim(), 10);
-    let alive = false;
-    if (Number.isInteger(pid) && pid > 0) {
-      try {
-        process.kill(pid, 0);
-        alive = true;
-      } catch {
-        alive = false;
-      }
+  const mine = `${process.pid}\n${randomBytes(8).toString("hex")}\n`;
+  const publish = () => {
+    const staged = `${file}.${process.pid}.${randomBytes(4).toString("hex")}`;
+    writeFileSync(staged, mine, { flag: "wx" });
+    try {
+      linkSync(staged, file);
+      return true;
+    } catch (error) {
+      if (error.code === "EEXIST") return false;
+      throw error;
+    } finally {
+      rmSync(staged, { force: true });
     }
-    if (alive) throw new MergeError(`另一个合并正在进行(pid ${pid})，稍后重试`, "merge_locked");
-    rmSync(file, { force: true });
+  };
+  const release = () => {
+    try {
+      if (readFileSync(file, "utf8") === mine) rmSync(file, { force: true });
+    } catch {
+      // 锁已经不在，没有需要释放的。
+    }
+  };
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (publish()) return release;
+    const holder = lockHolder(file);
+    if (holder.gone) continue;
+    if (holder.alive) throw new MergeError(`另一个合并正在进行(${holder.pid ? `pid ${holder.pid}` : "锁刚刚创建"})，稍后重试`, "merge_locked");
+    clearStaleLock(file);
   }
-  const fd = openSync(file, "wx");
-  writeSync(fd, String(process.pid));
-  closeSync(fd);
-  return () => rmSync(file, { force: true });
+  throw new MergeError("另一个合并正在处理合并锁，稍后重试", "merge_locked");
+}
+
+function clearStaleLock(file) {
+  const guard = `${file}.takeover`;
+  let fd;
+  try {
+    fd = openSync(guard, "wx");
+  } catch (error) {
+    if (error.code !== "EEXIST") throw error;
+    try {
+      if (Date.now() - statSync(guard).mtimeMs > LOCK_GUARD_STALE_MS) rmSync(guard, { force: true });
+    } catch {
+      // 守卫刚被别人释放，下一轮重试即可。
+    }
+    return;
+  }
+  try {
+    const again = lockHolder(file);
+    if (!again.gone && !again.alive) rmSync(file, { force: true });
+  } finally {
+    closeSync(fd);
+    rmSync(guard, { force: true });
+  }
 }
 
 /**
