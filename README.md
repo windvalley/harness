@@ -81,9 +81,10 @@ harness 没有 npm 依赖，也不需要全局安装，由 Agent 在接入时获
 
 ```text
 我想给当前项目接入 harness：https://github.com/windvalley/harness
+请直接从 GitHub 获取最新版本并安装到本机，不依赖本机已有的 harness 仓库或安装；然后适配并接入当前项目，保留已有有效规则和配置，完成验证、评审与交付。需要我亲自操作时，请给出具体步骤。
 ```
 
-Agent 应先阅读本 README 与[参考手册](docs/reference.md)，检查运行环境，查找本机已有的 harness，没有时从上面的仓库获取。
+Agent 应直接从 GitHub 获取最新版本并安装到本机，再阅读本 README 与[参考手册](docs/reference.md)，检查运行环境。
 接着调查项目规则、Git 状态、已有钩子和检查命令，预览改动，按项目规则准备任务分支和需要的 Worktree，再写入配置、提交、验证与评审。
 已有 husky、自定义钩子等工具时，Agent 应说明保留或迁移方式；需要舍弃现有规则时先由你决定。
 
@@ -121,6 +122,17 @@ Agent 会先在接入前的代码上逐条试跑这些检查：能通过的配�
 - 最终状态明确，并给出分支、提交和任务工作区位置：本地交付是已合并、待授权合并或被阻塞；远程交付是已提交 PR/MR 等平台合并、平台已合入并已同步或被阻塞。
 
 交付后任务 Worktree 和分支会保留，需要清理时让 Agent 先预览，你确认后再执行，见[清理任务 Worktree](docs/reference.md#清理任务-worktree)。
+
+### 4. 升级 harness
+
+需要升级当前项目使用的 harness 时，对 Agent 说：
+
+```text
+我想升级当前项目使用的 harness：https://github.com/windvalley/harness
+请直接从 GitHub 获取最新版本并安装到本机，不依赖本机已有的 harness 仓库或安装；然后将当前项目升级到该版本，保留项目自有规则和配置，核对需要迁移的配置，完成验证、评审与交付。需要我亲自操作时，请给出具体步骤。
+```
+
+Agent 会获取并安装 GitHub 最新版本，检查当前版本并说明升级影响，再完成项目适配、验证、评审和交付，详见[升级](docs/reference.md#升级)。
 
 ## 文档
 

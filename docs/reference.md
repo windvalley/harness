@@ -122,9 +122,10 @@ harness 没有 npm 依赖，也不需要全局安装。
 
 ```text
 我想给当前项目接入 harness：https://github.com/windvalley/harness
+请直接从 GitHub 获取最新版本并安装到本机，不依赖本机已有的 harness 仓库或安装；然后适配并接入当前项目，保留已有有效规则和配置，完成验证、评审与交付。需要我亲自操作时，请给出具体步骤。
 ```
 
-Agent 应先阅读来源仓库的 README 和接入说明，调查项目规则、Git 状态、已有钩子和检查命令，预览改动并保留有效规则和检查。
+Agent 应直接从 GitHub 获取最新版本并安装到本机，不依赖本机已有仓库；再阅读来源仓库的 README 和接入说明，调查项目规则、Git 状态、已有钩子和检查命令，预览改动并保留有效规则和检查。
 接入默认走任务分支、验证、独立评审、人工确认和受控交付。
 交付方式在提交接入改动前确定，默认本地交付；主分支在 GitHub 或 GitLab 上、合并走 PR/MR 时，见下面的“接入时就用 PR/MR”。
 工作环境由 Agent 根据项目规则和现状准备，用户不需要先创建分支或 Worktree。
@@ -1060,20 +1061,23 @@ DeepSeek Harness 在新机器上注册一次本机插件，见“客户端那一
 对 Agent 说：
 
 ```text
-我想升级当前项目使用的 harness。
+我想升级当前项目使用的 harness：https://github.com/windvalley/harness
+请直接从 GitHub 获取最新版本并安装到本机，不依赖本机已有的 harness 仓库或安装；然后将当前项目升级到该版本，保留项目自有规则和配置，核对需要迁移的配置，完成验证、评审与交付。需要我亲自操作时，请给出具体步骤。
 ```
 
-Agent 应检查当前版本，与用户明确目标版本，阅读变更记录并说明影响，再按项目规则准备升级环境、验证和独立评审。
+Agent 应直接从 GitHub 获取最新版本并安装到本机，不依赖本机已有仓库。
+它应检查项目当前版本，阅读变更记录并说明影响，再按项目规则准备升级环境、验证和独立评审。
 必要的人工确认后，由它按交付方式完成交付（本地合并，或提交 PR/MR 并在平台合入后同步），主动报告升级结果、待迁移配置和客户端操作。
 任务分支及需要的 Worktree 由 Agent 准备，项目自有规则与配置的保留方式也由它核对。
-下面以新建任务 Worktree 为例列出命令参考：
+下面以全新源码目录和新建任务 Worktree 为例列出命令参考：
 
 ```bash
-git -C ~/github/harness pull --tags
+harness_source="$(mktemp -d)/harness"
+git clone --depth 1 https://github.com/windvalley/harness.git "$harness_source"
 cd <项目>
 git worktree add -b chore/harness-upgrade ../<项目>-upgrade main
 cd ../<项目>-upgrade
-node ~/github/harness/bin/harness.mjs upgrade
+node "$harness_source/bin/harness.mjs" upgrade
 git add -A
 git commit -m "chore(harness): 升级到 <版本>" -m "- 更新入口锁定的版本与规则文档"
 ```
