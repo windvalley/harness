@@ -11,7 +11,7 @@ import { claude } from "./adapters/claude.mjs";
 import { codex } from "./adapters/codex.mjs";
 import { dsh } from "./adapters/dsh.mjs";
 import { generic } from "./adapters/generic.mjs";
-import { planChecks, verify } from "./verify/verify.mjs";
+import { planChecks, postMergeAcceptanceProblem, verify } from "./verify/verify.mjs";
 import { attestCheck } from "./verify/attestation.mjs";
 import { testEvidenceChecks, testEvidenceProblems, testEvidenceScope } from "./verify/testevidence.mjs";
 import { MergeError, mergeTask } from "./merge/merge.mjs";
@@ -223,6 +223,8 @@ function cmdVerifyPlan({ cwd, branch, base, json }) {
     changed,
     exists: (path) => !deleted.has(path) && existsSync(join(root, path)),
   });
+  const acceptanceProblem = postMergeAcceptanceProblem({ root, project, branch, head, base: baseCommit, postMerge });
+  if (acceptanceProblem) invalid.push(acceptanceProblem);
   invalid.push(...testEvidenceProblems(project.verify));
   // 测试证据在验证里复算，这里只说明这次会不会涉及；没有改到它管的文件时验证里也不产生这一项。
   const testEvidence = testEvidenceChecks(project.verify).flatMap((item) => {

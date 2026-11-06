@@ -28,7 +28,7 @@ function postMergeStatus({ project, root, branch, branchCommit, result, add }) {
   const pending = [];
   const completed = [];
   for (const item of requirements) {
-    const check = project.verify.checks.find((candidate) => candidate.id === item.id) ?? item;
+    const check = item.check ?? project.verify.checks.find((candidate) => candidate.id === item.id) ?? item;
     const found = readAttestation({ root, branch, check, head: branchCommit });
     if (found.ok) completed.push(item.id);
     else pending.push({ ...item, attestationProblem: found.reason });

@@ -645,6 +645,7 @@ describe("harness sync", () => {
       docOnly: { match: ["docs/**", "**/*.md"], exclude: [] },
       checks: [
         { id: "unit", tier: "gate", when: ["src/**"], cmd: ["node", "-e", "process.exit(0)"] },
+        { id: "browser", tier: "extended", when: ["src/**"], reason: "需要真实浏览器", howToVerify: "运行浏览器验收" },
         { id: "deployed-smoke", tier: "extended", phase: "post-merge", when: ["src/**"], reason: "需要平台合入后的环境", howToVerify: "执行部署环境冒烟测试" },
       ],
       fullSuiteTriggers: { paths: [] },
@@ -656,11 +657,17 @@ describe("harness sync", () => {
       "src/a.js": "a\n",
       ".harness/acceptance/task-post-merge.md": "# 验收清单\n\n## 应该发生\n\n- 代码行为正确。\n\n## 合并后验收\n\n- 部署环境冒烟测试通过。\n",
     });
+    const browserReport = join(repo.root, "..", "browser-report.md");
+    writeFileSync(browserReport, "browser passed\n");
+    const browserAttested = repo.cli("attest", "--branch", "task/post-merge", "--check", "browser", "--command", "run browser --token remote-secret", "--report", browserReport);
+    assert.equal(browserAttested.status, 0, browserAttested.stderr);
     assert.equal(repo.cli("verify", "--branch", "task/post-merge").status, 0);
     writeReview(repo, head, "approve");
     const submitted = repo.cli("submit", "--branch", "task/post-merge");
     assert.equal(submitted.status, 0, output(submitted));
     assert.match(platform.items()[0].body, /合并后验收 deployed-smoke/);
+    assert.match(platform.items()[0].body, /外部证据 browser/);
+    assert.doesNotMatch(platform.items()[0].body, /remote-secret/);
     assert.match(repo.cli("status", "--branch", "task/post-merge").stdout, /等平台合并/);
 
     platformFastForward(remote, head);

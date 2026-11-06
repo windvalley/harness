@@ -4,7 +4,8 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { spawn } from "node:child_process";
-import { loadGateProject, mainBranch } from "../lib/config.mjs";
+import { acceptancePath, loadGateProject, mainBranch } from "../lib/config.mjs";
+import { splitAcceptance } from "../lib/acceptance.mjs";
 import { matchAny, matches } from "../lib/glob.mjs";
 import {
   changedPaths,
@@ -15,6 +16,7 @@ import {
   mergeBase,
   resolveCommit,
   run,
+  showBlob,
   treeOf,
 } from "../lib/git.mjs";
 import { appendLedger, canonical, dataDir, readRecord, writeRecord } from "../lib/store.mjs";
@@ -71,6 +73,18 @@ export function verifyConfigDigest(project) {
   // testFirst 与 coverage 没配置时不进指纹，已有项目的旧证据不因升级而失效。
   const testEvidence = { ...(map.testFirst ? { testFirst: map.testFirst } : {}), ...(map.coverage ? { coverage: map.coverage } : {}) };
   return digest({ checks: map.checks ?? [], docOnly: map.docOnly ?? null, fullSuiteTriggers: map.fullSuiteTriggers ?? null, requiredPaths: map.requiredPaths ?? null, ...testEvidence, env: project.config?.env ?? {} });
+}
+
+export function postMergeAcceptanceProblem({ root, project, branch, head, base, postMerge }) {
+  const rel = acceptancePath(project, branch);
+  const text = showBlob(root, head, rel) ?? showBlob(root, base, rel);
+  if (!splitAcceptance(text).postMergeText || postMerge.length > 0) return null;
+  return {
+    id: "acceptance:post-merge",
+    def: digest(text),
+    reason: "验收清单包含合并后验收条目，但本次改动没有对应的 post-merge 检查",
+    fix: "在 .harness/verify.json 为对应验收配置 tier=extended、phase=post-merge 的检查，并确保 when 命中本次改动；不需要后置验收时删除该章节",
+  };
 }
 
 const cmdText = (cmd) => (Array.isArray(cmd) ? cmd.join(" ") : cmd);
@@ -421,7 +435,12 @@ export async function verify({
       notExecuted.splice(notExecuted.indexOf(item), 1);
       attested.push({ ...item, command: found.record.command, report: found.record.report, note: found.record.note, attestedAt: found.record.createdAt });
     }
-    const postMergeRequirements = postMerge.map((item) => ({ ...item, scope: checkScopeDigest(root, headCommit, project.verify.checks.find((check) => check.id === item.id)) }));
+    const postMergeRequirements = postMerge.map((item) => {
+      const check = project.verify.checks.find((candidate) => candidate.id === item.id);
+      return { ...item, check, scope: checkScopeDigest(root, headCommit, check) };
+    });
+    const acceptanceProblem = postMergeAcceptanceProblem({ root, project, branch: gateBranch, head: headCommit, base: baseCommit, postMerge: postMergeRequirements });
+    if (acceptanceProblem) invalid.push(acceptanceProblem);
     for (const problem of testEvidenceProblems(project.verify)) invalid.push({ ...problem, def: digest(problem.id === TDD_ID ? project.verify.testFirst : project.verify.coverage) });
     const testEvidence = testEvidenceChecks(project.verify).map((item) => ({ ...item, def: checkFingerprint(item.config, env) }));
     const environment = environmentDigests({

@@ -170,6 +170,41 @@ describe("合并后验收", () => {
     assert.equal(record.tree, git(repo.root, "rev-parse", "main^{tree}"));
   });
 
+  test("合并后清单没有对应检查时验证失败，不允许静默跳过", () => {
+    const repo = makeRepo();
+    repos.push(repo);
+    repo.branch("task/a", {
+      "src/a.js": "a\n",
+      ".harness/acceptance/task-a.md": ACCEPTANCE,
+    });
+    const plan = repo.cli("verify", "--plan", "--branch", "task/a");
+    assert.notEqual(plan.status, 0);
+    assert.match(plan.stdout, /acceptance:post-merge/);
+    const result = repo.cli("verify", "--branch", "task/a");
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /合并后验收.*没有对应.*post-merge/s);
+  });
+
+  test("主分支后来修改检查定义，不影响已登记的任务证据", () => {
+    const repo = setup();
+    task(repo);
+    assert.equal(repo.cli("verify", "--branch", "task/a").status, 0);
+    fakeReviewer(repo, APPROVE);
+    assert.equal(repo.cli("review", "--branch", "task/a").status, 0);
+    assert.equal(repo.cli("merge", "--branch", "task/a").status, 0);
+    assert.equal(attest(repo, "integrated-smoke", "integrated smoke passed\n").status, 0);
+    assert.match(repo.cli("status", "--branch", "task/a").stdout, /交付与合并后验收均完成/);
+
+    const changed = {
+      ...VERIFY,
+      checks: [VERIFY.checks[0], VERIFY.checks[1], { ...VERIFY.checks[2], howToVerify: "运行更新后的冒烟测试" }],
+    };
+    commit(repo.root, "chore(main): 更新检查说明\n\n- 主分支后来修改检查\n- 模拟其他任务合入", { ".harness/verify.json": `${JSON.stringify(changed, null, 2)}\n` });
+    assert.match(repo.cli("status", "--branch", "task/a").stdout, /交付与合并后验收均完成/);
+    assert.equal(attest(repo, "integrated-smoke", "integrated smoke passed\n").status, 0);
+    assert.match(repo.cli("status", "--branch", "task/a").stdout, /交付与合并后验收均完成/);
+  });
+
   test("post-merge 只允许 extended，非法阶段按配置错误报告", () => {
     const problems = verifyConfigProblems({
       checks: [
