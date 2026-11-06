@@ -21,6 +21,10 @@ import { appendLedger, canonical, dataDir, readRecord, writeRecord } from "../li
 import { environmentDigests } from "./environment.mjs";
 import { selectGoPackages } from "./selectors/go-packages.mjs";
 import { evaluateCoverage, evaluateTdd, testEvidenceChecks, testEvidenceProblems, TDD_ID } from "./testevidence.mjs";
+import { checkFingerprint, checkPhase, checkScopeDigest, POST_MERGE } from "./checks.mjs";
+import { readAttestation } from "./attestation.mjs";
+
+export { checkFingerprint } from "./checks.mjs";
 
 export const EVIDENCE_KIND = "evidence";
 
@@ -61,11 +65,6 @@ function execute(cmd, args, { cwd, env, timeoutMs }) {
 
 const digest = (value) => createHash("sha256").update(canonical(value)).digest("hex").slice(0, 16);
 
-/** 一项检查的定义指纹：命令、目录、依赖、选择器或注入的环境变量一变，旧结果就不能沿用。 */
-export function checkFingerprint(check, env = {}) {
-  return digest({ check, env });
-}
-
 /** 整份检查配置的指纹：新增、删除或改动任何检查都会改变它，合并据此判断旧证据是否还代表当前的检查集。 */
 export function verifyConfigDigest(project) {
   const map = project.verify ?? {};
@@ -83,6 +82,13 @@ const SELECTORS = new Set(["go-packages"]);
  * 这样的检查被选中时记为失败而不是跳过：跳过既不执行也不进未执行清单，证据会显示通过。
  */
 export function checkConfigProblem(check) {
+  try {
+    if (checkPhase(check) === POST_MERGE && check.tier !== "extended") {
+      return { reason: "post-merge 检查必须使用 tier extended", fix: '把 tier 改为 "extended"，合并后用 harness attest 登记实际结果；合并前自动执行的检查删除 phase' };
+    }
+  } catch (error) {
+    return { reason: error.message, fix: '删除 phase 使用默认 pre-merge，或写成 "phase": "post-merge"' };
+  }
   if (check.tier === "extended" || check.tier === "advisory") return null;
   const selector = check.selector ?? null;
   if (selector === "vitest") {
@@ -115,7 +121,7 @@ export function verifyConfigProblems(verify) {
   return [...problems, ...(problem ? [{ id: "requiredPaths", ...problem }] : []), ...testEvidenceProblems(verify)];
 }
 
-/** extended 检查永远记为未执行；缺 reason 或 howToVerify 时证据里没有补验方式，列为 incomplete。 */
+/** extended 检查可由 attest 登记；缺 reason 或 howToVerify 时证据里没有补验方式，列为 incomplete。 */
 export function extendedChecks(verify) {
   return (verify?.checks ?? [])
     .filter((check) => check.tier === "extended")
@@ -153,6 +159,7 @@ export function planChecks({ project, cwd, changed, exists = (path) => existsSyn
     changed.length > 0 && changed.every((path) => matches(path, map.docOnly ?? { match: [], exclude: [] }));
   const plan = [];
   const notExecuted = [];
+  const postMerge = [];
   const advisory = [];
   const invalid = [];
   const full = changed.some((path) => matchAny(path, map.fullSuiteTriggers?.paths ?? []));
@@ -175,19 +182,23 @@ export function planChecks({ project, cwd, changed, exists = (path) => existsSyn
       continue;
     }
 
+    const problem = checkConfigProblem(check);
+    if (problem) {
+      invalid.push({ id: check.id, def, ...problem });
+      continue;
+    }
+
     if (check.tier === "extended") {
-      notExecuted.push({
+      const item = {
         id: check.id,
         reason: check.reason,
         impact: `影响路径 ${hit.length} 个`,
         howToVerify: check.howToVerify,
-      });
-      continue;
-    }
-
-    const problem = checkConfigProblem(check);
-    if (problem) {
-      invalid.push({ id: check.id, def, ...problem });
+        when: check.when,
+        def,
+      };
+      if (checkPhase(check) === POST_MERGE) postMerge.push(item);
+      else notExecuted.push(item);
       continue;
     }
 
@@ -235,7 +246,7 @@ export function planChecks({ project, cwd, changed, exists = (path) => existsSyn
     map.requiredPaths && !requiredProblem
       ? changed.filter((path) => matches(path, map.requiredPaths) && !covering.some((item) => matchAny(path, item.when)))
       : [];
-  return { plan: finalPlan, notExecuted, advisory, docOnly, invalid, uncovered, requiredUncovered };
+  return { plan: finalPlan, notExecuted, postMerge, advisory, docOnly, invalid, uncovered, requiredUncovered };
 }
 
 /**
@@ -399,7 +410,18 @@ export async function verify({
   const results = [];
 
   try {
-    const { plan, notExecuted, advisory, docOnly, invalid, uncovered, requiredUncovered } = planChecks({ project, cwd: checkout, changed });
+    const { plan, notExecuted, postMerge, advisory, docOnly, invalid, uncovered, requiredUncovered } = planChecks({ project, cwd: checkout, changed });
+    const attested = [];
+    for (const item of [...notExecuted]) {
+      const found = readAttestation({ root, branch: gateBranch, check: project.verify.checks.find((check) => check.id === item.id), head: headCommit });
+      if (!found.ok) {
+        if (found.code === "stale") item.reason = `${item.reason}；${found.reason}`;
+        continue;
+      }
+      notExecuted.splice(notExecuted.indexOf(item), 1);
+      attested.push({ ...item, command: found.record.command, report: found.record.report, note: found.record.note, attestedAt: found.record.createdAt });
+    }
+    const postMergeRequirements = postMerge.map((item) => ({ ...item, scope: checkScopeDigest(root, headCommit, project.verify.checks.find((check) => check.id === item.id)) }));
     for (const problem of testEvidenceProblems(project.verify)) invalid.push({ ...problem, def: digest(problem.id === TDD_ID ? project.verify.testFirst : project.verify.coverage) });
     const testEvidence = testEvidenceChecks(project.verify).map((item) => ({ ...item, def: checkFingerprint(item.config, env) }));
     const environment = environmentDigests({
@@ -559,7 +581,9 @@ export async function verify({
       docOnly,
       uncovered: uncovered.slice(0, 200),
       checks: results,
+      attested,
       notExecuted,
+      postMerge: postMergeRequirements,
       advisory,
       reusedChecks: [...reusable.keys()],
       mainDeltaAtVerify: priorMainDelta.length,
@@ -575,7 +599,7 @@ export async function verify({
       reused: reusable.size,
       failed: failed.map((item) => item.id),
     });
-    return { status, record, results, notExecuted, advisory, changed };
+    return { status, record, results, attested, notExecuted, postMerge: postMergeRequirements, advisory, changed };
   } finally {
     if (!keepCheckout) git(root, ["worktree", "prune"]);
     if (releaseLock) releaseLock();

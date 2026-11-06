@@ -484,6 +484,7 @@ export async function checkGates({ project, root, branch, log = console.error, d
     gateTouched,
     delivery: { before, after, changed: change.changed },
     evidence: evidenceRecord,
+    postMergeChecks: evidenceRecord?.postMerge ?? [],
     review: reviewRecord,
     approval,
     risk: { tier: risk.tier, confirmReasons: risk.confirmReasons, observed: risk.observed },
@@ -658,7 +659,7 @@ export async function mergeTask({ cwd, branch, dryRun = false, log = console.err
 
     const gates = await checkGates({ project, root, branch, log, dryRun });
     const { mainCommit, branchCommit, fastForward, resultTree, newHead, resultPaths, gateTouched } = gates;
-    if (dryRun) return { dryRun: true, fastForward, newHead, resultTree, gateTouched };
+    if (dryRun) return { dryRun: true, fastForward, newHead, resultTree, gateTouched, postMergeChecks: gates.postMergeChecks };
 
     const latestMain = resolveCommit(root, mainRef);
     if (latestMain !== mainCommit) {
@@ -707,7 +708,7 @@ export async function mergeTask({ cwd, branch, dryRun = false, log = console.err
       // 只是提示，读不到 Worktree 列表不影响合并结果。
     }
 
-    return { dryRun: false, bootstrap, fastForward, newHead, resultTree, gateTouched, postMerge, refresh, push, followUps: notes };
+    return { dryRun: false, bootstrap, fastForward, newHead, resultTree, gateTouched, postMerge, postMergeChecks: gates.postMergeChecks, refresh, push, followUps: notes };
   } finally {
     release();
   }

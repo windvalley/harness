@@ -12,6 +12,7 @@ import { codex } from "./adapters/codex.mjs";
 import { dsh } from "./adapters/dsh.mjs";
 import { generic } from "./adapters/generic.mjs";
 import { planChecks, verify } from "./verify/verify.mjs";
+import { attestCheck } from "./verify/attestation.mjs";
 import { testEvidenceChecks, testEvidenceProblems, testEvidenceScope } from "./verify/testevidence.mjs";
 import { MergeError, mergeTask } from "./merge/merge.mjs";
 import { submitTask } from "./delivery/submit.mjs";
@@ -46,6 +47,8 @@ const USAGE = `harness <命令> [参数]
 
 工程流程
   verify   [--head <ref>] [--base <ref>] [--branch <名称>] [--no-reuse] [--plan]   对分支验证并写签名证据；--plan 只列出会执行的检查
+  attest   --branch <名称> --check <检查ID> --command <实际命令> --report <报告> [--note <摘要>]
+                                                    登记已成功的外部检查，绑定检查定义与覆盖文件
   review   --branch <名称>                          独立评审
   review-plan --branch <名称> [--all]               方案评审：只给建议，默认只展示 high 及以上，--all 展示全部
               [--timeout-seconds <秒>] [--attempt-timeout-seconds <秒>] [--max-queries <次>]
@@ -156,7 +159,9 @@ async function cmdVerify(argv) {
   for (const item of outcome.results) {
     lines.push(`  ${item.skipped ? "SKIP" : item.exit === 0 ? "PASS" : "FAIL"} ${item.id}${item.reused ? " (复用)" : ""}`);
   }
+  for (const item of outcome.attested ?? []) lines.push(`  ATTESTED ${item.id}: ${item.command}（报告 ${item.report.sha256.slice(0, 12)}）`);
   for (const item of outcome.notExecuted) lines.push(`  NOT_EXECUTED ${item.id}: ${item.reason}`);
+  for (const item of outcome.postMerge ?? []) lines.push(`  POST_MERGE ${item.id}: ${item.howToVerify}`);
   for (const item of outcome.advisory ?? []) lines.push(`  ADVISORY ${item.id}: ${item.hint}`);
   if (values.branch) lines.push(...riskLines(cwd, values.branch));
   process.stderr.write(`${lines.join("\n")}\n`);
@@ -164,6 +169,27 @@ async function cmdVerify(argv) {
     process.stderr.write(`\n--- ${item.id} ${item.configError ? "配置错误" : "失败输出(末尾)"} ---\n${item.tail ?? ""}\n`);
   }
   return outcome.status === "passed" ? 0 : 1;
+}
+
+function cmdAttest(argv) {
+  const { values } = parseArgs({
+    args: argv,
+    options: {
+      branch: { type: "string" },
+      check: { type: "string" },
+      command: { type: "string" },
+      report: { type: "string" },
+      note: { type: "string" },
+    },
+  });
+  try {
+    const record = attestCheck({ cwd: process.cwd(), branch: values.branch, checkId: values.check, command: values.command, report: values.report, note: values.note });
+    print(`已登记 ${record.branch} 的 ${record.phase} 外部证据 ${record.checkId}（检查范围 ${record.scope.slice(0, 12)}，报告 ${record.report.sha256.slice(0, 12)}）`);
+    return 0;
+  } catch (error) {
+    process.stderr.write(`外部证据登记失败: ${error.message}\n`);
+    return 1;
+  }
 }
 
 function riskLines(cwd, branch) {
@@ -191,7 +217,7 @@ function cmdVerifyPlan({ cwd, branch, base, json }) {
   const deleted = new Set(
     gitOk(root, ["diff", "--name-only", "--diff-filter=D", "--no-renames", baseOfHead, head]).split("\n").filter(Boolean),
   );
-  const { plan, notExecuted, advisory, docOnly, invalid, uncovered, requiredUncovered } = planChecks({
+  const { plan, notExecuted, postMerge, advisory, docOnly, invalid, uncovered, requiredUncovered } = planChecks({
     project,
     cwd: root,
     changed,
@@ -206,7 +232,7 @@ function cmdVerifyPlan({ cwd, branch, base, json }) {
   // 有写错的检查时这份计划验证不会通过，非零退出让调用方察觉。
   const status = invalid.length > 0 || requiredUncovered.length > 0 ? 1 : 0;
   if (json) {
-    print(JSON.stringify({ base: mainRef, head, changed, docOnly, plan, testEvidence, notExecuted, advisory, invalid, uncovered, requiredUncovered }, null, 2));
+    print(JSON.stringify({ base: mainRef, head, changed, docOnly, plan, testEvidence, notExecuted, postMerge, advisory, invalid, uncovered, requiredUncovered }, null, 2));
     return status;
   }
   print(`相对 ${mainRef} 变更 ${changed.length} 个文件${docOnly ? "（仅文档）" : ""}`);
@@ -216,7 +242,8 @@ function cmdVerifyPlan({ cwd, branch, base, json }) {
     const scope = item.id.endsWith("tdd-red") ? `${item.files.length} 个实现文件` : `${item.files.length} 个文件的改动行`;
     print(`  RUN  ${item.id}  ${item.cmd.join(" ")}  (${item.mode}，${scope}，验证里复算)`);
   }
-  for (const item of notExecuted) print(`  TODO ${item.id}  ${item.reason}`);
+  for (const item of notExecuted) print(`  TODO ${item.id}  ${item.reason}；成功后用 harness attest 登记`);
+  for (const item of postMerge) print(`  POST_MERGE ${item.id}  ${item.howToVerify}`);
   if (requiredUncovered.length > 0) print(`  ERR  required-paths  ${requiredUncovered.length} 个必验路径没有自动检查覆盖: ${requiredUncovered.slice(0, 10).join(", ")}`);
   else if (uncovered.length > 0) print(`  WARN uncovered  ${uncovered.length} 个改动路径没有任何检查覆盖: ${uncovered.slice(0, 10).join(", ")}`);
   for (const item of advisory) print(`  HINT ${item.id}  ${item.hint}`);
@@ -1010,6 +1037,8 @@ export async function main(argv) {
       }
       case "verify":
         return cmdVerify(rest);
+      case "attest":
+        return cmdAttest(rest);
       case "review":
         return cmdReview(rest);
       case "review-plan":

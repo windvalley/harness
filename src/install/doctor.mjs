@@ -274,7 +274,7 @@ export function doctor({ cwd = process.cwd() } = {}) {
         detail: `${verifyProblems.map((item) => `${item.id}: ${item.reason}`).join("；")}。${[...new Set(verifyProblems.map((item) => item.fix))].join("；")}`,
       });
     }
-    // extended 检查永远记为未执行，验收若依赖它只能靠手工补验；缺补验说明的算问题，其余列出来让人知道哪些验收靠手工。
+    // extended 检查需要外部执行并用 attest 登记；缺补验说明的算问题，其余列出来让人知道哪些验收依赖外部证据。
     const manual = extendedChecks(project.verify);
     if (manual.length > 0) {
       const lacking = manual.filter((item) => item.missing.length > 0);
@@ -284,7 +284,7 @@ export function doctor({ cwd = process.cwd() } = {}) {
         detail:
           lacking.length > 0
             ? `${lacking.map((item) => `${item.id} 缺 ${item.missing.join("、")}`).join("；")}。extended 检查必须写明 reason 与 howToVerify，否则证据里没有补验方式`
-            : `${manual.length} 项检查永远记为未执行（${manual.map((item) => item.id).join("、")}），依赖它们的验收要靠手工补验并在汇报里说明；能自动执行的改成带 cmd 的 gate`,
+            : `${manual.length} 项检查需要外部执行（${manual.map((item) => item.id).join("、")}），成功后用 harness attest 登记；能由 verify 自动执行的改成带 cmd 的 gate`,
       });
     }
     checks.push({

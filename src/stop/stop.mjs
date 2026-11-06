@@ -111,6 +111,10 @@ function owedBy({ root, branch, escalations, worktrees }) {
   const owed = (missing, next) => ({ branch, status, dirty, missing, next });
   // 分支已经在主分支里，但 Worktree 里还有没提交的改动：典型情况是新分支上改了文件就结束了。
   if (status.merged) {
+    if (status.postMerge?.pending.length > 0) {
+      const item = status.postMerge.pending[0];
+      return owed(`合并后验收待完成：${status.postMerge.pending.map((entry) => entry.id).join("、")}`, `${item.howToVerify}；成功后运行 harness attest --branch ${branch} --check ${item.id} --command "<实际命令>" --report <报告>`);
+    }
     if (dirty.length === 0) return null;
     const sample = dirty.slice(0, 3).join("、") + (dirty.length > 3 ? " 等" : "");
     return owed(`任务 Worktree 里有 ${dirty.length} 个文件没有提交（${sample}）`, "属于本任务的提交后 harness verify、harness review 并交付，不属于的清理掉或在回复里说明");
@@ -141,7 +145,8 @@ function fingerprint(owed, worktrees) {
         hash.update("(deleted)");
       }
     }
-    return [branch, status.branchCommit, status.codes.join(","), hash.digest("hex")].join(":");
+    const postMerge = (status.postMerge?.completed ?? []).join(",");
+    return [branch, status.branchCommit, status.codes.join(","), postMerge, hash.digest("hex")].join(":");
   });
   return createHash("sha256").update(parts.sort().join("\n")).digest("hex");
 }

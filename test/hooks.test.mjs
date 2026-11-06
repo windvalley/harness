@@ -188,7 +188,7 @@ describe("安装与自检", () => {
     // 自审放在提交之后、verify 之前：自审改出的新提交会让已有证据与评审作废。
     assert.match(rules, /提交后、`harness verify` 之前按 `method-review\.md` 自审/, "一次任务写明自审的时机");
     const review = readFileSync(join(repo.root, ".harness/rules/method-review.md"), "utf8");
-    for (const pattern of [/交付前自审放在提交之后、`harness verify` 之前/, /验收清单每条都对应到测试或命令的输出/, /`commit-message` 规则把关/, /`git status` 洁净/, /diff 之外的调用方、配置、文档和测试夹具/, /自审结论不交给独立评审/]) {
+    for (const pattern of [/交付前自审放在提交之后、`harness verify` 之前/, /合并前验收清单每条都对应到测试、命令输出或已登记的外部证据/, /`commit-message` 规则把关/, /`git status` 洁净/, /diff 之外的调用方、配置、文档和测试夹具/, /自审结论不交给独立评审/]) {
       assert.match(review, pattern, `method-review.md 的自审清单应包含: ${pattern}`);
     }
     const core = readFileSync(join(repo.root, ".harness/rules/core.md"), "utf8");

@@ -3,6 +3,7 @@ import { matchAny } from "./lib/glob.mjs";
 import { changedPaths, gitOk, isAncestor, mainWorktreeRoot, refExists, showBlob } from "./lib/git.mjs";
 import { readRecord } from "./lib/store.mjs";
 import { EVIDENCE_KIND } from "./verify/verify.mjs";
+import { readAttestation } from "./verify/attestation.mjs";
 import { REVIEW_KIND, reviewerSummary } from "./review/review.mjs";
 import { CONFIRM_KIND } from "./confirm/confirm.mjs";
 import { mainWorktreeProblems, planMergeResult, reuseDecision, reviewStaleFiles } from "./merge/merge.mjs";
@@ -18,6 +19,26 @@ function confirmFor(project, root, branch) {
     return readRecord(root, CONFIRM_KIND, planMergeResult({ project, root, branch }).resultTree);
   } catch (error) {
     return { ok: false, reason: error.message };
+  }
+}
+
+function postMergeStatus({ project, root, branch, branchCommit, result, add }) {
+  const evidence = readRecord(root, EVIDENCE_KIND, branchCommit);
+  const requirements = evidence.ok ? (evidence.record.postMerge ?? []) : [];
+  const pending = [];
+  const completed = [];
+  for (const item of requirements) {
+    const check = project.verify.checks.find((candidate) => candidate.id === item.id) ?? item;
+    const found = readAttestation({ root, branch, check, head: branchCommit });
+    if (found.ok) completed.push(item.id);
+    else pending.push({ ...item, attestationProblem: found.reason });
+  }
+  result.postMerge = { requirements: requirements.map((item) => item.id), pending, completed };
+  result.complete = pending.length === 0;
+  if (pending.length > 0) {
+    add("post-merge", "fail", `合并后验收待完成：${pending.map((item) => `${item.id}（${item.howToVerify}）`).join("；")}`);
+  } else if (requirements.length > 0) {
+    add("post-merge", "done", `合并后验收已登记：${completed.join("、")}`);
   }
 }
 
@@ -54,6 +75,7 @@ export function branchStatus({ cwd, branch }) {
     add("branch", "done", "该分支已经包含在主分支中");
     result.ready = true;
     result.merged = true;
+    postMergeStatus({ project, root, branch, branchCommit, result, add });
     return result;
   }
   add("branch", "ok", `待合入 ${branchCommit.slice(0, 10)} -> ${mainRef}`);
@@ -119,7 +141,9 @@ export function branchStatus({ cwd, branch }) {
     } else {
       add("evidence", "warn", `验证通过，但主分支新增改动波及 ${reuse.rerunChecks.join(", ")}，合并时会重跑`);
     }
-    if (pending > 0) add("evidence:notExecuted", "warn", `${pending} 项检查未执行，合并后需在汇报里说明`);
+    if ((evidence.record.attested?.length ?? 0) > 0) add("evidence:attested", "ok", `已登记 ${evidence.record.attested.length} 项外部证据`);
+    if ((evidence.record.postMerge?.length ?? 0) > 0) add("evidence:postMerge", "info", `${evidence.record.postMerge.length} 项合并后验收不阻塞本次交付：${evidence.record.postMerge.map((item) => item.id).join("、")}`);
+    if (pending > 0) add("evidence:notExecuted", "warn", `${pending} 项检查未执行，交付汇报里必须说明`);
     if (advisory > 0) add("evidence:advisory", "info", `${advisory} 项咨询项，仅提示`);
   }
 
@@ -245,7 +269,9 @@ export function formatStatus(status) {
   for (const step of status.steps) lines.push(`  [${mark[step.state] ?? step.state}] ${step.id}: ${step.detail}`);
   lines.push("");
   if (status.merged) {
-    lines.push("已经包含在主分支中，无需再交付");
+    if (status.postMerge?.pending.length > 0) lines.push(`已合入主分支；合并后验收待完成：${status.postMerge.pending.map((item) => item.id).join("、")}`);
+    else if (status.postMerge?.requirements.length > 0) lines.push("交付与合并后验收均完成");
+    else lines.push("已经包含在主分支中，无需再交付");
   } else if (status.delivery?.mode === "remote") {
     const submitted = status.submitted?.current ? status.submitted : null;
     if (!status.ready) lines.push(`还差 ${status.blockers.length} 步：${status.blockers.join("、")}`);

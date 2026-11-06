@@ -445,7 +445,7 @@ describe("验证与证据", () => {
       },
     });
     const pass = complete.cli("doctor");
-    assert.match(pass.stdout, /\[ok\] project:extended: 1 项检查永远记为未执行（browser）/);
+    assert.match(pass.stdout, /\[ok\] project:extended: 1 项检查需要外部执行（browser）/);
     assert.doesNotMatch(pass.stdout, /\[!!\] project:extended/);
 
     const lacking = setup({

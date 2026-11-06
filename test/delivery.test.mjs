@@ -639,6 +639,41 @@ describe("harness sync", () => {
     assert.equal(git(repo.root, "rev-parse", "main"), target);
   });
 
+  test("远程交付在平台合入并 sync 后跟踪合并后证据", () => {
+    const verify = {
+      version: 1,
+      docOnly: { match: ["docs/**", "**/*.md"], exclude: [] },
+      checks: [
+        { id: "unit", tier: "gate", when: ["src/**"], cmd: ["node", "-e", "process.exit(0)"] },
+        { id: "deployed-smoke", tier: "extended", phase: "post-merge", when: ["src/**"], reason: "需要平台合入后的环境", howToVerify: "执行部署环境冒烟测试" },
+      ],
+      fullSuiteTriggers: { paths: [] },
+    };
+    const repo = setup({ delivery: GITHUB, project: { ".harness/verify.json": verify } });
+    const remote = withRemote(repo);
+    const platform = fakePlatform(repo);
+    const head = repo.branch("task/post-merge", {
+      "src/a.js": "a\n",
+      ".harness/acceptance/task-post-merge.md": "# 验收清单\n\n## 应该发生\n\n- 代码行为正确。\n\n## 合并后验收\n\n- 部署环境冒烟测试通过。\n",
+    });
+    assert.equal(repo.cli("verify", "--branch", "task/post-merge").status, 0);
+    writeReview(repo, head, "approve");
+    const submitted = repo.cli("submit", "--branch", "task/post-merge");
+    assert.equal(submitted.status, 0, output(submitted));
+    assert.match(platform.items()[0].body, /合并后验收 deployed-smoke/);
+    assert.match(repo.cli("status", "--branch", "task/post-merge").stdout, /等平台合并/);
+
+    platformFastForward(remote, head);
+    const synced = repo.cli("sync");
+    assert.equal(synced.status, 0, output(synced));
+    assert.match(repo.cli("status", "--branch", "task/post-merge").stdout, /合并后验收待完成：deployed-smoke/);
+    const report = join(repo.root, "..", "deployed-report.md");
+    writeFileSync(report, "deployed smoke passed\n");
+    const attested = repo.cli("attest", "--branch", "task/post-merge", "--check", "deployed-smoke", "--command", "run deployed smoke", "--report", report);
+    assert.equal(attested.status, 0, attested.stderr);
+    assert.match(repo.cli("status", "--branch", "task/post-merge").stdout, /交付与合并后验收均完成/);
+  });
+
   test("R8 X6 远程带来门禁改动时按同步前的配置要求确认，目标提交关掉确认也不例外", () => {
     const repo = setup({ delivery: GITHUB });
     const remote = withRemote(repo);

@@ -614,15 +614,18 @@ harness merge  --branch feat/login   # 本地交付：核对证据与评审，�
 # harness sync                       # 平台合入后，快进本地主分支
 ```
 
-- `harness verify --plan --branch <分支>` 只列出会执行、记为未执行和仅提示的检查，不执行也不写证据；选中了写错的检查时以 `ERR` 列出并附改法，退出码为 1。
+- `harness verify --plan --branch <分支>` 只列出会执行、记为未执行、合并后检查和仅提示的检查，不执行也不写证据；选中了写错的检查时以 `ERR` 列出并附改法，退出码为 1。
   配置了 `testFirst` 或 `coverage` 且这次改到它们管的文件时，另以 `RUN` 列出（标明 `mode` 与文件数，验证里复算）；`--json` 输出里是 `testEvidence`。`testFirst` 与 `coverage` 写错时同样以 `ERR` 列出。
+- `extended` 检查在外部成功后，用 `harness attest --branch <分支> --check <检查ID> --command "<实际命令>" --report <报告>` 登记；下一次 `verify` 把它列为 `ATTESTED`，评审会收到实际命令与报告摘要。
+  报告最多 10 MiB，末尾最多 80 行、6000 字符作为摘要进入评审提示并发往评审端点，登记前必须确认已脱敏；密钥与凭据文件会被拒绝。
 - 提交之后、`verify` 之前按 `.harness/rules/method-review.md` 自审：验收清单能逐条对上证据、提交说明与 diff 一致且格式合规、没有漏提交的文件与无关改动、diff 之外的调用方与文档已经一起改。
   自审不是门禁，不留记录，结论也不交给独立评审。
   自审改出的新提交会让证据与评审作废，所以它放在 `verify` 之前，不放在 `verify` 与 `review` 之间。
-- 分支上有新提交或改写过提交后，证据与评审随之失效，重新 verify、review。
+- 分支上有新提交或改写过提交后，自动证据与评审随之失效，重新 verify、review；外部证据按检查覆盖文件判断，无关文档变化不会使其失效。
 - `merge` 发现没有证据、主分支的新改动波及了某些检查，或检查配置变了时，会自己重跑需要的检查；评审不会自动重做，没有通过的评审直接拒绝合并。
 - 主分支在评审之后改了本分支也改过的文件时，`merge` 以 `review_stale` 拒绝，`status` 也会报出来；在任务分支上 `git merge main` 并提交，再重新 verify、review。
 - `merge --dry-run` 只做核对，不更新主分支。
+- 配置了 `phase: "post-merge"` 的检查不阻塞合并前门禁；本地合入后，或远程平台合入并 `sync` 后，按 `howToVerify` 执行并用 `attest` 登记。`status` 与收尾检查会跟踪到合并后验收完成。
 - `merge` 在哪个 Worktree 里运行都可以，但主 Worktree 必须停在主分支、洁净、没有进行中的 merge、rebase 或 cherry-pick。
   只用一个目录工作时，合并前先切回主分支。
 - 合并有冲突时，在任务分支上 `git merge main` 解决冲突并提交，再重新 verify、review。
@@ -725,7 +728,9 @@ git -C <主 Worktree> worktree unlock <Worktree 路径>
 清单可以随任务分支提交，评审会标注它“尚未经人工确认”；也可以先合入主分支。
 从主分支继承、在任务分支上没有改过的清单，仍按主分支上确认过的清单对待。
 
-- 有清单时评审必须逐条核对，需求符合度评成 `unknown` 或 `unmet` 都会被拒绝。
+- 有清单时评审必须逐条核对合并前内容，需求符合度评成 `unknown` 或 `unmet` 都会被拒绝。
+- 默认所有章节都是合并前验收；只有 `## 合并后验收` 这个二级章节会后置，到下一个同级标题为止。该章节与 `verify.json` 中对应的 `phase: "post-merge"` 检查用于描述同一批后续义务，不影响本次合并前评审。
+- 合并后验收不等于部署测试环境：它只用于依赖目标分支集成状态的检查。能在任务 Worktree 验证的内容仍放在合并前，没有这类需求时不添加该章节。
 - 清单经人确认过（在主分支上，或者是记录了实施授权的方案清单）时，需求符合度评成 `partial` 也会被拒绝：清单就是约定的交付范围，要缩小范围先向用户说明并重新取得同意。
   任务分支自带、未经确认的清单评成 `partial` 不阻断。
 - 没有清单时需求符合度记为 `unknown`，评审只评工程质量，合并时打印提示。
@@ -1148,6 +1153,7 @@ node ~/github/harness/bin/harness.mjs install --local   # 按新锁定的版本�
       "requires": ["web/node_modules"]
     },
     { "id": "e2e", "tier": "extended", "when": ["web/src/**"], "reason": "需要真实浏览器", "howToVerify": "pnpm -C web e2e" },
+    { "id": "integrated-smoke", "tier": "extended", "phase": "post-merge", "when": ["web/src/**"], "reason": "需要目标分支集成状态", "howToVerify": "在合并后的主 Worktree 运行冒烟测试" },
     { "id": "visual", "tier": "advisory", "when": ["web/src/**/*.vue"], "hint": "界面改动建议人工过一眼" }
   ],
   "fullSuiteTriggers": { "paths": [] }
@@ -1160,8 +1166,9 @@ node ~/github/harness/bin/harness.mjs install --local   # 按新锁定的版本�
 | 字段 | 说明 |
 | --- | --- |
 | `id` | 检查名，证据、复用与黄金任务都按它引用 |
-| `tier` | `gate` 必过，失败就不能合并；`extended` 不自动执行，记入证据的未执行清单并附补验方式；`advisory` 只提示，不计入未执行 |
-| `when` | 触发路径的 glob，支持 `*`、`**` 与 `{a,b}` |
+| `tier` | `gate` 必过，失败就不能合并；`extended` 在外部执行后用 `attest` 登记，未登记时列入未执行清单；`advisory` 只提示，不计入未执行 |
+| `phase` | 可选，默认 `pre-merge`；只有 `extended` 能标为 `post-merge`，表示实际合入主分支后执行并登记，其他取值或档位组合按配置错误处理 |
+| `when` | 触发路径的 glob，支持 `*`、`**` 与 `{a,b}`；外部证据同时绑定这些文件在提交中的内容 |
 | `cmd` | 参数数组，直接执行而不经过 shell；需要管道等写法时用 `["sh", "-c", "..."]`；`gate` 检查必须写，没写或写成字符串时按配置错误处理 |
 | `cwd` | 相对仓库根的执行目录 |
 | `requires` | 依赖目录（例如 `node_modules`），从主 Worktree 软链接进检出；主 Worktree 里也没有时记为未执行，证据状态为 `incomplete`，不能评审与合并 |
@@ -1183,7 +1190,7 @@ node ~/github/harness/bin/harness.mjs install --local   # 按新锁定的版本�
 写错的 `gate` 检查（没有可执行的 `cmd`、`selector` 不认识）被选中时按配置错误处理：证据里记为失败并附改法，其余检查不再执行。
 以前这样的检查会被直接跳过，既不执行也不进未执行清单，证据却显示通过。
 没被选中时不影响验证，所以修配置的分支只要不改到它的 `when` 范围，就能照常验证与合并；`harness doctor` 的 `project:verify` 一项不论范围列出所有写错的检查。
-`project:extended` 一项列出所有 `extended` 检查：它们永远记为未执行，依赖它们的验收只能手工补验；缺 `reason` 或 `howToVerify` 时报 `[!!]`，因为证据里没有补验方式，说明齐全的只提示。
+`project:extended` 一项列出所有 `extended` 检查：它们需要在外部执行并用 `attest` 登记；缺 `reason` 或 `howToVerify` 时报 `[!!]`，因为证据里没有补验方式，说明齐全的只提示。
 
 #### 测试证据：先红后绿与改动行覆盖率
 
@@ -1624,6 +1631,7 @@ harness reviewer set mine --client command --command-json '["my-reviewer","--jso
 | 命令 | 用途 |
 | --- | --- |
 | `verify [--branch <分支>] [--head <ref>] [--base <ref>] [--plan] [--no-reuse] [--json]` | 验证并写签名证据；`--plan` 只列计划，`--no-reuse` 不复用已有结果，`--json` 输出 JSON |
+| `attest --branch <分支> --check <检查ID> --command <实际命令> --report <报告> [--note <摘要>]` | 登记已成功的外部 `extended` 检查，绑定检查定义与覆盖文件 |
 | `review --branch <分支>` | 独立评审 |
 | `review-plan --branch <分支> [--all] [--timeout-seconds <秒>] [--attempt-timeout-seconds <秒>] [--max-queries <次>]` | 方案评审，实时报告进度与回退，默认只展示 high 及以上的发现，见“方案评审” |
 | `reviewer list`、`set`、`remove`、`prefer`、`test` | 管理本机评审者：客户端、模型、推理强度、端点与 key，见“独立评审的后端” |
