@@ -96,8 +96,8 @@ Agent 调用工具 ----> [1] 实时拦截：读写文件、执行命令之前按
 需要：
 
 - macOS 或 Linux，Node.js 20 及以上，git 2.38 及以上（合并用到 `git merge-tree --write-tree`）。
-- 一个独立评审的后端：本机已登录的 `claude`（Claude Code CLI）或 `codex`。
-  两者都没有时可以接入任意命令，见“独立评审的后端”。
+- 一个用于独立代码评审的 AI 工具：推荐使用本机已登录的 Claude Code CLI（`claude`）或 Codex（`codex`）。
+  也支持其他可通过命令行调用的 AI 工具或评审服务，但需按[独立评审的后端](#独立评审的后端)配置输入、输出格式。
 
 在待接入项目里表达想接入 harness，并提供 [harness 仓库地址](https://github.com/windvalley/harness)即可。
 Agent 可以把获取与[首次接入](#首次接入)连续完成；需要你登录评审后端等人工操作时再给出具体步骤。
