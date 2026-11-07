@@ -987,8 +987,9 @@ node ~/github/harness/bin/harness.mjs install --local
     <p><code>install --local</code> 按项目锁定的版本安装代码（必要时从对应的 <code>v&lt;版本&gt;</code> 标签导出），再写入本机的钩子与插件目录，不改任何入库文件。装好之前，Claude Code 与 Codex 的实时拦截会拒绝一切调用并提示这条命令。</p>
 
     <h3 id="upgrade">升级</h3>
-    <div class="code"><span class="label">升级需求示例</span><pre class="prompt"><code>我想升级当前项目使用的 harness：https://github.com/windvalley/harness
-请直接从 GitHub 获取最新版本并安装到本机，不依赖本机已有的 harness 仓库或安装；然后将当前项目升级到该版本，保留项目自有规则和配置，核对需要迁移的配置，完成验证、评审与交付。需要我亲自操作时，请给出具体步骤。</code></pre></div>
+    <div class="code"><span class="label">升级需求示例</span><pre class="prompt"><code>请从 GitHub 获取 harness 最新版本：https://github.com/windvalley/harness
+
+安装并升级当前项目，保留已有规则和配置，完成迁移检查、验证、评审与交付。需要我操作时，请提供具体步骤。</code></pre></div>
     <p>Agent 应直接从 GitHub 获取最新版本并安装到本机，检查项目当前版本并说明升级影响，准备任务分支及需要的 Worktree，完成验证、评审和必要确认后按交付方式交付，主动报告结果与待处理项。</p>
     <p><code>upgrade</code> 会整份重写 <code>rules/</code> 与 <code>templates/</code>，项目自己的规范请写在 <code>AGENTS.md</code> 托管块之外；已有配置和黄金任务的迁移由 Agent 核对并说明。</p>
     <p>具体命令与其他成员的接续操作见<a href="https://github.com/windvalley/harness/blob/main/docs/reference.md#升级">升级参考</a>。</p>

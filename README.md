@@ -85,7 +85,9 @@ harness 不代替 GitHub/GitLab 的平台分支保护，也不防拥有本机权
 需要升级当前项目时，对 Agent 说：
 
 ```text
-请从 GitHub 获取 harness 最新版本并安装到本机，然后升级当前项目，保留项目自有规则和配置，检查需要迁移的内容，完成验证、评审和交付。需要我亲自确认或操作时，请给出具体步骤。
+请从 GitHub 获取 harness 最新版本：https://github.com/windvalley/harness
+
+安装并升级当前项目，保留已有规则和配置，完成迁移检查、验证、评审与交付。需要我操作时，请提供具体步骤。
 ```
 
 Agent 会核对版本和升级影响，具体见[升级说明](docs/reference.md#升级)。
