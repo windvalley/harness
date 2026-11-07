@@ -1063,8 +1063,9 @@ DeepSeek Harness 在新机器上注册一次本机插件，见“客户端那一
 对 Agent 说：
 
 ```text
-我想升级当前项目使用的 harness：https://github.com/windvalley/harness
-请直接从 GitHub 获取最新版本并安装到本机，不依赖本机已有的 harness 仓库或安装；然后将当前项目升级到该版本，保留项目自有规则和配置，核对需要迁移的配置，完成验证、评审与交付。需要我亲自操作时，请给出具体步骤。
+请从 GitHub 获取 harness 最新版本：https://github.com/windvalley/harness
+
+安装并升级当前项目，保留已有规则和配置，完成迁移检查、验证、评审与交付。需要我操作时，请提供具体步骤。
 ```
 
 Agent 应直接从 GitHub 获取最新版本并安装到本机，不依赖本机已有仓库。
