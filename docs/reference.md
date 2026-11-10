@@ -1290,8 +1290,9 @@ git commit -m "chore(harness): 升级到 <版本>" -m "- 更新入口锁定的�
 `upgrade` 安装新版本、改写入口锁定的版本、重新生成钩子与客户端配置，并整份重写 `rules/` 与 `templates/`。
 `AGENTS.md` 里的托管块也会刷新，块外的内容保持不动。
 `config.json`、`policy.json`、`verify.json` 保持不动，新版本带来的可选预设与配置要自己加，见 `CHANGELOG.md` 的升级说明。
-`upgrade` 结束时列出这个项目还没配置的 `risk`、`testFirst`、`coverage`、`requiredPaths`，并标明前三项有 `observe` 模式、只记录不拦截，`requiredPaths` 配置后会直接拦截；它只提示，不写这些文件。
-Agent 按升级规则把这段转述给你，并建议在升级任务里加上三项 `observe` 配置，`requiredPaths` 由你决定。
+`upgrade` 结束时列出这个项目还没配置的 `risk`、`testFirst`、`coverage`、`requiredPaths`，以及本地交付下的 `delivery.push`，并标明前三项有 `observe` 模式、只记录不拦截，`requiredPaths` 配置后会直接拦截，`delivery.push` 授予推送主分支的权限；它只提示，不写这些文件。
+远程交付的项目不列 `delivery.push`，它在那里是配置错误。
+Agent 按升级规则把这段转述给你，并建议在升级任务里加上三项 `observe` 配置，`requiredPaths` 与 `delivery.push` 由你决定。
 内置黄金任务随版本自动更新，新版本新增或修改的内置用例升级后直接生效。
 `golden/tasks.json` 里项目自己的用例不动；只有与当前内置用例完全相同的旧副本会被移除，免得盖住以后的内置更新。
 与内置同 id 但内容不同的用例保留，`upgrade` 会列出它们：是自己改过的就留着，只是旧版本的拷贝就删掉。

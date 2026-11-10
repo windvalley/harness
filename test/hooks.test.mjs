@@ -6,6 +6,7 @@ import { afterEach, describe, test } from "node:test";
 import { commit, CONFIG, git, makeRepo, sh, write, writeReview } from "./helpers.mjs";
 import { PACKAGE_ROOT as PACKAGE_ROOT_TEST } from "./helpers.mjs";
 import { starterVerify } from "../src/install/init.mjs";
+import { OPTIONS } from "../src/install/optional.mjs";
 import { packageVersion as currentVersion } from "../src/install/managed.mjs";
 import { matchAny } from "../src/lib/glob.mjs";
 
@@ -870,6 +871,7 @@ describe("升级时列出尚未配置的可选项", () => {
     assert.match(result.stdout, /testFirst.*observe/s);
     assert.match(result.stdout, /coverage.*observe/s);
     assert.match(result.stdout, /requiredPaths.*直接拦截/s);
+    assert.match(result.stdout, /delivery\.push.*仅本地交付.*推送权限/s);
     const after = ["config.json", "verify.json"].map((name) => readFileSync(join(repo.root, ".harness", name), "utf8"));
     assert.deepEqual(after, before);
   });
@@ -883,13 +885,44 @@ describe("升级时列出尚未配置的可选项", () => {
     const partial = repo.cli("upgrade");
     assert.equal(partial.status, 0, partial.stderr);
     assert.match(partial.stdout, /requiredPaths/);
+    assert.match(partial.stdout, /delivery\.push/);
     assert.doesNotMatch(partial.stdout, /risk[^\n]*observe/);
     assert.doesNotMatch(partial.stdout, /testFirst/);
     assert.doesNotMatch(partial.stdout, /coverage/);
 
     write(repo.root, ".harness/verify.json", `${JSON.stringify({ ...verify, testFirst: {}, coverage: {}, requiredPaths: { match: ["src/**"] } })}\n`);
+    const nearly = repo.cli("upgrade");
+    assert.equal(nearly.status, 0, nearly.stderr);
+    assert.doesNotMatch(nearly.stdout, /requiredPaths/);
+    assert.match(nearly.stdout, /delivery\.push/);
+
+    write(repo.root, ".harness/config.json", `${JSON.stringify({ ...config, risk: { mode: "observe", paths: [], deps: [] }, delivery: { ...config.delivery, push: false } })}\n`);
     const full = repo.cli("upgrade");
     assert.equal(full.status, 0, full.stderr);
     assert.doesNotMatch(full.stdout, /尚未配置的可选项/);
+  });
+
+  test("远程交付下不提示 delivery.push，它在那里是配置错误", () => {
+    const repo = setup();
+    const config = JSON.parse(readFileSync(join(repo.root, ".harness/config.json"), "utf8"));
+    write(repo.root, ".harness/config.json", `${JSON.stringify({ ...config, delivery: { mode: "remote", provider: "github" } })}\n`);
+    const result = repo.cli("upgrade");
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /尚未配置的可选项/);
+    assert.doesNotMatch(result.stdout, /delivery\.push/);
+  });
+
+  test("登记表的每一项都在参考手册里有说明，且引入版本不晚于当前版本", () => {
+    const reference = readFileSync(new URL("../docs/reference.md", import.meta.url), "utf8");
+    const parse = (v) => v.split(".").map(Number);
+    const notAfter = (a, b) => {
+      const [x, y] = [parse(a), parse(b)];
+      const i = x.findIndex((n, k) => n !== y[k]);
+      return i === -1 || x[i] < y[i];
+    };
+    for (const option of OPTIONS) {
+      assert.ok(reference.includes(`\`${option.path}`), `${option.path} 没有出现在 docs/reference.md`);
+      assert.ok(notAfter(option.since, currentVersion()), `${option.path} 的 since ${option.since} 晚于当前版本`);
+    }
   });
 });
