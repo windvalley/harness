@@ -743,7 +743,7 @@ git -C <主 Worktree> worktree unlock <Worktree 路径>
 - 有清单时评审必须逐条核对合并前内容，需求符合度评成 `unknown` 或 `unmet` 都会被拒绝。
 - 默认所有章节都是合并前验收；只有 `## 合并后验收` 这个二级章节会后置，到下一个同级标题为止。该章节与 `verify.json` 中对应的 `phase: "post-merge"` 检查用于描述同一批后续义务，不影响本次合并前评审。
   该章节有内容但本次改动没有选中对应检查时，验证以 `acceptance:post-merge` 配置错误失败，不能评审或合并。
-- 合并后验收不等于部署测试环境：它只用于依赖目标分支集成状态的检查。能在任务 Worktree 验证的内容仍放在合并前，没有这类需求时不添加该章节。
+- 合并后验收不要求有部署环境，也不排除部署环境：它用于合并前取不到证据、必须等代码进入主分支的检查。能在任务 Worktree 验证的内容仍放在合并前，没有这类需求时不添加该章节。
 - 清单经人确认过（在主分支上，或者是记录了实施授权的方案清单）时，需求符合度评成 `partial` 也会被拒绝：清单就是约定的交付范围，要缩小范围先向用户说明并重新取得同意。
   任务分支自带、未经确认的清单评成 `partial` 不阻断。
 - 没有清单时需求符合度记为 `unknown`，评审只评工程质量，合并时打印提示。
@@ -753,18 +753,31 @@ git -C <主 Worktree> worktree unlock <Worktree 路径>
 ### 合并后验收：完整示例
 
 下面用一个任务从配置走到完成，说明合并后验收怎么用。
-没有这类需求的项目不需要配置，流程不会多出任何步骤。
+它是可选的：没有配置 `phase: "post-merge"` 检查的项目不会产生任何义务，流程与输出都不变。
+示例用 Web 服务的登录功能。
+harness 不解释检查的内容，换成别的项目只需要改 `howToVerify` 与 `when`。
 
 **什么时候用**
 
-- 适用：检查的结果取决于合入主分支之后的集成状态。
-  例如登录改动要穿过主分支上已有的网关路由与共享配置，冒烟测试只有在合入后的主 Worktree 里跑才有意义。
-- 不适用：能在任务 Worktree 里跑的单元测试、构建、端到端测试。
-  它们仍然配成 `gate`，或者在合并前跑完用 `attest` 登记，不要后置。
-- 不适用：只是“需要真实浏览器或登录态”。
-  这类检查在合并前外部执行即可，不依赖主分支状态，见“一次任务”里的 `attest` 说明。
-- 不适用：把部署测试环境当作合并后验收。
-  只有必须等代码进入主分支才能取得证据的检查才后置。
+判断标准是：这项证据能不能在合并前、在任务 Worktree 里取得。
+
+- 能取得，并且可以自动执行：配成 `gate`。只有 `gate` 有阻断力，失败就不能合并。
+- 能取得，但需要外部环境（真实浏览器、登录态、测试账号）：合并前执行，用 `attest` 登记。
+  未登记的合并前 `extended` 检查不阻塞合并，只会列入未执行清单，它不是门禁。
+- 取不到，必须等代码进入主分支才有意义：配成 `post-merge`。
+  典型情况有三类：依赖由主分支部署出来的共享测试环境，依赖其他服务或其他已合入功能的交互，以及多个任务并行合入后的整体行为。
+
+按项目类型举例，下面只是 `howToVerify` 的写法，harness 不解释其内容：
+
+- Web 服务：主分支部署到测试环境后，针对本次功能的登录 e2e。
+- 库：发布到私有仓库的预发布版本，用下游样例工程安装并运行。
+- 命令行工具：对主分支构建出的产物运行冒烟脚本。
+- 数据迁移：在预发库上演练迁移并核对结果。
+- 服务间契约：与下游服务联调。
+
+后置有代价：失败时代码已经进了主分支，harness 没有自动回滚，处理方式见“检查失败时”。
+`when` 决定本次改动要不要产生这项义务，范围靠它收窄：只改文档或与登录无关的后端脚本时，没命中 `when`，就没有义务。
+具体跑哪些用例，由 `howToVerify` 和验收清单写明。
 
 **1. 配置检查与验收清单**
 
@@ -773,12 +786,12 @@ git -C <主 Worktree> worktree unlock <Worktree 路径>
 
 ```json
 {
-  "id": "integrated-smoke",
+  "id": "login-e2e",
   "tier": "extended",
   "phase": "post-merge",
-  "when": ["src/**"],
-  "reason": "需要目标分支集成状态",
-  "howToVerify": "在合并后的主 Worktree 运行 pnpm smoke:integrated"
+  "when": ["src/login/**"],
+  "reason": "需要主分支部署后的测试环境",
+  "howToVerify": "确认测试环境已部署合入后的主分支，再运行 pnpm e2e --grep login，报告写明提交号"
 }
 ```
 
@@ -791,7 +804,7 @@ git -C <主 Worktree> worktree unlock <Worktree 路径>
 
 ## 合并后验收
 
-- 主分支集成后，登录冒烟测试通过。
+- 测试环境部署主分支后，登录 e2e 通过。
 ```
 
 清单有这个章节，本次改动却没有选中任何 `post-merge` 检查时，`verify` 以 `acceptance:post-merge` 失败，后置义务不会被静默跳过。
@@ -805,18 +818,18 @@ harness verify --plan --branch feat/login
 ```text
 相对 main 变更 2 个文件
   RUN  unit  pnpm test
-  POST_MERGE integrated-smoke  在合并后的主 Worktree 运行 pnpm smoke:integrated
+  POST_MERGE login-e2e  确认测试环境已部署合入后的主分支，再运行 pnpm e2e --grep login，报告写明提交号
 ```
 
 `unit` 是项目已有的 `gate` 检查。
-`POST_MERGE` 表示这项检查会在合并后才要求登记，不会在 `verify` 里执行，也不阻塞合并。
-`harness verify`、`harness review` 照常运行：`verify` 的结果里同样列出 `POST_MERGE integrated-smoke`，`review` 只逐条核对合并前的清单内容，不评判 `## 合并后验收` 章节。
+`POST_MERGE` 表示这项检查在合并后才要求登记，不会在 `verify` 里执行，也不阻塞合并。
+`harness verify`、`harness review` 照常运行：`verify` 的结果里同样列出 `POST_MERGE login-e2e`，`review` 只逐条核对合并前的清单内容，不评判 `## 合并后验收` 章节。
 `harness status --branch feat/login` 里这项显示为 `[-] evidence:postMerge`，并提示“不阻塞本次交付”。
 
 合并前提前登记会被拒绝，因为证据要绑定合入后的主分支提交：
 
 ```text
-外部证据登记失败: 检查 integrated-smoke 属于合并后验收，必须在分支合入 main 后执行并登记；远程交付请先等平台合入并运行 harness sync
+外部证据登记失败: 检查 login-e2e 属于合并后验收，必须在分支合入 main 后执行并登记；远程交付请先等平台合入并运行 harness sync
 ```
 
 **3. 合并：交付完成，但任务还没有完成**
@@ -825,71 +838,98 @@ harness verify --plan --branch feat/login
 harness merge --branch feat/login
 ```
 
-合并结果 JSON 的 `postMergeChecks` 列出还欠的验收项及其 `howToVerify`。
-之后 `harness status --branch feat/login` 显示：
+合并前，harness 为这项检查写下一条义务记录，键是检查 ID 加分支顶端。
+`merge` 在输出末尾列出待办：
+
+```text
+合并后验收待完成:
+  待验收 login-e2e（分支 feat/login）：确认测试环境已部署合入后的主分支，再运行 pnpm e2e --grep login，报告写明提交号
+    登记: harness attest --branch feat/login --check login-e2e --command "<实际命令>" --report <报告>
+```
+
+之后 `harness status --branch feat/login` 显示如下，退出码为 1：
 
 ```text
   [ok] branch: 该分支已经包含在主分支中
-  [FAIL] post-merge: 合并后验收待完成：integrated-smoke（在合并后的主 Worktree 运行 pnpm smoke:integrated）
+  [FAIL] post-merge: 合并后验收待完成：login-e2e（确认测试环境已部署合入后的主分支，再运行 pnpm e2e --grep login，报告写明提交号）
 
-已合入主分支；合并后验收待完成：integrated-smoke
+已合入主分支；合并后验收待完成：login-e2e
 ```
 
-这里的 `FAIL` 只表示还没有登记，不表示冒烟失败。
+这里的 `FAIL` 只表示还没有登记，不表示 e2e 失败。
+`harness status --post-merge` 列出全仓库到期而未登记的义务，不依赖分支还在不在，跨会话、换客户端都能查。
 会话在这个状态下收尾时，收尾检查会拦下，并给出 `howToVerify` 与填好分支名、检查 ID 的 `harness attest` 命令。
+收尾检查只认本会话推进过的分支：换了新会话，不会被拦，要靠 `status --post-merge` 查。
 
 **4. 在主 Worktree 执行并登记**
 
+harness 不部署，也不核对测试环境部署的是哪个提交。
+环境没更新就跑 e2e 会得到假通过，所以 `howToVerify` 要求先确认部署版本，报告里写明提交号与环境地址。
+报告里不要放账号、令牌等凭据，摘要会发往评审端点。
+
 ```bash
 cd <主 Worktree>
-pnpm smoke:integrated | tee /tmp/smoke-login.md
-harness attest --branch feat/login --check integrated-smoke \
-  --command "pnpm smoke:integrated" \
-  --report /tmp/smoke-login.md
+pnpm e2e --grep login > /tmp/e2e-login.md 2>&1 \
+  && harness attest --branch feat/login --check login-e2e \
+       --command "pnpm e2e --grep login" \
+       --report /tmp/e2e-login.md
 ```
 
+用 `&&` 连接，e2e 失败时不会登记。
+不要写成 `pnpm e2e ... | tee`：管道的退出码取最后一个命令，`tee` 会吞掉 e2e 的失败。
+
 ```text
-已登记 feat/login 的 post-merge 外部证据 integrated-smoke（检查范围 a809357dc3ae，报告 183673f4d6e2）
+已登记 feat/login 的 post-merge 外部证据 login-e2e（检查范围 a809357dc3ae，报告 183673f4d6e2），关闭 1 条合并后验收义务
 ```
 
 再看 `harness status --branch feat/login`：
 
 ```text
   [ok] branch: 该分支已经包含在主分支中
-  [ok] post-merge: 合并后验收已登记：integrated-smoke
+  [ok] post-merge: 合并后验收已登记：login-e2e
 
 交付与合并后验收均完成
 ```
 
-- `attest` 只登记已经成功的验证，没有“登记失败”这个状态：冒烟没通过就不要登记，任务保持待完成。
-- 证据绑定登记时的主分支提交和检查覆盖文件。
-  状态核对用任务证据里保存的检查定义快照，主分支之后改了 `verify.json`，不会让已经登记的任务重新待完成。
+- `attest` 只登记已经成功的验证，没有“登记失败”这个状态：没通过就不要登记，任务保持待完成。
+- `attest` 是自述证据：harness 只保存命令文本和报告哈希，不核对命令是否真的跑过、跑在哪个版本上。
+- 被测提交默认是登记时的主分支。
+  测试之后、登记之前又有别的任务合入时，用 `--at <提交>` 指定实际被测的那个提交，它必须是当前主分支的祖先，只有它包含的义务会被关闭。
 - 报告末尾最多 80 行、6000 字符会作为摘要保存，登记前确认已脱敏。
   PR/MR 描述不写原始命令。
 
 **远程交付**
 
-把第 3 步的 `merge` 换成 `harness submit --branch feat/login`，平台合入后运行 `harness sync`，再按第 4 步登记。
+把第 3 步的 `merge` 换成 `harness submit --branch feat/login`，义务在 `submit` 时写下。
+平台合入后运行 `harness sync`，`sync` 的输出列出待办，再按第 4 步登记。
 `sync` 之前登记同样会被拒绝。
-PR/MR 描述里这项显示为 `合并后验收 integrated-smoke: <howToVerify>（平台合入并 sync 后完成）`。
-描述只写检查 ID 与验收方式，不写 `attest` 登记的实际命令。
+PR/MR 描述里这项显示为 `合并后验收 login-e2e: <howToVerify>（平台合入并 sync 后完成）`，只写检查 ID 与验收方式，不写 `attest` 登记的实际命令。
 
-**冒烟失败时**
+平台用 squash 或 rebase 合入时，任务分支顶端不是主分支的祖先，义务不会到期，`status --post-merge` 也不会列出它。
+这是已知限制，这种合入方式下需要对照 PR/MR 自行确认并登记。
 
-冒烟失败说明合入的代码有问题，保持待完成，不要登记。
-按普通任务处理：新建修复分支（例如 `fix/login-gateway`），走完 verify、review 与合入。
-修复分支只要改到该检查的 `when` 范围，合入后就同样出现这项合并后验收。
+**检查失败时**
 
-修复合入、冒烟通过后，需要对修复分支和原分支各登记一次：
+e2e 失败说明合入的代码有问题，不要登记，任务保持待完成。
+主分支此刻已经带着这个问题，harness 不会自动回滚，由人决定下一步：
+
+- 前向修复：新建修复分支（例如 `fix/login-gateway`），走完 verify、review 与合入。
+- 回退：由人决定是否回退这次合入，Agent 需要先用 `harness escalate open` 上报，写明现象与选项。
+
+同一问题连续三轮没有解决时，按 `core.md` 的规则停下上报，不要无限修复。
+每一轮修复的合入都需要你事先授权。
+
+前向修复合入、e2e 通过后，只需要登记一次：
 
 ```bash
-harness attest --branch fix/login-gateway --check integrated-smoke --command "pnpm smoke:integrated" --report /tmp/smoke-login.md
-harness attest --branch feat/login        --check integrated-smoke --command "pnpm smoke:integrated" --report /tmp/smoke-login.md
+pnpm e2e --grep login > /tmp/e2e-login.md 2>&1 \
+  && harness attest --branch fix/login-gateway --check login-e2e \
+       --command "pnpm e2e --grep login" --report /tmp/e2e-login.md
 ```
 
-登记是按分支分别记录的，修复分支登记不会让原分支自动完成。
-不补登记原分支，`harness status --branch feat/login` 会一直显示待完成，收尾检查也会继续拦下。
-这次冒烟跑在已经同时包含两个分支的主分支上，同一份通过的报告可以用于两次登记。
+关闭规则是：同一检查下，分支顶端已包含在被测提交里的全部义务一并关闭。
+这次测试跑在同时包含 `feat/login` 与 `fix/login-gateway` 的主分支上，所以两个分支的义务都被关闭，不需要对原分支再登记。
+修复分支只要改到该检查的 `when` 范围，合入后就同样产生这项义务，登记时一并关闭。
 
 ### 评审结论
 
