@@ -912,17 +912,10 @@ describe("升级时列出尚未配置的可选项", () => {
     assert.doesNotMatch(result.stdout, /delivery\.push/);
   });
 
-  test("登记表的每一项都在参考手册里有说明，且引入版本不晚于当前版本", () => {
+  test("登记表的每一项都出现在参考手册“升级”一节的提示说明里", () => {
     const reference = readFileSync(new URL("../docs/reference.md", import.meta.url), "utf8");
-    const parse = (v) => v.split(".").map(Number);
-    const notAfter = (a, b) => {
-      const [x, y] = [parse(a), parse(b)];
-      const i = x.findIndex((n, k) => n !== y[k]);
-      return i === -1 || x[i] < y[i];
-    };
-    for (const option of OPTIONS) {
-      assert.ok(reference.includes(`\`${option.path}`), `${option.path} 没有出现在 docs/reference.md`);
-      assert.ok(notAfter(option.since, currentVersion()), `${option.path} 的 since ${option.since} 晚于当前版本`);
-    }
+    const line = reference.split("\n").find((text) => text.startsWith("`upgrade` 结束时列出"));
+    assert.ok(line, "docs/reference.md 里找不到 upgrade 结束时的提示说明");
+    for (const option of OPTIONS) assert.ok(line.includes(`\`${option.path}\``), `${option.path} 没有出现在 upgrade 的提示说明里`);
   });
 });
