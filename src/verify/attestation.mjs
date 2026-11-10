@@ -5,6 +5,7 @@ import { isAncestor, resolveCommit, treeOf } from "../lib/git.mjs";
 import { redact } from "../lib/redact.mjs";
 import { appendLedger, readRecord, sha256, writeRecord } from "../lib/store.mjs";
 import { checkFingerprint, checkPhase, checkScopeDigest, POST_MERGE } from "./checks.mjs";
+import { closeObligations, obligationTip } from "./obligation.mjs";
 
 export const ATTESTATION_KIND = "attestation";
 const MAX_REPORT_BYTES = 10 * 1024 * 1024;
@@ -56,22 +57,43 @@ function reportFile(cwd, value) {
   };
 }
 
+/** 分支还在时取它的顶端；分支已被删除时取这条分支为该检查写下的义务里的顶端。 */
+function branchTipOf(root, branch, checkId) {
+  try {
+    return resolveCommit(root, branch);
+  } catch (error) {
+    const tip = obligationTip({ root, branch, checkId });
+    if (!tip) throw error;
+    return tip;
+  }
+}
+
 /** 登记一次已经成功的外部检查。记录由本机密钥签名，后续 verify 会重新核对检查定义与覆盖文件。 */
-export function attestCheck({ cwd, branch, checkId, command, report, note = "" }) {
+export function attestCheck({ cwd, branch, checkId, command, report, note = "", at = null }) {
   if (!branch) throw new Error("用法: harness attest --branch <分支> --check <检查ID> --command <实际命令> --report <报告>");
   if (!checkId) throw new Error("必须用 --check 指定 verify.json 里的 extended 检查");
   if (!String(command ?? "").trim()) throw new Error("必须用 --command 记录实际执行成功的命令");
   const gate = loadGateProject(cwd, { branch });
   const root = gate.root;
-  const branchHead = resolveCommit(root, branch);
+  const branchHead = branchTipOf(root, branch, checkId);
   const proposed = loadProject(root, { fromRef: branchHead, root });
   const check = (proposed.verify?.checks ?? []).find((item) => item.id === checkId && item.tier === "extended");
   if (!check) throw new Error(`分支 ${branch} 上不存在 ID 为 ${checkId} 的 extended 检查`);
   const phase = checkPhase(check);
+  if (at && phase !== POST_MERGE) throw new Error("--at 只用于合并后验收检查");
   let head = branchHead;
   if (phase === POST_MERGE) {
     const mainRef = mainBranch(gate);
-    head = resolveCommit(root, mainRef);
+    const mainHead = resolveCommit(root, mainRef);
+    head = mainHead;
+    if (at) {
+      try {
+        head = resolveCommit(root, at);
+      } catch {
+        throw new Error(`--at 无法解析为提交: ${at}`);
+      }
+      if (!isAncestor(root, head, mainHead)) throw new Error(`--at ${at} 不是 ${mainRef} 的祖先：被测提交必须已经合入 ${mainRef}`);
+    }
     if (!isAncestor(root, branchHead, head)) {
       throw new Error(`检查 ${checkId} 属于合并后验收，必须在分支合入 ${mainRef} 后执行并登记；远程交付请先等平台合入并运行 harness sync`);
     }
@@ -91,6 +113,7 @@ export function attestCheck({ cwd, branch, checkId, command, report, note = "" }
     note: String(note ?? "").trim(),
     createdAt: new Date().toISOString(),
   });
-  appendLedger(root, { event: "attest", branch, checkId, phase, head });
-  return record;
+  const closed = phase === POST_MERGE ? closeObligations({ root, branch, branchTip: branchHead, checkId, at: head, reportSha256: record.report.sha256 }) : [];
+  appendLedger(root, { event: "attest", branch, checkId, phase, head, closed: closed.length });
+  return { ...record, closedObligations: closed.length };
 }

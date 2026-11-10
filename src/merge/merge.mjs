@@ -17,6 +17,7 @@ import {
 import { matchAny } from "../lib/glob.mjs";
 import { environmentDigests, environmentItems } from "../verify/environment.mjs";
 import { testEvidenceChecks } from "../verify/testevidence.mjs";
+import { writeObligations } from "../verify/obligation.mjs";
 import {
   changedPaths,
   git,
@@ -677,6 +678,8 @@ export async function mergeTask({ cwd, branch, dryRun = false, log = console.err
     }
     const pushPlan = !bootstrap && pinned.mode === "local" && pinned.push && sameDelivery(pinned, gates.delivery.after) ? preflightPush({ root, remote: pinned.remote, mainRef, mainCommit }) : null;
 
+    // 主分支更新之前写下合并后验收义务：合并没有真正完成时分支顶端不是主分支的祖先，义务不会到期。
+    writeObligations({ root, branch, tip: branchCommit, items: gates.postMergeChecks });
     advanceMain({ project, mainRoot, mainRef, mainCommit, newHead, resultTree, bootstrap, branch, log });
 
     appendLedger(root, { event: "merge", branch, fastForward, head: newHead, tree: resultTree, base: mainCommit, bootstrap, riskObserved: gates.risk.observed });

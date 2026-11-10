@@ -263,6 +263,36 @@ describe("收尾检查", () => {
     assert.equal(stop(repo, { active: true }), null);
   });
 
+  test("合并后分支与 Worktree 被删除，未登记的合并后验收仍然拦住收尾，登记后放行", () => {
+    const verify = {
+      version: 1,
+      docOnly: { match: ["docs/**", "**/*.md"], exclude: [] },
+      checks: [
+        { id: "unit", tier: "gate", when: ["src/**"], cmd: ["node", "-e", "process.exit(0)"] },
+        { id: "integrated", tier: "extended", phase: "post-merge", when: ["src/**"], reason: "需要主 Worktree 集成状态", howToVerify: "运行主 Worktree 冒烟测试" },
+      ],
+      fullSuiteTriggers: { paths: [] },
+    };
+    const repo = setup({ project: { ".harness/verify.json": verify } });
+    const dir = linkedTask(repo);
+    agentCommit(repo, dir, { "src/a.js": "export const a = 1;\n" });
+    assert.equal(repo.cli("verify", "--branch", BRANCH).status, 0);
+    writeReview(repo, git(repo.root, "rev-parse", BRANCH), "approve");
+    assert.equal(repo.cli("merge", "--branch", BRANCH).status, 0);
+    git(repo.root, "worktree", "remove", "--force", dir);
+    git(repo.root, "branch", "-D", BRANCH);
+
+    const pending = stop(repo, { active: true });
+    assert.equal(pending?.decision, "block");
+    assert.match(pending.reason, /合并后验收待完成：integrated/);
+
+    const report = join(repo.root, "..", "integrated.md");
+    writeFileSync(report, "integrated passed\n");
+    const attested = repo.cli("attest", "--branch", BRANCH, "--check", "integrated", "--command", "run integrated", "--report", report);
+    assert.equal(attested.status, 0, attested.stderr);
+    assert.equal(stop(repo, { active: true }), null);
+  });
+
   test("远程交付下门禁齐备后提示 submit", () => {
     const config = { ...CONFIG, delivery: { mode: "remote", remote: "origin", provider: "github" } };
     const repo = setup({ project: { ".harness/config.json": config } });

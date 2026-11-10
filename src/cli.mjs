@@ -31,7 +31,7 @@ import { computeMetrics, formatMetrics } from "./golden/metrics.mjs";
 import { initProject, upgradeProject } from "./install/init.mjs";
 import { unconfiguredOptions } from "./install/optional.mjs";
 import { uninstall } from "./install/uninstall.mjs";
-import { branchStatus, formatStatus } from "./status.mjs";
+import { branchStatus, formatObligations, formatStatus, openPostMergeObligations } from "./status.mjs";
 import { stopCheck } from "./stop/stop.mjs";
 import { installAll, installLocal, installVersion, listVersions, pruneVersions, publishVersion, versionDir } from "./install/install.mjs";
 import { formatSurvey } from "./install/survey.mjs";
@@ -47,13 +47,14 @@ const USAGE = `harness <命令> [参数]
 
 工程流程
   verify   [--head <ref>] [--base <ref>] [--branch <名称>] [--no-reuse] [--plan]   对分支验证并写签名证据；--plan 只列出会执行的检查
-  attest   --branch <名称> --check <检查ID> --command <实际命令> --report <报告> [--note <摘要>]
-                                                    登记已成功的外部检查，绑定检查定义与覆盖文件
+  attest   --branch <名称> --check <检查ID> --command <实际命令> --report <报告> [--note <摘要>] [--at <提交>]
+                                                    登记已成功的外部检查，绑定检查定义与覆盖文件；合并后检查用 --at 指定被测的主分支提交
   review   --branch <名称>                          独立评审
   review-plan --branch <名称> [--all]               方案评审：只给建议，默认只展示 high 及以上，--all 展示全部
               [--timeout-seconds <秒>] [--attempt-timeout-seconds <秒>] [--max-queries <次>]
                                                     总时限默认 ${DEFAULT_PLAN_TIMEOUT_SECONDS} 秒，单次默认 ${DEFAULT_PLAN_ATTEMPT_TIMEOUT_SECONDS} 秒，读仓库最多 ${DEFAULT_PLAN_MAX_QUERIES} 次
   status   --branch <名称>                           只读汇总：还差哪几步才能合并
+  status   --post-merge [--branch <名称>]            列出到期而未登记的合并后验收义务；有待办时退出码为 1
   confirm  --branch <名称> [--yes]                   查看门禁改动；--yes 记录人工确认
   approve  --branch <名称> [--yes --note <原话>]     查看任务方案；用户同意实施后加 --yes，--note 照录用户原话
   merge    --branch <名称> [--dry-run]               受控合并到主分支（本地交付）
@@ -180,11 +181,12 @@ function cmdAttest(argv) {
       command: { type: "string" },
       report: { type: "string" },
       note: { type: "string" },
+      at: { type: "string" },
     },
   });
   try {
-    const record = attestCheck({ cwd: process.cwd(), branch: values.branch, checkId: values.check, command: values.command, report: values.report, note: values.note });
-    print(`已登记 ${record.branch} 的 ${record.phase} 外部证据 ${record.checkId}（检查范围 ${record.scope.slice(0, 12)}，报告 ${record.report.sha256.slice(0, 12)}）`);
+    const record = attestCheck({ cwd: process.cwd(), branch: values.branch, checkId: values.check, command: values.command, report: values.report, note: values.note, at: values.at });
+    print(`已登记 ${record.branch} 的 ${record.phase} 外部证据 ${record.checkId}（检查范围 ${record.scope.slice(0, 12)}，报告 ${record.report.sha256.slice(0, 12)}）${record.phase === "post-merge" ? `，关闭 ${record.closedObligations} 条合并后验收义务` : ""}`);
     return 0;
   } catch (error) {
     process.stderr.write(`外部证据登记失败: ${error.message}\n`);
@@ -362,6 +364,16 @@ async function cmdReviewPlan(argv) {
   }
 }
 
+/** 合入后列出到期而未登记的合并后验收；没有义务或读不出配置时什么都不输出。 */
+function printPostMergeTodo(cwd) {
+  try {
+    const { open } = openPostMergeObligations({ cwd });
+    if (open.length > 0) process.stderr.write(`\n合并后验收待完成:\n${formatObligations(open).map((line) => `  ${line}`).join("\n")}\n`);
+  } catch {
+    // 只是提示，读不到不影响合并或同步的结果。
+  }
+}
+
 /** 本地主分支已经更新、后续步骤失败的错误码，退出码 3 提醒不要当成“没合并”重来。 */
 const MERGED_THEN_FAILED = new Set(["post_merge_failed", "push_rejected", "push_failed", "push_skipped"]);
 
@@ -376,6 +388,7 @@ async function cmdMerge(argv) {
     if (result.followUps?.length > 0) {
       process.stderr.write(`\n合并完成，还需要在客户端做:\n${result.followUps.map((note) => `  - ${note}`).join("\n")}\n`);
     }
+    if (!result.dryRun) printPostMergeTodo(process.cwd());
     return 0;
   } catch (error) {
     if (error instanceof MergeError) {
@@ -419,6 +432,7 @@ function cmdSync(argv) {
     if (result.followUps?.length > 0) {
       process.stderr.write(`\n同步完成，还需要在客户端做:\n${result.followUps.map((note) => `  - ${note}`).join("\n")}\n`);
     }
+    printPostMergeTodo(process.cwd());
     return 0;
   } catch (error) {
     if (error.code) {
@@ -942,14 +956,21 @@ export async function main(argv) {
         return 0;
       }
       case "status": {
-        const { values } = parseArgs({ args: rest, options: { branch: { type: "string", default: currentBranchForStatus() } } });
-        if (!values.branch) {
-          process.stderr.write("用法: harness status --branch <名称>\n");
+        const { values } = parseArgs({ args: rest, options: { branch: { type: "string" }, "post-merge": { type: "boolean", default: false } } });
+        if (values["post-merge"]) {
+          const { open } = openPostMergeObligations({ cwd: process.cwd() });
+          const shown = values.branch ? open.filter((item) => item.branch === values.branch) : open;
+          for (const line of formatObligations(shown)) print(line);
+          return shown.length > 0 ? 1 : 0;
+        }
+        const branch = values.branch ?? currentBranchForStatus();
+        if (!branch) {
+          process.stderr.write("用法: harness status --branch <名称>\n       harness status --post-merge [--branch <名称>]\n");
           return 2;
         }
-        const status = branchStatus({ cwd: process.cwd(), branch: values.branch });
+        const status = branchStatus({ cwd: process.cwd(), branch });
         print(formatStatus(status));
-        return status.ready ? 0 : 1;
+        return status.ready && status.complete !== false ? 0 : 1;
       }
       case "uninstall": {
         const { values } = parseArgs({
