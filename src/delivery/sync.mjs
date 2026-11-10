@@ -5,7 +5,7 @@ import { appendLedger, readRecord } from "../lib/store.mjs";
 import { MergeError, acquireLock, afterMainUpdate, advanceMain, describeChange, mainWorktreeProblems } from "../merge/merge.mjs";
 import { ensureHooksPath } from "../install/install.mjs";
 import { CONFIRM_KIND } from "../confirm/confirm.mjs";
-import { fetchRemoteMain, pinnedVersionAt } from "./remote.mjs";
+import { divergedGuidance, fetchRemoteMain, pinnedVersionAt } from "./remote.mjs";
 import { packageVersion } from "../install/managed.mjs";
 import { listVersions, verifyVersion } from "../install/install.mjs";
 
@@ -13,11 +13,14 @@ import { listVersions, verifyVersion } from "../install/install.mjs";
  * 确定同步目标：远程跟踪引用必须真实存在，且本地主分支是它的祖先。
  * 本地主分支有远程没有的提交时拒绝，绝不改写历史：那是本地绕过平台产生的提交，需要人判断怎么处理。
  */
-function planSync({ root, remote, mainRef, local }) {
+function planSync({ root, remote, mainRef, local, mode }) {
   const relay = fetchRemoteMain({ root, remote, mainRef, run });
   const target = resolveCommit(root, relay);
   if (target === local) return { relay, target, local, upToDate: true };
   if (!isAncestor(root, local, target)) {
+    if (mode === "local") {
+      throw new MergeError(`${divergedGuidance({ remote, mainRef })}\n本地多出的提交: ${gitOk(root, ["rev-list", "--count", `${target}..${local}`]).trim()} 个。`, "not_fast_forward");
+    }
     throw new MergeError(
       [
         `本地 ${mainRef} 与 ${remote}/${mainRef} 已分叉，不能快进。`,
@@ -87,7 +90,7 @@ export function syncTask({ cwd, remote: requestedRemote = null, log = console.er
   }
   // 首次接入时还没有可信的配置可读，远程名由人用 --remote 指定（默认 origin），取到目标提交后再与它的配置核对。
   const remote = configured ?? requestedRemote ?? "origin";
-  const planned = planSync({ root, remote, mainRef, local });
+  const planned = planSync({ root, remote, mainRef, local, mode: trusted ? deliverySettings(trusted.config).mode : null });
   if (planned.upToDate) {
     log(`[sync] ${mainRef} 已是最新(${planned.local.slice(0, 10)})`);
     return { upToDate: true, mainRef, remote, head: planned.local, changed: 0 };

@@ -1225,6 +1225,45 @@ describe("本地交付 delivery.push", () => {
     assert.equal(remoteRef(remote, "refs/heads/main"), before);
   });
 
+  test("合并过程中远程被别人推进导致推送被拒后，本地与远程分叉，提示给出人工处理步骤而不是指向 sync", () => {
+    const race = [
+      "const { execFileSync: x } = require('child_process'), fs = require('fs'), os = require('os'), p = require('path');",
+      "const d = fs.mkdtempSync(p.join(os.tmpdir(), 'race-')), o = { cwd: d, stdio: 'ignore' };",
+      "x('git', ['clone', '-q', process.env.RACE_REMOTE, d]);",
+      "fs.writeFileSync(p.join(d, 'race.txt'), 'r\\n');",
+      "x('git', ['add', '-A'], o);",
+      "x('git', ['-c', 'user.name=o', '-c', 'user.email=o@example.com', '-c', 'commit.gpgsign=false', 'commit', '-q', '-m', 'feat(race): 并发推送\\n\\n- 其他人的改动\\n- 在合并过程中推送'], o);",
+      "x('git', ['push', '-q', 'origin', 'main'], o);",
+    ].join("\n");
+    const repo = setup({ delivery: PUSH, config: { merge: { ...CONFIG.merge, postMergeCommand: ["node", "-e", race] } } });
+    const remote = withRemote(repo);
+    repo.env.RACE_REMOTE = remote;
+    task(repo);
+    const rejected = repo.cli("merge", "--branch", "task/a");
+    assert.equal(rejected.status, 3, rejected.stderr);
+    assert.match(rejected.stderr, /push_rejected/);
+    assert.match(rejected.stderr, /已分叉/);
+    assert.match(rejected.stderr, /git log origin\/main\.\.main/);
+    assert.match(rejected.stderr, /HARNESS_MAIN_BYPASS=1 git reset --hard origin\/main/);
+    assert.doesNotMatch(rejected.stderr, /先运行 harness sync 弄清差异/);
+
+    task(repo, "task/b", { "src/b.js": "b\n" });
+    const before = mainHead(repo);
+    const preflight = repo.cli("merge", "--branch", "task/b");
+    assert.notEqual(preflight.status, 0);
+    assert.match(preflight.stderr, /not_fast_forward/);
+    assert.match(preflight.stderr, /已分叉/);
+    assert.match(preflight.stderr, /git branch backup\/main-diverged main/);
+    assert.doesNotMatch(preflight.stderr, /先运行 harness sync 把本地/);
+    assert.equal(mainHead(repo), before);
+
+    const synced = repo.cli("sync");
+    assert.notEqual(synced.status, 0);
+    assert.match(synced.stderr, /not_fast_forward/);
+    assert.match(synced.stderr, /git log origin\/main\.\.main/);
+    assert.equal(mainHead(repo), before);
+  });
+
   test("合并后命令失败时不推送", () => {
     const repo = setup({ delivery: PUSH, config: { merge: { postMergeCommand: ["false"] } } });
     const remote = withRemote(repo);

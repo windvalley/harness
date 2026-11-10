@@ -7,6 +7,20 @@ import { tail } from "../lib/redact.mjs";
  * 主分支只在本地交付开启 delivery.push 时由 harness merge 推送，见 pushMain；submit 与 sync 不推主分支。
  */
 
+/**
+ * 本地主分支与远程主分支各有对方没有的提交时的处理说明。harness sync 只会快进，分叉时它也拒绝，所以不能让提示指向 sync。
+ * 只描述由人在自己的终端做什么：先留底，再对齐远程，已合并的任务分支还在，重新 merge 会基于新主分支重新验证。
+ */
+export function divergedGuidance({ remote, mainRef }) {
+  return [
+    `本地 ${mainRef} 与 ${remote}/${mainRef} 已分叉：两边各有对方没有的提交，harness sync 只能快进，处理不了。`,
+    `先用 git log ${remote}/${mainRef}..${mainRef} 看本地多出的提交；它们若都来自 harness merge，对应的任务分支还在，工作不会丢。`,
+    `由人在自己的终端决定，并先留底：git branch backup/${mainRef}-diverged ${mainRef}；`,
+    `然后 HARNESS_MAIN_BYPASS=1 git reset --hard ${remote}/${mainRef} 把本地 ${mainRef} 对齐远程（丢弃本地多出的合并提交，需要明确授权），`,
+    "再把那些任务分支逐个重新 harness merge，它们会基于新的主分支重新验证。",
+  ].join("\n");
+}
+
 /** 取得远程主分支的最新提交，同时更新远程跟踪引用。失败时抛 fetch_failed。 */
 export function fetchRemoteMain({ root, remote, mainRef, run }) {
   const refspec = `+refs/heads/${mainRef}:refs/remotes/${remote}/${mainRef}`;
@@ -78,7 +92,7 @@ export function pushMain({ root, remote, mainRef, commit, previous, run }) {
       `本地 ${mainRef} 已更新到 ${commit.slice(0, 10)}，但推送到 ${remote} 失败（${stateText}）:`,
       combined,
       diverged
-        ? "远程主分支已有本地没有的提交，harness 不强推；先运行 harness sync 弄清差异，由人判断怎么处理。"
+        ? `远程主分支已有本地没有的提交，harness 不强推。\n${divergedGuidance({ remote, mainRef })}`
         : "确认远程可写、主分支没有被保护规则拦住后，由人推送主分支。",
     ].join("\n"),
   );

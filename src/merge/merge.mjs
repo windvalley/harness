@@ -41,7 +41,7 @@ import { ensureHooksPath } from "../install/install.mjs";
 import { REVIEW_KIND } from "../review/review.mjs";
 import { approvalState, assessRisk, planEnforced } from "../plan/plan.mjs";
 import { MERGE_TOKEN_ENV, mainUpdateToken } from "../githook.mjs";
-import { fetchRemoteMain, pushMain } from "../delivery/remote.mjs";
+import { divergedGuidance, fetchRemoteMain, pushMain } from "../delivery/remote.mjs";
 import { commitRangeProblems, commitRuleErrorAt } from "../policy/commit-message.mjs";
 import { resolvePolicy } from "../policy/resolve.mjs";
 import { leftoverWorktrees } from "../worktree/clean.mjs";
@@ -588,10 +588,11 @@ function preflightPush({ root, remote, mainRef, mainCommit }) {
   }
   const remoteMain = resolveCommit(root, relay);
   if (remoteMain !== mainCommit && !isAncestor(root, remoteMain, mainCommit)) {
+    const behind = isAncestor(root, mainCommit, remoteMain);
     throw new MergeError(
       [
         `${remote}/${mainRef}(${remoteMain.slice(0, 10)}) 有本地 ${mainRef}(${mainCommit.slice(0, 10)}) 没有的提交，现在合并后无法推送，本地与远程会分叉。`,
-        `先运行 harness sync 把本地 ${mainRef} 快进到远程，再重新 merge；本地主分支保持原样。`,
+        behind ? `先运行 harness sync 把本地 ${mainRef} 快进到远程，再重新 merge；本地主分支保持原样。` : `${divergedGuidance({ remote, mainRef })}\n本地主分支保持原样。`,
       ].join("\n"),
       "not_fast_forward",
     );
