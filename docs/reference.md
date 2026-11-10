@@ -631,6 +631,13 @@ harness merge  --branch feat/login   # 本地交付：核对证据与评审，�
 - 主分支在评审之后改了本分支也改过的文件时，`merge` 以 `review_stale` 拒绝，`status` 也会报出来；在任务分支上 `git merge main` 并提交，再重新 verify、review。
 - `merge --dry-run` 只做核对，不更新主分支。
 - 配置了 `phase: "post-merge"` 的检查不阻塞合并前门禁；本地合入后，或远程平台合入并 `sync` 后，按 `howToVerify` 执行并用 `attest` 登记。`status` 与收尾检查会跟踪到合并后验收完成。
+  跟踪靠合入时写下的义务记录，不靠分支当前顶端的证据：
+  - 义务按“检查 ID + 合入时的分支顶端”各一条，本地在 `merge` 更新主分支之前写，远程在 `submit` 时写；分支顶端已包含在主分支里即到期，没到期的不算待办。
+  - `attest` 成功后，同一检查下、分支顶端已包含在被测提交里的全部义务一并关闭，所以修复分支登记通过后，原分支的义务也随之关闭。
+  - 被测提交默认是登记时的主分支；测试之后、登记之前又有别的任务合入时，用 `--at <提交>` 指定实际被测的那个提交，它必须是当前主分支的祖先。
+  - `harness status --post-merge` 列出全仓库到期而未登记的义务，有待办时退出码为 1；`status --branch` 在已合入但待验收时退出码同样为 1。
+  - 记录验签失败（例如密钥轮换）时按待办处理，重新登记即可关闭；分支被删除后仍可用原分支名登记。
+  - 平台以 squash 或 rebase 方式合入时，任务分支顶端不是主分支的祖先，义务不会到期，`status --post-merge` 也不会列出它。这是 0.16.0 就有的限制，合入后需要人或 Agent 对照 PR/MR 自行确认并登记。
 - `merge` 在哪个 Worktree 里运行都可以，但主 Worktree 必须停在主分支、洁净、没有进行中的 merge、rebase 或 cherry-pick。
   只用一个目录工作时，合并前先切回主分支。
 - 合并有冲突时，在任务分支上 `git merge main` 解决冲突并提交，再重新 verify、review。
@@ -1782,11 +1789,12 @@ harness reviewer set mine --client command --command-json '["my-reviewer","--jso
 | 命令 | 用途 |
 | --- | --- |
 | `verify [--branch <分支>] [--head <ref>] [--base <ref>] [--plan] [--no-reuse] [--json]` | 验证并写签名证据；`--plan` 只列计划，`--no-reuse` 不复用已有结果，`--json` 输出 JSON |
-| `attest --branch <分支> --check <检查ID> --command <实际命令> --report <报告> [--note <摘要>]` | 登记已成功的外部 `extended` 检查，绑定检查定义与覆盖文件 |
+| `attest --branch <分支> --check <检查ID> --command <实际命令> --report <报告> [--note <摘要>] [--at <提交>]` | 登记已成功的外部 `extended` 检查，绑定检查定义与覆盖文件；合并后检查用 `--at` 指定被测的主分支提交，并关闭对应义务 |
 | `review --branch <分支>` | 独立评审 |
 | `review-plan --branch <分支> [--all] [--timeout-seconds <秒>] [--attempt-timeout-seconds <秒>] [--max-queries <次>]` | 方案评审，实时报告进度与回退，默认只展示 high 及以上的发现，见“方案评审” |
 | `reviewer list`、`set`、`remove`、`prefer`、`test` | 管理本机评审者：客户端、模型、推理强度、端点与 key，见“独立评审的后端” |
-| `status [--branch <分支>]` | 只读汇总还差哪几步才能交付，默认看当前分支 |
+| `status [--branch <分支>]` | 只读汇总还差哪几步才能交付，默认看当前分支；已合入但合并后验收待完成时退出码为 1 |
+| `status --post-merge [--branch <分支>]` | 列出到期而未登记的合并后验收义务，有待办时退出码为 1 |
 | `confirm --branch <分支> [--yes] [--note <说明>]` | 查看门禁改动摘要；带 `--yes` 由人记录确认 |
 | `approve --branch <分支> [--yes --note <原话>]` | 查看任务方案与授权状态；用户同意实施后由 Agent 带 `--yes` 照录原话记录授权 |
 | `merge --branch <分支> [--dry-run]` | 受控合并到主分支（本地交付） |

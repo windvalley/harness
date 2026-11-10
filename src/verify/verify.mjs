@@ -25,6 +25,7 @@ import { selectGoPackages } from "./selectors/go-packages.mjs";
 import { evaluateCoverage, evaluateTdd, testEvidenceChecks, testEvidenceProblems, TDD_ID } from "./testevidence.mjs";
 import { checkFingerprint, checkPhase, checkScopeDigest, POST_MERGE } from "./checks.mjs";
 import { readAttestation } from "./attestation.mjs";
+import { hasObligation } from "./obligation.mjs";
 
 export { checkFingerprint } from "./checks.mjs";
 
@@ -77,13 +78,23 @@ export function verifyConfigDigest(project) {
 
 export function postMergeAcceptanceProblem({ root, project, branch, head, base, postMerge }) {
   const rel = acceptancePath(project, branch);
-  const text = showBlob(root, head, rel) ?? showBlob(root, base, rel);
-  if (!splitAcceptance(text).postMergeText || postMerge.length > 0) return null;
+  const baseText = showBlob(root, base, rel);
+  const text = showBlob(root, head, rel) ?? baseText;
+  const section = splitAcceptance(text).postMergeText;
+  if (!section || postMerge.length > 0) return null;
+  // 这条分支已经有合并后验收义务时，只有本次改动修改了这个章节才要求命中检查：
+  // 合入后追加的无关提交不该因为没命中检查而被拒，义务本身由义务记录跟踪。
+  const owed = hasObligation({ root, branch });
+  if (owed && splitAcceptance(baseText).postMergeText === section) return null;
   return {
     id: "acceptance:post-merge",
     def: digest(text),
-    reason: "验收清单包含合并后验收条目，但本次改动没有对应的 post-merge 检查",
-    fix: "在 .harness/verify.json 为对应验收配置 tier=extended、phase=post-merge 的检查，并确保 when 命中本次改动；不需要后置验收时删除该章节",
+    reason: owed
+      ? "本次改动修改了验收清单的合并后验收条目，但没有对应的 post-merge 检查"
+      : "验收清单包含合并后验收条目，但本次改动没有对应的 post-merge 检查",
+    fix: owed
+      ? "在 .harness/verify.json 配置 tier=extended、phase=post-merge 且 when 命中本次改动的检查，或把该章节改回合入时的内容"
+      : "在 .harness/verify.json 为对应验收配置 tier=extended、phase=post-merge 的检查，并确保 when 命中本次改动；不需要后置验收时删除该章节",
   };
 }
 

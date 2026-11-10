@@ -5,6 +5,7 @@ import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { appendLedger, dataDir, readRecord, writeRecord } from "../lib/store.mjs";
 import { MergeError, checkGates } from "../merge/merge.mjs";
+import { writeObligations } from "../verify/obligation.mjs";
 import { reviewerSummary } from "../review/review.mjs";
 import { fetchRemoteMain, pushCommit, remoteBranchTip } from "./remote.mjs";
 import { createRequest, findOpen, managedSection, platformRepo, platformStatus, replaceManagedSection, updateRequest } from "./platform.mjs";
@@ -199,6 +200,9 @@ export async function submitTask({ cwd, branch, log = console.error }) {
       "main_moved",
     );
   }
+
+  // 平台合入之前就写下合并后验收义务：合入并 sync 后到期，不依赖 submit 之后还有没有机会再运行。
+  writeObligations({ root, branch, tip: branchCommit, items: gates.postMergeChecks });
 
   // 先查有没有已存在的 PR/MR：查询失败时还没推送，远程保持原样；推送之后再查会把失败留在半路。
   const open = findOpen({ provider: settings.provider, branch, base: mainRef, repo, cwd: root, env: process.env });

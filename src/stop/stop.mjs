@@ -3,11 +3,12 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { acceptancePath, loadGateProject, loadGuardProject } from "../lib/config.mjs";
 import { matchAny } from "../lib/glob.mjs";
-import { changedPaths, git, showBlob, worktreeEntries } from "../lib/git.mjs";
+import { changedPaths, git, gitOk, showBlob, worktreeEntries } from "../lib/git.mjs";
 import { appendLedger } from "../lib/store.mjs";
 import { listEscalations } from "../escalate/escalate.mjs";
 import { approvalState, planSettings } from "../plan/plan.mjs";
 import { branchStatus } from "../status.mjs";
+import { collectObligations } from "../verify/obligation.mjs";
 import { readSession, saveSession } from "./session.mjs";
 
 // 收尾检查：Agent 要结束一轮回复时，核对本会话推进过的任务是否已经交付，没有交付又没有上报阻塞就让它接着做。
@@ -93,6 +94,28 @@ function awaitingApproval({ root, branch, status, worktree, dirty }) {
   return !approvalState({ root, branch, acceptanceText: text }).approved;
 }
 
+/** 分支已被删除（例如合并后清理了 Worktree）时，只要还有到期而未登记的合并后验收义务，就仍然要接着做。 */
+function missingBranchOwed({ root, branch, status, escalations }) {
+  let open;
+  try {
+    const mainCommit = gitOk(root, ["rev-parse", "--verify", `${status.mainRef}^{commit}`]);
+    open = collectObligations({ root, mainCommit, branch }).filter((item) => item.due && !item.closed);
+  } catch {
+    return null;
+  }
+  if (open.length === 0) return null;
+  const newest = open.map((item) => item.createdAt).sort().at(-1);
+  if (escalations.some((item) => item.context?.branch === branch && Date.parse(item.openedAt) >= Date.parse(newest))) return null;
+  const item = open[0];
+  return {
+    branch,
+    status,
+    dirty: [],
+    missing: `合并后验收待完成：${[...new Set(open.map((entry) => entry.checkId))].join("、")}`,
+    next: `${item.howToVerify}；成功后运行 harness attest --branch ${branch} --check ${item.checkId} --command "<实际命令>" --report <报告>`,
+  };
+}
+
 /** 判断一个分支还欠什么。返回 null 表示不需要 Agent 接着做：已交付、要等人，或者已经上报。 */
 function owedBy({ root, branch, escalations, worktrees }) {
   let status;
@@ -102,7 +125,7 @@ function owedBy({ root, branch, escalations, worktrees }) {
     // 判断不了的分支不拦，不能因为门禁自己出错把会话困住。
     return null;
   }
-  if (status.codes.includes("branch_missing")) return null;
+  if (status.codes.includes("branch_missing")) return missingBranchOwed({ root, branch, status, escalations });
   const worktree = worktrees.get(branch) ?? null;
   const dirty = dirtyPaths(worktree);
   // 方案交出后停下等用户同意实施，正是规则要求的；已经动了代码却没有授权，同样要等用户。

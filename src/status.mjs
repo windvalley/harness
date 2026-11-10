@@ -4,6 +4,7 @@ import { changedPaths, gitOk, isAncestor, mainWorktreeRoot, refExists, showBlob 
 import { readRecord } from "./lib/store.mjs";
 import { EVIDENCE_KIND } from "./verify/verify.mjs";
 import { readAttestation } from "./verify/attestation.mjs";
+import { collectObligations } from "./verify/obligation.mjs";
 import { REVIEW_KIND, reviewerSummary } from "./review/review.mjs";
 import { CONFIRM_KIND } from "./confirm/confirm.mjs";
 import { mainWorktreeProblems, planMergeResult, reuseDecision, reviewStaleFiles } from "./merge/merge.mjs";
@@ -22,24 +23,51 @@ function confirmFor(project, root, branch) {
   }
 }
 
-function postMergeStatus({ project, root, branch, branchCommit, result, add }) {
-  const evidence = readRecord(root, EVIDENCE_KIND, branchCommit);
-  const requirements = evidence.ok ? (evidence.record.postMerge ?? []) : [];
-  const pending = [];
-  const completed = [];
-  for (const item of requirements) {
+/** 旧任务（0.16.0）只有证据、没有义务记录时，按当时的登记记录判断有没有完成。 */
+function legacyClosedBy({ project, root }) {
+  return ({ item, branch, tip }) => {
     const check = item.check ?? project.verify.checks.find((candidate) => candidate.id === item.id) ?? item;
-    const found = readAttestation({ root, branch, check, head: branchCommit });
-    if (found.ok) completed.push(item.id);
-    else pending.push({ ...item, attestationProblem: found.reason });
-  }
-  result.postMerge = { requirements: requirements.map((item) => item.id), pending, completed };
+    return readAttestation({ root, branch, check, head: tip }).ok;
+  };
+}
+
+const uniqueBy = (items, key) => [...new Map(items.map((item) => [key(item), item])).values()];
+
+function postMergeStatus({ project, root, branch, mainCommit, result, add }) {
+  const due = collectObligations({ root, mainCommit, branch, legacyClosed: legacyClosedBy({ project, root }) }).filter((item) => item.due);
+  const open = due.filter((item) => !item.closed);
+  const pending = uniqueBy(open, (item) => item.checkId).map((item) => ({ id: item.checkId, howToVerify: item.howToVerify, attestationProblem: item.problem ?? "尚未登记" }));
+  const pendingIds = new Set(pending.map((item) => item.id));
+  const requirements = [...new Set(due.map((item) => item.checkId))];
+  const completed = requirements.filter((id) => !pendingIds.has(id));
+  result.postMerge = { requirements, pending, completed };
   result.complete = pending.length === 0;
   if (pending.length > 0) {
-    add("post-merge", "fail", `合并后验收待完成：${pending.map((item) => `${item.id}（${item.howToVerify}）`).join("；")}`);
+    const detail = pending.map((item) => `${item.id}（${item.howToVerify}）${item.attestationProblem === "尚未登记" ? "" : `；${item.attestationProblem}`}`).join("；");
+    add("post-merge", "fail", `合并后验收待完成：${detail}`);
   } else if (requirements.length > 0) {
     add("post-merge", "done", `合并后验收已登记：${completed.join("、")}`);
   }
+}
+
+/** 全仓库到期且未关闭的合并后验收义务，供 status --post-merge、merge 与 sync 的提示使用。 */
+export function openPostMergeObligations({ cwd }) {
+  const project = loadGateProject(cwd, {});
+  const root = project.root;
+  const mainRef = mainBranch(project);
+  const mainCommit = gitOk(root, ["rev-parse", "--verify", `${mainRef}^{commit}`]);
+  const open = collectObligations({ root, mainCommit, legacyClosed: legacyClosedBy({ project, root }) }).filter((item) => item.due && !item.closed);
+  return { mainRef, open };
+}
+
+export function formatObligations(open) {
+  const lines = [];
+  for (const item of open) {
+    lines.push(`待验收 ${item.checkId}（分支 ${item.branch}）：${item.howToVerify}`);
+    lines.push(`  登记: harness attest --branch ${item.branch} --check ${item.checkId} --command "<实际命令>" --report <报告>`);
+    if (item.problem) lines.push(`  注意: ${item.problem}`);
+  }
+  return lines;
 }
 
 /**
@@ -75,7 +103,7 @@ export function branchStatus({ cwd, branch }) {
     add("branch", "done", "该分支已经包含在主分支中");
     result.ready = true;
     result.merged = true;
-    postMergeStatus({ project, root, branch, branchCommit, result, add });
+    postMergeStatus({ project, root, branch, mainCommit, result, add });
     return result;
   }
   add("branch", "ok", `待合入 ${branchCommit.slice(0, 10)} -> ${mainRef}`);
