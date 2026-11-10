@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
+import { redact } from "./lib/redact.mjs";
 import { deliverySettings, describeDelivery, loadCurrentProject, loadGateProject, loadGuardProject, loadTrustedProject, mainBranch } from "./lib/config.mjs";
 import { changedPaths, git, gitOk, mainWorktreeRoot, mergeBase, repoRoot, resolveCommit } from "./lib/git.mjs";
 import { keyStatus, readLedger, rotateKey, scanRecords } from "./lib/store.mjs";
@@ -160,7 +161,7 @@ async function cmdVerify(argv) {
   for (const item of outcome.results) {
     lines.push(`  ${item.skipped ? "SKIP" : item.exit === 0 ? "PASS" : "FAIL"} ${item.id}${item.reused ? " (复用)" : ""}`);
   }
-  for (const item of outcome.attested ?? []) lines.push(`  ATTESTED ${item.id}: ${item.command}（报告 ${item.report.sha256.slice(0, 12)}）`);
+  for (const item of outcome.attested ?? []) lines.push(`  ATTESTED ${item.id}: ${redact(item.command)}（报告 ${item.report.sha256.slice(0, 12)}）`);
   for (const item of outcome.notExecuted) lines.push(`  NOT_EXECUTED ${item.id}: ${item.reason}`);
   for (const item of outcome.postMerge ?? []) lines.push(`  POST_MERGE ${item.id}: ${item.howToVerify}`);
   for (const item of outcome.advisory ?? []) lines.push(`  ADVISORY ${item.id}: ${item.hint}`);

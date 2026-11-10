@@ -9,6 +9,7 @@ import { endpointHost, loadLocalReviewers, orderReviewers } from "./reviewers.mj
 import { detectSessionModel } from "./session.mjs";
 import { runPlanProcess } from "./plan-process.mjs";
 import { splitAcceptance } from "../lib/acceptance.mjs";
+import { redact } from "../lib/redact.mjs";
 
 export const REVIEW_KIND = "review";
 // diff 上限可以在 review.maxDiffChars 里调整；提交说明与文件统计各自另有上限，不挤占 diff 的额度。
@@ -822,7 +823,7 @@ export async function reviewBranch({ cwd, branch, log = console.error, reviewer 
     `状态: ${evidence.record.status}`,
     `变更文件数: ${evidence.record.changedCount}`,
     ...(evidence.record.checks ?? []).map((check) => `- ${check.id}: exit=${check.exit}${check.reused ? " (复用)" : ""} ${check.cmd}${check.id.startsWith("harness:") && check.note ? ` - ${check.note}` : ""}`),
-    ...(evidence.record.attested ?? []).map((item) => `- 外部证据 ${item.id}: 已登记于 ${item.attestedAt}\n  命令: ${item.command}\n  报告: ${item.report.path}（SHA-256 ${item.report.sha256}）\n  报告摘要:\n${item.report.excerpt}`),
+    ...(evidence.record.attested ?? []).map((item) => `- 外部证据 ${item.id}: 已登记于 ${item.attestedAt}\n  命令: ${redact(item.command)}\n  报告: ${item.report.path}（SHA-256 ${item.report.sha256}）\n  报告摘要:\n${redact(item.report.excerpt)}`),
     ...(evidence.record.postMerge ?? []).map((item) => `- 合并后检查 ${item.id}: ${item.howToVerify}（不属于合并前证据）`),
     ...(evidence.record.notExecuted ?? []).map((item) => `- 未执行 ${item.id}: ${item.reason}`),
     ...(evidence.record.advisory ?? []).map((item) => `- 咨询项 ${item.id}: ${item.hint}`),

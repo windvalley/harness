@@ -108,9 +108,9 @@ export function attestCheck({ cwd, branch, checkId, command, report, note = "", 
     tree: treeOf(root, head),
     definition: checkFingerprint(check),
     scope: checkScopeDigest(root, head, check),
-    command: String(command).trim(),
+    command: redact(String(command).trim()),
     report: reportFile(cwd, report),
-    note: String(note ?? "").trim(),
+    note: redact(String(note ?? "").trim()),
     createdAt: new Date().toISOString(),
   });
   const closed = phase === POST_MERGE ? closeObligations({ root, branch, branchTip: branchHead, checkId, at: head, reportSha256: record.report.sha256 }) : [];

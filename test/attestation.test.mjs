@@ -6,6 +6,9 @@ import { APPROVE, commit, fakeReviewer, git, makeRepo } from "./helpers.mjs";
 import { verifyConfigProblems } from "../src/verify/verify.mjs";
 import { attestCheck } from "../src/verify/attestation.mjs";
 import { splitAcceptance } from "../src/lib/acceptance.mjs";
+import { redact } from "../src/lib/redact.mjs";
+import { readdirSync } from "node:fs";
+import { PACKAGE_ROOT, sh } from "./helpers.mjs";
 
 let repos = [];
 afterEach(() => {
@@ -215,5 +218,89 @@ describe("合并后验收", () => {
     assert.equal(problems.length, 2);
     assert.match(problems[0].reason, /必须使用 tier extended/);
     assert.match(problems[1].reason, /phase 只能是/);
+  });
+});
+
+describe("命令与备注脱敏", () => {
+  const SECRETS = ["tok-9f8e7d", "pw-1a2b3c", "key-77aa88", "bearer-zz99yy", "env-secret-55"];
+  const COMMAND = `deploy --token ${SECRETS[0]} --password=${SECRETS[1]} API_KEY=${SECRETS[2]} -H "Authorization: Bearer ${SECRETS[3]}" DB_PASSWORD="${SECRETS[4]}" --grep login`;
+
+  const allText = (dir) => {
+    const out = [];
+    const walk = (path) => {
+      for (const entry of readdirSync(path, { withFileTypes: true })) {
+        const file = join(path, entry.name);
+        if (entry.isDirectory()) walk(file);
+        else out.push(readFileSync(file, "utf8"));
+      }
+    };
+    walk(dir);
+    return out.join("\n");
+  };
+
+  function registerWithSecrets(repo) {
+    const report = join(repo.root, "..", "browser-report.md");
+    writeFileSync(report, "224/224 passed\nAuthorization: Bearer report-secret-123\n");
+    return repo.cli("attest", "--branch", "task/a", "--check", "browser", "--command", COMMAND, "--report", report, "--note", `用 --token ${SECRETS[0]} 跑过`);
+  }
+
+  test("登记、验证输出、证据与评审提示里都看不到命令和备注里的凭据", () => {
+    const repo = setup();
+    const head = task(repo);
+    const registered = registerWithSecrets(repo);
+    assert.equal(registered.status, 0, registered.stderr);
+    const verified = repo.cli("verify", "--branch", "task/a");
+    assert.equal(verified.status, 0, verified.stderr);
+    assert.match(verified.stderr, /ATTESTED browser: deploy --token \*\*\*/);
+    fakeReviewer(repo, APPROVE);
+    assert.equal(repo.cli("review", "--branch", "task/a").status, 0);
+
+    const record = evidence(repo, head).attested[0];
+    assert.match(record.command, /--grep login/, "没有凭据的部分保持原样");
+    const everything = [registered.stdout, registered.stderr, verified.stdout, verified.stderr, allText(repo.env.HARNESS_DATA_DIR), readFileSync(join(repo.root, "..", "prompt.log"), "utf8")].join("\n");
+    for (const secret of [...SECRETS, "report-secret-123"]) assert.equal(everything.includes(secret), false, `不应出现 ${secret}`);
+  });
+
+  test("0.16.0 留下的原始命令在写进评审提示与验证输出时同样脱敏", () => {
+    const repo = setup();
+    const head = task(repo);
+    assert.equal(attest(repo).status, 0);
+    const dir = join(repo.env.HARNESS_DATA_DIR, "attestation");
+    const file = join(dir, readdirSync(dir).find((name) => name.endsWith(".json")));
+    const { schema, kind, key, signature, keyId, ...payload } = JSON.parse(readFileSync(file, "utf8"));
+    payload.command = COMMAND;
+    payload.report = { ...payload.report, excerpt: "Authorization: Bearer report-secret-123" };
+    const script = `import { writeRecord } from ${JSON.stringify(join(PACKAGE_ROOT, "src/lib/store.mjs"))}; writeRecord(process.argv[1], "attestation", process.argv[2], JSON.parse(process.argv[3]));`;
+    assert.equal(sh(repo.root, process.execPath, ["--input-type=module", "-e", script, repo.root, key, JSON.stringify(payload)], repo.env).status, 0);
+
+    const verified = repo.cli("verify", "--branch", "task/a", "--no-reuse");
+    assert.equal(verified.status, 0, verified.stderr);
+    fakeReviewer(repo, APPROVE);
+    assert.equal(repo.cli("review", "--branch", "task/a").status, 0);
+    const shown = `${verified.stderr}\n${readFileSync(join(repo.root, "..", "prompt.log"), "utf8")}`;
+    for (const secret of [...SECRETS, "report-secret-123"]) assert.equal(shown.includes(secret), false, `不应出现 ${secret}`);
+    assert.ok(head);
+  });
+
+  test("规则只遮凭据，不误伤普通命令参数", () => {
+    const masked = [
+      ["tool --token abc123", "tool --token ***"],
+      ["tool --token=abc123 --x 1", "tool --token=*** --x 1"],
+      ["tool --client-secret 'a b c' go", "tool --client-secret *** go"],
+      ["tool --api-key K1", "tool --api-key ***"],
+      ["GITHUB_TOKEN=ghp_x pnpm e2e", "GITHUB_TOKEN=*** pnpm e2e"],
+      ["AWS_SECRET_ACCESS_KEY=abc run", "AWS_SECRET_ACCESS_KEY=*** run"],
+      ['PASSWORD="a b" run', "PASSWORD=*** run"],
+      ['curl -H "Authorization: Bearer abc.def" url', 'curl -H "Authorization: ***" url'],
+      ["curl -H 'Authorization: Basic dXNlcjpwdw==' url", "curl -H 'Authorization: ***' url"],
+      ["echo Bearer abcdefgh12345", "echo Bearer ***"],
+      ["git clone https://user:tok@host/repo", "git clone https://***@host/repo"],
+      ["open https://h/?access_token=abc&x=1", "open https://h/?access_token=***&x=1"],
+    ];
+    for (const [input, expected] of masked) assert.equal(redact(input), expected, input);
+    for (const text of ["pnpm e2e --grep login", "tool --token-count 5", "tool --tokenizer fast", "KEYBOARD=us run", "run --key-file a.pem", "monkey=1 run"]) {
+      assert.equal(redact(text), text, `不应改动 ${text}`);
+    }
+    for (const [input] of masked) assert.equal(redact(redact(input)), redact(input), `重复脱敏结果不变: ${input}`);
   });
 });
