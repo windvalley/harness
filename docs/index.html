@@ -736,6 +736,7 @@ footer { border-top: 1px solid var(--line); color: var(--muted); font-size: .88r
       <li><strong>发现问题继续修</strong>：验收失败会保持待完成，Agent 新建修复分支并重新走门禁；需要回滚、业务取舍或其他用户决策时，才上报并等待。</li>
       <li><strong>注意脱敏</strong>：报告摘要会提供给评审者；原始命令不会写进 PR/MR 描述，平台只看到检查名和报告哈希。</li>
     </ul>
+    <p>从配置、验收清单到合并、登记和失败修复的完整命令与输出，见<a href="https://github.com/windvalley/harness/blob/main/docs/reference.md#合并后验收完整示例">参考手册里的合并后验收示例</a>。</p>
 
     <h3 id="test-evidence">测试证据：先红后绿与改动行覆盖率</h3>
     <p>“检查通过”证明不了“测试真的约束了这次改动”。<code>verify.json</code> 里两个可选字段补上这一环，由验证自己复算，不靠 Agent 自述：</p>

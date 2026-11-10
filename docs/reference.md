@@ -622,6 +622,7 @@ harness merge  --branch feat/login   # 本地交付：核对证据与评审，�
 - `extended` 检查在外部成功后，用 `harness attest --branch <分支> --check <检查ID> --command "<实际命令>" --report <报告>` 登记；下一次 `verify` 把它列为 `ATTESTED`，评审会收到实际命令与报告摘要。
   报告最多 10 MiB，末尾最多 80 行、6000 字符作为摘要进入评审提示并发往评审端点，登记前必须确认已脱敏；密钥与凭据文件会被拒绝。
   原始命令只用于本机证据与评审，不写入 PR/MR 描述；平台只收到检查 ID 与报告 SHA-256。
+  需要后置到合并之后的检查见“合并后验收：完整示例”。
 - 提交之后、`verify` 之前按 `.harness/rules/method-review.md` 自审：验收清单能逐条对上证据、提交说明与 diff 一致且格式合规、没有漏提交的文件与无关改动、diff 之外的调用方与文档已经一起改。
   自审不是门禁，不留记录，结论也不交给独立评审。
   自审改出的新提交会让证据与评审作废，所以它放在 `verify` 之前，不放在 `verify` 与 `review` 之间。
@@ -741,6 +742,147 @@ git -C <主 Worktree> worktree unlock <Worktree 路径>
 - 没有清单时需求符合度记为 `unknown`，评审只评工程质量，合并时打印提示。
 - `config.json` 的 `intent.mode` 设为 `required` 时，没有清单不能合并；设为 `off` 时不再提示。
 - `harness status` 的 `acceptance` 一项给出清单的实际路径和有没有：有清单标 `ok`，没有清单标 `!!`，`required` 下没有清单标 `FAIL` 并算作阻塞，`off` 时标 `-`，表示未启用清单要求。
+
+### 合并后验收：完整示例
+
+下面用一个任务从配置走到完成，说明合并后验收怎么用。
+没有这类需求的项目不需要配置，流程不会多出任何步骤。
+
+**什么时候用**
+
+- 适用：检查的结果取决于合入主分支之后的集成状态。
+  例如登录改动要穿过主分支上已有的网关路由与共享配置，冒烟测试只有在合入后的主 Worktree 里跑才有意义。
+- 不适用：能在任务 Worktree 里跑的单元测试、构建、端到端测试。
+  它们仍然配成 `gate`，或者在合并前跑完用 `attest` 登记，不要后置。
+- 不适用：只是“需要真实浏览器或登录态”。
+  这类检查在合并前外部执行即可，不依赖主分支状态，见“一次任务”里的 `attest` 说明。
+- 不适用：把部署测试环境当作合并后验收。
+  只有必须等代码进入主分支才能取得证据的检查才后置。
+
+**1. 配置检查与验收清单**
+
+在 `.harness/verify.json` 里加一项 `extended` 检查并标 `phase: "post-merge"`。
+`verify.json` 属于门禁文件，改动要人确认。
+
+```json
+{
+  "id": "integrated-smoke",
+  "tier": "extended",
+  "phase": "post-merge",
+  "when": ["src/**"],
+  "reason": "需要目标分支集成状态",
+  "howToVerify": "在合并后的主 Worktree 运行 pnpm smoke:integrated"
+}
+```
+
+在验收清单 `.harness/acceptance/feat-login.md` 里，把后置条目写进 `## 合并后验收` 二级章节：
+
+```markdown
+## 应该发生
+
+- 用户用手机号和验证码可以登录。
+
+## 合并后验收
+
+- 主分支集成后，登录冒烟测试通过。
+```
+
+清单有这个章节，本次改动却没有选中任何 `post-merge` 检查时，`verify` 以 `acceptance:post-merge` 失败，后置义务不会被静默跳过。
+
+**2. 合并前：照常验证、评审**
+
+```bash
+harness verify --plan --branch feat/login
+```
+
+```text
+相对 main 变更 2 个文件
+  RUN  unit  pnpm test
+  POST_MERGE integrated-smoke  在合并后的主 Worktree 运行 pnpm smoke:integrated
+```
+
+`unit` 是项目已有的 `gate` 检查。
+`POST_MERGE` 表示这项检查会在合并后才要求登记，不会在 `verify` 里执行，也不阻塞合并。
+`harness verify`、`harness review` 照常运行：`verify` 的结果里同样列出 `POST_MERGE integrated-smoke`，`review` 只逐条核对合并前的清单内容，不评判 `## 合并后验收` 章节。
+`harness status --branch feat/login` 里这项显示为 `[-] evidence:postMerge`，并提示“不阻塞本次交付”。
+
+合并前提前登记会被拒绝，因为证据要绑定合入后的主分支提交：
+
+```text
+外部证据登记失败: 检查 integrated-smoke 属于合并后验收，必须在分支合入 main 后执行并登记；远程交付请先等平台合入并运行 harness sync
+```
+
+**3. 合并：交付完成，但任务还没有完成**
+
+```bash
+harness merge --branch feat/login
+```
+
+合并结果 JSON 的 `postMergeChecks` 列出还欠的验收项及其 `howToVerify`。
+之后 `harness status --branch feat/login` 显示：
+
+```text
+  [ok] branch: 该分支已经包含在主分支中
+  [FAIL] post-merge: 合并后验收待完成：integrated-smoke（在合并后的主 Worktree 运行 pnpm smoke:integrated）
+
+已合入主分支；合并后验收待完成：integrated-smoke
+```
+
+这里的 `FAIL` 只表示还没有登记，不表示冒烟失败。
+会话在这个状态下收尾时，收尾检查会拦下，并给出 `howToVerify` 与填好分支名、检查 ID 的 `harness attest` 命令。
+
+**4. 在主 Worktree 执行并登记**
+
+```bash
+cd <主 Worktree>
+pnpm smoke:integrated | tee /tmp/smoke-login.md
+harness attest --branch feat/login --check integrated-smoke \
+  --command "pnpm smoke:integrated" \
+  --report /tmp/smoke-login.md
+```
+
+```text
+已登记 feat/login 的 post-merge 外部证据 integrated-smoke（检查范围 a809357dc3ae，报告 183673f4d6e2）
+```
+
+再看 `harness status --branch feat/login`：
+
+```text
+  [ok] branch: 该分支已经包含在主分支中
+  [ok] post-merge: 合并后验收已登记：integrated-smoke
+
+交付与合并后验收均完成
+```
+
+- `attest` 只登记已经成功的验证，没有“登记失败”这个状态：冒烟没通过就不要登记，任务保持待完成。
+- 证据绑定登记时的主分支提交和检查覆盖文件。
+  状态核对用任务证据里保存的检查定义快照，主分支之后改了 `verify.json`，不会让已经登记的任务重新待完成。
+- 报告末尾最多 80 行、6000 字符会作为摘要保存，登记前确认已脱敏。
+  PR/MR 描述不写原始命令。
+
+**远程交付**
+
+把第 3 步的 `merge` 换成 `harness submit --branch feat/login`，平台合入后运行 `harness sync`，再按第 4 步登记。
+`sync` 之前登记同样会被拒绝。
+PR/MR 描述里这项显示为 `合并后验收 integrated-smoke: <howToVerify>（平台合入并 sync 后完成）`。
+描述只写检查 ID 与验收方式，不写 `attest` 登记的实际命令。
+
+**冒烟失败时**
+
+冒烟失败说明合入的代码有问题，保持待完成，不要登记。
+按普通任务处理：新建修复分支（例如 `fix/login-gateway`），走完 verify、review 与合入。
+修复分支只要改到该检查的 `when` 范围，合入后就同样出现这项合并后验收。
+
+修复合入、冒烟通过后，需要对修复分支和原分支各登记一次：
+
+```bash
+harness attest --branch fix/login-gateway --check integrated-smoke --command "pnpm smoke:integrated" --report /tmp/smoke-login.md
+harness attest --branch feat/login        --check integrated-smoke --command "pnpm smoke:integrated" --report /tmp/smoke-login.md
+```
+
+登记是按分支分别记录的，修复分支登记不会让原分支自动完成。
+不补登记原分支，`harness status --branch feat/login` 会一直显示待完成，收尾检查也会继续拦下。
+这次冒烟跑在已经同时包含两个分支的主分支上，同一份通过的报告可以用于两次登记。
 
 ### 评审结论
 
