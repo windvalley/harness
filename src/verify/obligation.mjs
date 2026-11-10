@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { gitOk, isAncestor, refExists, resolveCommit } from "../lib/git.mjs";
+import { gitOk, refExists, resolveCommit } from "../lib/git.mjs";
+import { landedIn } from "../lib/landed.mjs";
 import { appendLedger, checkRecord, dataDir, readRecord, sha256, writeRecord } from "../lib/store.mjs";
 
 export const OBLIGATION_KIND = "obligation";
@@ -77,7 +78,7 @@ function localBranches(root) {
 export function collectObligations({ root, mainCommit, branch = null, legacyClosed = null }) {
   const out = [];
   const seen = new Set();
-  const dueOf = (tip) => isAncestor(root, tip, mainCommit);
+  const dueOf = (tip) => landedIn(root, tip, mainCommit);
 
   for (const { key, raw, verified } of allRaw(root)) {
     if (branch && raw.branch !== branch) continue;
@@ -135,7 +136,7 @@ export function closeObligations({ root, branch, branchTip, checkId, at, reportS
   for (const { key, raw, verified } of allRaw(root)) {
     if (raw.checkId !== checkId || typeof raw.branchTip !== "string" || typeof raw.branch !== "string") continue;
     if (verified.ok && raw.closedBy) continue;
-    if (!isAncestor(root, raw.branchTip, at)) continue;
+    if (!landedIn(root, raw.branchTip, at)) continue;
     writeRecord(root, OBLIGATION_KIND, key, {
       branch: raw.branch,
       branchTip: raw.branchTip,

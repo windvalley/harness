@@ -5,6 +5,7 @@ import { readRecord } from "./lib/store.mjs";
 import { EVIDENCE_KIND } from "./verify/verify.mjs";
 import { readAttestation } from "./verify/attestation.mjs";
 import { collectObligations } from "./verify/obligation.mjs";
+import { landedIn } from "./lib/landed.mjs";
 import { REVIEW_KIND, reviewerSummary } from "./review/review.mjs";
 import { CONFIRM_KIND } from "./confirm/confirm.mjs";
 import { mainWorktreeProblems, planMergeResult, reuseDecision, reviewStaleFiles } from "./merge/merge.mjs";
@@ -99,7 +100,7 @@ export function branchStatus({ cwd, branch }) {
   result.branchCommit = branchCommit;
   result.mainCommit = mainCommit;
 
-  if (isAncestor(root, branchCommit, mainCommit)) {
+  if (landedIn(root, branchCommit, mainCommit)) {
     add("branch", "done", "该分支已经包含在主分支中");
     result.ready = true;
     result.merged = true;

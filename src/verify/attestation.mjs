@@ -6,6 +6,7 @@ import { redact } from "../lib/redact.mjs";
 import { appendLedger, readRecord, sha256, writeRecord } from "../lib/store.mjs";
 import { checkFingerprint, checkPhase, checkScopeDigest, POST_MERGE } from "./checks.mjs";
 import { closeObligations, obligationTip } from "./obligation.mjs";
+import { landedIn } from "../lib/landed.mjs";
 
 export const ATTESTATION_KIND = "attestation";
 const MAX_REPORT_BYTES = 10 * 1024 * 1024;
@@ -94,7 +95,7 @@ export function attestCheck({ cwd, branch, checkId, command, report, note = "", 
       }
       if (!isAncestor(root, head, mainHead)) throw new Error(`--at ${at} 不是 ${mainRef} 的祖先：被测提交必须已经合入 ${mainRef}`);
     }
-    if (!isAncestor(root, branchHead, head)) {
+    if (!landedIn(root, branchHead, head)) {
       throw new Error(`检查 ${checkId} 属于合并后验收，必须在分支合入 ${mainRef} 后执行并登记；远程交付请先等平台合入并运行 harness sync`);
     }
   }

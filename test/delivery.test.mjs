@@ -1254,3 +1254,158 @@ describe("本地交付 delivery.push", () => {
     assert.match(ready.stdout, /\[ok\] delivery: 本地交付.*推送到 origin 的主分支/);
   });
 });
+
+describe("平台以 squash 或 rebase 合入", () => {
+  const SMOKE_VERIFY = {
+    version: 1,
+    docOnly: { match: ["docs/**", "**/*.md"], exclude: [] },
+    checks: [
+      { id: "unit", tier: "gate", when: ["src/**"], cmd: ["node", "-e", "process.exit(0)"] },
+      { id: "release-smoke", tier: "extended", phase: "post-merge", when: ["src/**"], reason: "需要合入后的产物", howToVerify: "对合入后的主分支产物运行冒烟脚本" },
+    ],
+    fullSuiteTriggers: { paths: [] },
+  };
+
+  const ID = ["-c", "user.name=platform", "-c", "user.email=platform@example.com", "-c", "commit.gpgsign=false"];
+  const platformGit = (dir, ...args) => {
+    const result = sh(dir, "git", args);
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  };
+
+  /** 模拟平台的 squash 合入：把任务分支压成远程主分支上的一个新提交。 */
+  function platformSquash(repo, remote, branch) {
+    const dir = join(repo.root, "..", `squash-${cloneSeq++}`);
+    platformGit(join(repo.root, ".."), "clone", "-q", remote, dir);
+    platformGit(dir, "merge", "--squash", `origin/${branch}`);
+    platformGit(dir, ...ID, "commit", "-q", "-m", `feat: squash ${branch} (#1)`);
+    platformGit(dir, "push", "-q", "origin", "main");
+    return platformGit(dir, "rev-parse", "HEAD");
+  }
+
+  /** 模拟平台的 rebase 合入：把任务分支的提交逐个重放到远程主分支顶端。 */
+  function platformRebase(repo, remote, branch) {
+    const dir = join(repo.root, "..", `rebase-${cloneSeq++}`);
+    platformGit(join(repo.root, ".."), "clone", "-q", remote, dir);
+    const base = platformGit(dir, "merge-base", "origin/main", `origin/${branch}`);
+    for (const commit of platformGit(dir, "rev-list", "--reverse", `${base}..origin/${branch}`).split("\n")) {
+      platformGit(dir, ...ID, "cherry-pick", commit);
+    }
+    platformGit(dir, "push", "-q", "origin", "main");
+    return platformGit(dir, "rev-parse", "HEAD");
+  }
+
+  function submitted({ verify = null, files = { "src/a.js": "a\n" } } = {}) {
+    const repo = setup({ delivery: GITHUB, ...(verify ? { project: { ".harness/verify.json": verify } } : {}) });
+    const remote = withRemote(repo);
+    fakePlatform(repo);
+    const head = repo.branch("task/a", files);
+    assert.equal(repo.cli("verify", "--branch", "task/a").status, 0);
+    writeReview(repo, head, "approve");
+    const result = repo.cli("submit", "--branch", "task/a");
+    assert.equal(result.status, 0, output(result));
+    return { repo, remote, head };
+  }
+
+  const status = (repo, branch = "task/a") => repo.cli("status", "--branch", branch);
+
+  test("squash 合入并 sync 后，status 识别为已合入，不再误报 review_stale", () => {
+    const { repo, remote, head } = submitted();
+    platformSquash(repo, remote, "task/a");
+    const synced = repo.cli("sync");
+    assert.equal(synced.status, 0, output(synced));
+    assert.notEqual(sh(repo.root, "git", ["merge-base", "--is-ancestor", head, "main"]).status, 0, "夹具：确实不是祖先关系");
+    const done = status(repo);
+    assert.equal(done.status, 0, done.stdout);
+    assert.match(done.stdout, /已经包含在主分支中/);
+    assert.doesNotMatch(done.stdout, /review_stale|评审之后主分支改了/);
+    assert.match(synced.stderr, /task\/a/);
+    assert.match(synced.stderr, /squash 或 rebase/);
+  });
+
+  test("rebase 合入且主分支在此之前已经前进，同样识别", () => {
+    const { repo, remote } = submitted({ files: { "src/a.js": "a\n", "src/b.js": "b\n" } });
+    remoteCommit(repo, remote, { "docs/other.md": "x\n" });
+    platformRebase(repo, remote, "task/a");
+    const synced = repo.cli("sync");
+    assert.equal(synced.status, 0, output(synced));
+    const done = status(repo);
+    assert.equal(done.status, 0, done.stdout);
+    assert.match(done.stdout, /已经包含在主分支中/);
+  });
+
+  test("合入之后主分支又在别处做了不冲突的改动，仍然识别", () => {
+    const { repo, remote } = submitted();
+    platformSquash(repo, remote, "task/a");
+    remoteCommit(repo, remote, { "docs/later.md": "later\n" });
+    assert.equal(repo.cli("sync").status, 0);
+    assert.match(status(repo).stdout, /已经包含在主分支中/);
+  });
+
+  test("合入之后主分支又改了同一个文件的同一处，认不出，保持待合入", () => {
+    const { repo, remote } = submitted();
+    platformSquash(repo, remote, "task/a");
+    remoteCommit(repo, remote, { "src/a.js": "changed later\n" });
+    assert.equal(repo.cli("sync").status, 0);
+    const shown = status(repo);
+    assert.equal(shown.status, 1);
+    assert.match(shown.stdout, /待合入/);
+  });
+
+  test("没有 submit 记录的分支，即使内容与主分支巧合一致也不识别", () => {
+    const { repo, remote } = submitted();
+    const base = git(repo.root, "rev-parse", "main");
+    platformSquash(repo, remote, "task/a");
+    assert.equal(repo.cli("sync").status, 0);
+    git(repo.root, "checkout", "-q", "-b", "task/same", base);
+    commit(repo.root, "feat(demo): 内容巧合\n\n- 与已合入内容相同\n- 从未提交过", { "src/a.js": "a\n" });
+    git(repo.root, "checkout", "-q", "main");
+    const shown = status(repo, "task/same");
+    assert.doesNotMatch(shown.stdout, /已经包含在主分支中/);
+    assert.match(shown.stdout, /待合入/);
+  });
+
+  test("submit 之后分支又追加了提交，记录与顶端不一致，不识别", () => {
+    const { repo, remote } = submitted();
+    platformSquash(repo, remote, "task/a");
+    assert.equal(repo.cli("sync").status, 0);
+    extend(repo, "task/a", { "docs/more.md": "more\n" });
+    const shown = status(repo);
+    assert.doesNotMatch(shown.stdout, /已经包含在主分支中/);
+  });
+
+  test("还没合入的已提交分支不会被误认", () => {
+    const { repo } = submitted();
+    const shown = status(repo);
+    assert.doesNotMatch(shown.stdout, /已经包含在主分支中/);
+    assert.match(shown.stdout, /待合入/);
+  });
+
+  test("squash 合入后合并后验收义务到期，登记后关闭", () => {
+    const { repo, remote } = submitted({ verify: SMOKE_VERIFY });
+    assert.equal(repo.cli("status", "--post-merge").status, 0, "合入前不到期");
+    platformSquash(repo, remote, "task/a");
+    const synced = repo.cli("sync");
+    assert.equal(synced.status, 0, output(synced));
+    assert.match(synced.stderr, /合并后验收待完成[\s\S]*release-smoke/);
+    assert.equal(repo.cli("status", "--post-merge").status, 1);
+
+    const report = join(repo.root, "..", "smoke-report.md");
+    writeFileSync(report, "release smoke passed\n");
+    const attested = repo.cli("attest", "--branch", "task/a", "--check", "release-smoke", "--command", "run release smoke", "--report", report);
+    assert.equal(attested.status, 0, attested.stderr);
+    assert.equal(repo.cli("status", "--post-merge").status, 0);
+    const done = status(repo);
+    assert.equal(done.status, 0, done.stdout);
+    assert.match(done.stdout, /交付与合并后验收均完成/);
+  });
+
+  test("平台用 merge commit 或快进合入时行为不变", () => {
+    const { repo, remote, head } = submitted();
+    platformFastForward(remote, head);
+    const synced = repo.cli("sync");
+    assert.equal(synced.status, 0, output(synced));
+    assert.doesNotMatch(synced.stderr, /squash 或 rebase/);
+    assert.match(status(repo).stdout, /已经包含在主分支中/);
+  });
+});

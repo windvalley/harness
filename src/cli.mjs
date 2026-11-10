@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { redact } from "./lib/redact.mjs";
+import { rewrittenLandings } from "./lib/landed.mjs";
 import { deliverySettings, describeDelivery, loadCurrentProject, loadGateProject, loadGuardProject, loadTrustedProject, mainBranch } from "./lib/config.mjs";
 import { changedPaths, git, gitOk, mainWorktreeRoot, mergeBase, repoRoot, resolveCommit } from "./lib/git.mjs";
 import { keyStatus, readLedger, rotateKey, scanRecords } from "./lib/store.mjs";
@@ -365,6 +366,17 @@ async function cmdReviewPlan(argv) {
   }
 }
 
+/** sync 之后列出被平台以 squash 或 rebase 合入的本地分支，提示它们已按内容识别为已合入。 */
+function printRewrittenLandings(cwd) {
+  try {
+    const project = loadGateProject(cwd, {});
+    const names = rewrittenLandings(project.root, mainBranch(project));
+    if (names.length > 0) process.stderr.write(`\n按内容识别为平台以 squash 或 rebase 合入的分支: ${names.join("、")}\n`);
+  } catch {
+    // 只是提示，读不到不影响同步的结果。
+  }
+}
+
 /** 合入后列出到期而未登记的合并后验收；没有义务或读不出配置时什么都不输出。 */
 function printPostMergeTodo(cwd) {
   try {
@@ -433,6 +445,7 @@ function cmdSync(argv) {
     if (result.followUps?.length > 0) {
       process.stderr.write(`\n同步完成，还需要在客户端做:\n${result.followUps.map((note) => `  - ${note}`).join("\n")}\n`);
     }
+    printRewrittenLandings(process.cwd());
     printPostMergeTodo(process.cwd());
     return 0;
   } catch (error) {
