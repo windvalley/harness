@@ -31,7 +31,8 @@
 - `closedBy` 记录关闭它的那次登记：主分支提交 `at`、登记时间、报告 SHA-256。
 
 不新增"运行记录"。
-没有失败状态时，登记记录就是现有的 `attestation`，关闭结果直接写在义务上，轮换密钥后重签即可，不会成批重开。
+没有失败状态时，登记记录就是现有的 `attestation`，关闭结果直接写在义务的 `closedBy` 上。
+密钥轮换后，所有签名记录（包括已关闭的义务）都验签失败，按待办处理；重新登记即可重新关闭，与证据、评审记录在轮换后需要重做一致。
 
 ## 状态与对账规则
 
@@ -49,7 +50,7 @@
 - **按检查 ID 关闭，不比对定义指纹**：关闭看的是"检查 C 在主分支 M 上通过"。
   定义快照只用于显示 `howToVerify`。
 - **待办的判定**：到期且未关闭，即为待办。
-  记录存在但验签失败时同样按待办处理，并在提示里说明原因，不当作没有义务。
+  记录存在但验签失败时同样按到期、未关闭处理，并在提示里说明原因，不当作没有义务。
 - **读取时转换**：没有义务记录、但分支顶端的证据里有 `postMerge` 列表时，读取时按同一结构推导出义务，参与同一套对账。
   只保留一套对账逻辑，不做数据迁移。
 
@@ -58,23 +59,23 @@
 | 位置 | 改动 |
 | --- | --- |
 | `src/lib/store.mjs` | `RERUN` 增加 `obligation` 及重跑提示；增加按类别列出记录的辅助函数，读取时允许验签失败的记录以待办形式返回 |
-| `src/verify/attestation.mjs` | post-merge 登记成功后执行关闭规则；新增可选 `--at`，必须是当前主分支的祖先 |
+| `src/verify/obligation.mjs`（新增） | 义务记录的写入、汇总（含读取时推导旧任务）与关闭规则 |
+| `src/verify/attestation.mjs` | post-merge 登记成功后执行关闭规则；新增可选 `--at`，必须是当前主分支的祖先；分支已被删除时用它为该检查写下的义务里的分支顶端 |
 | `src/status.mjs` | `postMergeStatus` 改为读义务记录加推导义务；新增仓库级列表；有待办时标记未完成 |
-| `src/cli.mjs` | `status` 在合入但有待办时退出码 1；新增 `status --post-merge` 列出全仓库待办；`attest` 增加 `--at`；`merge` 与 `sync` 在 stderr 列出待办 |
+| `src/cli.mjs` | `status` 在合入但有待办时退出码 1；新增 `status --post-merge` 列出全仓库待办；`attest` 增加 `--at`；`merge` 与 `sync`（含"已是最新"的路径）在 stderr 列出待办，实现在 `cli.mjs`，`sync.mjs` 不改 |
 | `src/merge/merge.mjs`、`src/delivery/submit.mjs` | 在合入点与提交点写义务记录 |
-| `src/delivery/sync.mjs` | 更新后以及"已是最新"的路径都扫描并打印到期待办 |
 | `src/stop/stop.mjs` | 按会话里的分支名查义务，放在 `branch_missing` 判断之前 |
 | `src/verify/verify.mjs` | `postMergeAcceptanceProblem` 不再因单次 diff 未命中而报错，规则见下 |
 | `assets/rules/harness.md` | 补一句：待验收义务用 `status --post-merge` 查看，登记后按检查关闭 |
 
-`acceptance:post-merge` 的新判定：只在"本分支改动了清单的合并后章节"或"本分支还没有对应义务"，并且本次没有命中 `post-merge` 检查时报错。
-修改提示不再建议删除该章节。
+`acceptance:post-merge` 的新判定：本次没有命中 `post-merge` 检查时，只在"本分支还没有任何义务"或"本次改动修改了清单的合并后章节"两种情况下报错。
+已有义务的分支报错时，提示不再建议删除章节（删除不会取消已写下的义务）；没有义务的分支保留原提示。
 
 ## 默认关闭的依据
 
 - 记录只在证据 `postMerge` 非空时才写，没有配置 `post-merge` 检查就不会产生记录。
 - `status`、`sync`、`stop` 对义务的读取都以"存在义务或证据里有 `postMerge`"为前提，否则直接返回，不新增输出。
-- `status` 的退出码只在存在待办时变化。
+- `status` 的退出码只在存在待办时变化；`status --post-merge` 是新子模式。
 - 不改动会话分支登记，不改动 `worktree clean`，不改动 `sync` 判断合入的方式。
 - 新增的 `--at` 与 `status --post-merge` 都是新参数或新子模式，不影响已有调用。
 - 基线测试必须断言：不配置时不产生 `obligation` 记录，各命令的输出与 0.16.0 逐字一致。
@@ -131,6 +132,7 @@
   这是"检查 C 在主分支 M 上通过"的字面含义，但并行任务的范围差异由人在清单里写明，harness 不判断。
 - 读取验签失败的记录时仍需要能解析其内容，关闭时用新密钥重签。
   这与 `attest` 本身的信任等级相同，不新增信任边界。
+- 每次关闭在账本里记一条 `obligation.close`，`attest` 的账本事件带上关闭条数。
 
 ## 待确认
 
