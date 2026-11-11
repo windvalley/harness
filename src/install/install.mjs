@@ -160,10 +160,8 @@ export function shimPath(root) {
  */
 export const SHIM_MISSING_VERSION = 3;
 
-export function writeShim({ root, version = packageVersion() }) {
-  const file = shimPath(root);
-  mkdirSync(join(file, ".."), { recursive: true });
-  const body = `#!/bin/sh
+export function shimBody(version = packageVersion()) {
+  return `#!/bin/sh
 # harness 入口 shim，由 harness install 生成，入库随仓库分发，请勿手工修改。
 # 代码在用户目录按版本安装；这里只负责转发，并锁住版本，避免任务分支改代码影响门禁。
 HARNESS_VERSION="\${HARNESS_VERSION:-${version}}"
@@ -190,7 +188,12 @@ if [ ! -f "$entry" ]; then
 fi
 exec node "$entry" "$@"
 `;
-  writeFileSync(file, body);
+}
+
+export function writeShim({ root, version = packageVersion() }) {
+  const file = shimPath(root);
+  mkdirSync(join(file, ".."), { recursive: true });
+  writeFileSync(file, shimBody(version));
   chmodSync(file, 0o755);
   return file;
 }

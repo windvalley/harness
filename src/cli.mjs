@@ -31,7 +31,7 @@ import { answerEscalation, listEscalations, openEscalation, readEscalation, resu
 import { addPitfall, FLAG_HITS, formatPitfalls, listPitfalls, MAX_HITS } from "./pitfall/pitfall.mjs";
 import { runGolden } from "./golden/golden.mjs";
 import { computeMetrics, formatMetrics } from "./golden/metrics.mjs";
-import { initProject, upgradeProject } from "./install/init.mjs";
+import { initProject, planUpgrade, upgradeProject } from "./install/init.mjs";
 import { unconfiguredOptions } from "./install/optional.mjs";
 import { uninstall } from "./install/uninstall.mjs";
 import { branchStatus, formatObligations, formatStatus, openPostMergeObligations } from "./status.mjs";
@@ -46,7 +46,7 @@ import { packageVersion } from "./install/managed.mjs";
 
 const ADAPTERS = { claude, codex, dsh, generic };
 
-const USAGE = `harness <命令> [参数]
+const USAGE = `harness <命令> [参数]    任一命令加 --help 查看该命令的用法
 
 工程流程
   verify   [--head <ref>] [--base <ref>] [--branch <名称>] [--no-reuse] [--plan]   对分支验证并写签名证据；--plan 只列出会执行的检查
@@ -75,7 +75,7 @@ const USAGE = `harness <命令> [参数]
 接入与维护
   init     [--dry-run] [--take-over] [--force]       接入或升级当前项目：先调查现状，--dry-run 只预览
   install  [--take-over] [--local] [--version <v>]   重新生成入口与钩子；--local 只刷新本机共用部分；--version 只装指定版本
-  upgrade                                            升级项目到当前版本
+  upgrade  [--dry-run]                               升级项目到当前版本；--dry-run 只预览将新增或更新的文件，不写入
   uninstall [--purge] [--dry-run]                    解除接入；--purge 连 .harness/ 一起删
   reviewer <list|set|remove|prefer|test>              本机评审者：列出、新增或修改、删除、是否优先不同模型、实测一个；见 harness reviewer
   versions                                           列出已安装的版本
@@ -937,11 +937,74 @@ function currentBranchForStatus() {
   return result.status === 0 ? result.stdout.trim() : "";
 }
 
+function cmdUpgrade(argv) {
+  const { values } = parseArgs({ args: argv, options: { "dry-run": { type: "boolean", default: false } } });
+  if (values["dry-run"]) {
+    const plan = planUpgrade({});
+    print(`升级预览（${plan.root}）: 版本 ${plan.pinned ?? "未锁定"} -> ${plan.version}`);
+    for (const file of plan.files) print(`  ${file.action}  ${file.path}`);
+    if (plan.golden.removed.length > 0) print(`  将移除 .harness/golden/tasks.json 里与内置相同的旧副本: ${plan.golden.removed.join(", ")}`);
+    if (plan.golden.overrides.length > 0) print(`  这些用例覆盖内置用例且与当前内置不同，升级时保留: ${plan.golden.overrides.join(", ")}`);
+    if (plan.files.length === 0 && plan.golden.removed.length === 0) print("规则、模板、入口与 AGENTS.md 托管块已是最新。");
+    print("git 钩子与客户端配置（.claude、.codex、DSH 插件）在正式升级时重新生成，预览不逐项比对。");
+    print("以上为预览，没有写入任何文件，也没有安装版本目录。config.json、policy.json、verify.json 升级时同样不会改动。");
+    return 0;
+  }
+  const result = upgradeProject({});
+  print(`已升级到 ${result.version}，入口 ${result.shim.shim}`);
+  if (result.golden.removed.length > 0) print(`  已从 .harness/golden/tasks.json 移除与内置相同的旧副本: ${result.golden.removed.join(", ")}`);
+  if (result.golden.overrides.length > 0) {
+    print(`  这些用例覆盖内置用例且与当前内置不同: ${result.golden.overrides.join(", ")}`);
+    print("  是自己改过的就保留；只是旧版本的拷贝就从 tasks.json 删掉，改用内置版本。");
+  }
+  if (result.shim.hooksPath) print(`  ${formatHooksPath(result.shim.hooksPath)}`);
+  const missing = unconfiguredOptions(result.root);
+  if (missing.length > 0) {
+    print("尚未配置的可选项（upgrade 不改 config.json 与 verify.json，要启用就在任务分支里加，门禁文件改动需要人确认）:");
+    for (const text of missing) print(`  - ${text}`);
+  }
+  return 0;
+}
+
+/** 从 USAGE 里取出某个命令的条目（含续行），没有则返回 null。条目以两个空格缩进的命令名开头，更深的缩进是续行。 */
+function commandUsage(name) {
+  const lines = [];
+  let inEntry = false;
+  for (const line of USAGE.split("\n")) {
+    const head = line.match(/^ {2}(\S+)/);
+    if (head) inEntry = head[1] === name;
+    else if (!/^ {3,}\S/.test(line)) inEntry = false;
+    if (inEntry) lines.push(line);
+  }
+  if (lines.length === 0) return null;
+  // 加上 "harness " 前缀后，续行同样右移，描述列保持对齐。
+  return lines.map((line) => (/^ {2}\S/.test(line) ? `  harness ${line.slice(2)}` : `${" ".repeat("harness ".length)}${line}`)).join("\n");
+}
+
+function printCommandHelp(name) {
+  const usage = commandUsage(name);
+  if (!usage) return false;
+  print(`用法:\n${usage}`);
+  return true;
+}
+
+/** `--` 之后是位置参数，不当成帮助请求。 */
+function wantsHelp(args) {
+  const end = args.indexOf("--");
+  return (end < 0 ? args : args.slice(0, end)).some((arg) => arg === "--help" || arg === "-h");
+}
+
 export async function main(argv) {
   const [command, ...rest] = argv;
-  if (!command || command === "help" || command === "--help") {
+  if (!command || command === "--help" || command === "-h" || (command === "help" && rest.length === 0)) {
     print(USAGE);
     return command ? 0 : 2;
+  }
+  if (command === "help" || wantsHelp(rest)) {
+    const target = command === "help" ? rest[0] : command;
+    if (printCommandHelp(target)) return 0;
+    process.stderr.write(`未知命令: ${target}\n\n${USAGE}`);
+    return 2;
   }
   try {
     switch (command) {
@@ -1052,22 +1115,8 @@ export async function main(argv) {
         print(`保留: ${outcome.kept.join(", ")}`);
         return 0;
       }
-      case "upgrade": {
-        const result = upgradeProject({});
-        print(`已升级到 ${result.version}，入口 ${result.shim.shim}`);
-        if (result.golden.removed.length > 0) print(`  已从 .harness/golden/tasks.json 移除与内置相同的旧副本: ${result.golden.removed.join(", ")}`);
-        if (result.golden.overrides.length > 0) {
-          print(`  这些用例覆盖内置用例且与当前内置不同: ${result.golden.overrides.join(", ")}`);
-          print("  是自己改过的就保留；只是旧版本的拷贝就从 tasks.json 删掉，改用内置版本。");
-        }
-        if (result.shim.hooksPath) print(`  ${formatHooksPath(result.shim.hooksPath)}`);
-        const missing = unconfiguredOptions(result.root);
-        if (missing.length > 0) {
-          print("尚未配置的可选项（upgrade 不改 config.json 与 verify.json，要启用就在任务分支里加，门禁文件改动需要人确认）:");
-          for (const text of missing) print(`  - ${text}`);
-        }
-        return 0;
-      }
+      case "upgrade":
+        return cmdUpgrade(rest);
       case "doctor": {
         const report = doctor({});
         print(formatDoctor(report));
@@ -1147,6 +1196,10 @@ export async function main(argv) {
         return 2;
     }
   } catch (error) {
+    if (typeof error.code === "string" && error.code.startsWith("ERR_PARSE_ARGS")) {
+      process.stderr.write(`${error.message}\n用法见: harness ${command} --help\n`);
+      return 2;
+    }
     process.stderr.write(`${error.message}\n`);
     return 1;
   }

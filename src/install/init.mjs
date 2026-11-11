@@ -1,10 +1,10 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { git, gitOk, hooksPlacement, refExists, repoRoot } from "../lib/git.mjs";
 import { PACKAGE_ROOT } from "../policy/resolve.mjs";
-import { HOOK_NAMES, installAll, publishVersion, storeEntry, versionDir, worktreeHooksConfig } from "./install.mjs";
-import { pruneBuiltinCopies } from "../golden/builtin.mjs";
-import { managedBlockBody, packageVersion, writeManagedBlock, writeRules } from "./managed.mjs";
+import { HOOK_NAMES, installAll, pinnedVersion, publishVersion, shimBody, shimPath, storeEntry, versionDir, worktreeHooksConfig } from "./install.mjs";
+import { planBuiltinCopies, pruneBuiltinCopies } from "../golden/builtin.mjs";
+import { managedBlockBody, packageVersion, renderManagedBlock, ruleEntries, writeManagedBlock, writeRules } from "./managed.mjs";
 import { ensurePitfallsFile, PITFALL_FILE } from "../pitfall/pitfall.mjs";
 import { survey } from "./survey.mjs";
 import { RISK_DEFAULTS, planSettings } from "../plan/plan.mjs";
@@ -349,4 +349,29 @@ export function upgradeProject({ cwd = process.cwd() } = {}) {
   const shim = installAll({ cwd: root });
   const golden = pruneBuiltinCopies(root);
   return { root, version, shim, golden };
+}
+
+/**
+ * upgrade 的只读预览：逐个比对规则、模板、版本标记、入口与 AGENTS.md 托管块，列出会新增或更新的文件。
+ * git 钩子与客户端配置由 installAll 重新生成，这里不逐项比对。
+ */
+export function planUpgrade({ cwd = process.cwd() } = {}) {
+  const root = repoRoot(cwd);
+  const version = packageVersion();
+  const files = [];
+  const compare = (rel, content) => {
+    const file = join(root, rel);
+    if (!existsSync(file)) files.push({ action: "新增", path: rel });
+    else if (readFileSync(file, "utf8") !== content) files.push({ action: "更新", path: rel });
+  };
+  for (const [rel, content] of ruleEntries()) compare(`.harness/${rel}`, content);
+  compare(".harness/VERSION", `${version}\n`);
+  if (!existsSync(join(root, PITFALL_FILE))) files.push({ action: "新增", path: PITFALL_FILE });
+  compare(relative(root, shimPath(root)), shimBody(version));
+  const agents = join(root, "AGENTS.md");
+  const current = existsSync(agents) ? readFileSync(agents, "utf8") : null;
+  if (current === null) files.push({ action: "新增", path: "AGENTS.md" });
+  else if (renderManagedBlock(current, managedBlockBody()) !== current) files.push({ action: "更新", path: "AGENTS.md" });
+  const { removed, overrides } = planBuiltinCopies(root);
+  return { root, version, pinned: pinnedVersion(root), files, golden: { removed, overrides } };
 }
