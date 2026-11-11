@@ -7,7 +7,7 @@ import { commit, CONFIG, git, makeRepo, sh, write, writeReview } from "./helpers
 import { PACKAGE_ROOT as PACKAGE_ROOT_TEST } from "./helpers.mjs";
 import { starterVerify } from "../src/install/init.mjs";
 import { OPTIONS } from "../src/install/optional.mjs";
-import { packageVersion as currentVersion } from "../src/install/managed.mjs";
+import { managedBlockBody, packageVersion as currentVersion } from "../src/install/managed.mjs";
 import { matchAny } from "../src/lib/glob.mjs";
 
 let repos = [];
@@ -200,6 +200,24 @@ describe("安装与自检", () => {
     const second = repo.rawCli("init");
     assert.equal(second.status, 0, second.stderr);
     assert.match(readFileSync(join(repo.root, ".harness/config.json"), "utf8"), /保留/);
+  });
+
+  test("托管块写出没有机械判定的分级条件，机械条件交给 core.md 与 verify --plan", () => {
+    const block = managedBlockBody();
+    for (const pattern of [/在第一条回复里说明判断和依据/, /分析、评审、诊断类请求保持只读/, /缺陷修复/, /需求明确/, /权限与数据兼容性/, /拿不准时/, /harness verify --plan/]) {
+      assert.match(block, pattern, `托管块应包含: ${pattern}`);
+    }
+    // 机械条件由 core.md 与 verify --plan 判定，托管块再复述一遍容易与规则不一致。
+    for (const pattern of [/intent\.plan\.maxLines/, /risk\.(mode|paths|deps)/, /observe/]) {
+      assert.doesNotMatch(block, pattern, `托管块不应复述机械条件: ${pattern}`);
+    }
+  });
+
+  test("托管块只让要人决定的阻塞上报，等授权或人工确认时直接结束", () => {
+    const block = managedBlockBody();
+    assert.match(block, /需要人决定的阻塞（缺权限、需要业务拍板、用户要求暂不合并、必要验证被外部问题阻塞等）先 `harness escalate open` 上报/);
+    assert.match(block, /只差用户同意实施或人工确认时，说明要人做什么后结束，不用上报/);
+    assert.doesNotMatch(block, /需要停下时先/, "不能把交方案、等确认也划进上报");
   });
 
   test("init 在没有任何提交的新仓库上按 HEAD 判断主分支名", () => {
