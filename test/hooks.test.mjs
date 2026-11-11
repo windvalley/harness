@@ -7,7 +7,7 @@ import { commit, CONFIG, git, makeRepo, sh, write, writeReview } from "./helpers
 import { PACKAGE_ROOT as PACKAGE_ROOT_TEST } from "./helpers.mjs";
 import { starterVerify } from "../src/install/init.mjs";
 import { OPTIONS } from "../src/install/optional.mjs";
-import { packageVersion as currentVersion } from "../src/install/managed.mjs";
+import { managedBlockBody, packageVersion as currentVersion } from "../src/install/managed.mjs";
 import { matchAny } from "../src/lib/glob.mjs";
 
 let repos = [];
@@ -200,6 +200,28 @@ describe("安装与自检", () => {
     const second = repo.rawCli("init");
     assert.equal(second.status, 0, second.stderr);
     assert.match(readFileSync(join(repo.root, ".harness/config.json"), "utf8"), /保留/);
+  });
+
+  test("托管块写出没有机械判定的分级条件，机械条件交给 core.md 与 verify --plan", () => {
+    const block = managedBlockBody();
+    for (const pattern of [/在第一条回复里说明判断和依据/, /分析、评审、诊断类请求保持只读/, /需求已明确的小优化、小迭代或缺陷修复/, /不改库表、对外接口契约与数据兼容性，预计代码改动少于 500 行（测试、文档与锁文件不计）的，直接实施/, /阈值、依赖清单与敏感路径的条件以 `core\.md` 为准/, /^  不满足或拿不准时先探索/m, /harness verify --plan/]) {
+      assert.match(block, pattern, `托管块应包含: ${pattern}`);
+    }
+    // 访问控制属于业务逻辑，由澄清与评审把关，不作为分级条件。
+    assert.doesNotMatch(block, /接口契约、权限/, "分级条件不含权限");
+    const core = readFileSync(join(PACKAGE_ROOT_TEST, "assets/rules/core.md"), "utf8");
+    assert.match(core, /^- 不改库表结构与迁移，不改对外接口契约与数据兼容性。$/m, "core.md 的分级条件不含权限");
+    // 机械条件由 core.md 与 verify --plan 判定，托管块再复述一遍容易与规则不一致。
+    for (const pattern of [/intent\.plan\.maxLines/, /risk\.(mode|paths|deps)/, /observe/]) {
+      assert.doesNotMatch(block, pattern, `托管块不应复述机械条件: ${pattern}`);
+    }
+  });
+
+  test("托管块只让要人决定的阻塞上报，等授权或人工确认时直接结束", () => {
+    const block = managedBlockBody();
+    assert.match(block, /需要人决定的阻塞（缺权限、需要业务拍板、用户要求暂不合并、必要验证被外部问题阻塞等）先 `harness escalate open` 上报/);
+    assert.match(block, /只差用户同意实施或人工确认时，说明要人做什么后结束，不用上报/);
+    assert.doesNotMatch(block, /需要停下时先/, "不能把交方案、等确认也划进上报");
   });
 
   test("init 在没有任何提交的新仓库上按 HEAD 判断主分支名", () => {
