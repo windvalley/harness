@@ -20,7 +20,7 @@
 
 <script src="assets/docs.js?v=acdbbf2b96" defer></script>
 </head>
-<body data-page="principles" data-index="7cedb02498">
+<body data-page="principles" data-index="1ec5e825e3">
 <a class="skip-link" href="#main-content">跳到主要内容</a>
 <header class="topbar">
   <div class="topbar-inner">
@@ -298,7 +298,7 @@
     <h2 tabindex="-1" id="plan-first">任务分级与实施授权</h2>
     <p>规则写在 <code>.harness/rules/core.md</code>，要点同时写进 <code>AGENTS.md</code> 的托管块，Agent 开始任务前先判断分级：</p>
     <div class="cards">
-      <div class="card"><h3>直接实施</h3><p>小优化、小迭代或缺陷修复：不改库表与迁移，不改接口契约、权限与数据兼容性，代码改动少于 500 行（测试、文档、锁文件不计）。</p></div>
+      <div class="card"><h3>直接实施</h3><p>小优化、小迭代或缺陷修复：不改库表与迁移，不改对外接口契约、权限与数据兼容性，代码改动少于 500 行（测试、文档、锁文件不计）。</p></div>
       <div class="card"><h3>先方案后实施</h3><p>其余任务和拿不准的任务：先探索仓库，一次问一个问题，写出验收清单、spec 与 plan，提交后停下等你授权。配置了评审者时，交出方案前先运行 <code>harness review-plan</code> 让另一个模型审一轮，意见与处理记进 spec；它只给建议，不是门禁。</p></div>
     </div>
     <p>默认启用的 <code>plan-first</code> 预设把“停下等授权”变成门禁：</p>
