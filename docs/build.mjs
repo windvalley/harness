@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -6,6 +7,11 @@ const root = dirname(fileURLToPath(import.meta.url));
 const checkOnly = process.argv.includes("--check");
 const repository = "https://github.com/windvalley/harness";
 const reference = `${repository}/blob/main/docs/reference.md`;
+const assetVersion = createHash("sha256")
+  .update(readFileSync(join(root, "assets", "docs.css")))
+  .update(readFileSync(join(root, "assets", "docs.js")))
+  .digest("hex")
+  .slice(0, 10);
 
 const pages = [
   { slug: "index", file: "index.html", source: "overview.html", title: "使用教程", group: "核心概念", home: true, description: "了解 harness 如何帮助 Agent 完成可验证、可审计的研发交付。" },
@@ -132,9 +138,9 @@ function renderPage(page, content, toc) {
 <meta name="color-scheme" content="light dark">
 <script>try{const theme=localStorage.getItem("harness-theme");if(theme==="light"||theme==="dark")document.querySelector('meta[name="color-scheme"]').content=theme;}catch{}</script>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%230f766e' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6z'/%3E%3Cpath d='M8.5 12l2.5 2.5 4.5-5'/%3E%3C/svg%3E">
-<link rel="stylesheet" href="assets/docs.css">
+<link rel="stylesheet" href="assets/docs.css?v=${assetVersion}">
 ${legacyRedirect}
-<script src="assets/docs.js" defer></script>
+<script src="assets/docs.js?v=${assetVersion}" defer></script>
 </head>
 <body data-page="${page.slug}">
 <a class="skip-link" href="#main-content">跳到主要内容</a>

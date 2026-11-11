@@ -28,7 +28,7 @@ test("文档页面保留唯一标题、导航状态和内部链接目标", () =>
       const href = match[1];
       if (/^(?:https?:|data:)/.test(href)) continue;
       const [path, hash] = href.split("#");
-      const targetFile = path || file;
+      const targetFile = (path || file).split("?")[0];
       const targetPath = join(docs, targetFile);
       assert.ok(existsSync(targetPath), `${file} 的链接目标不存在: ${href}`);
       if (hash) {
@@ -37,4 +37,12 @@ test("文档页面保留唯一标题、导航状态和内部链接目标", () =>
       }
     }
   }
+});
+
+test("相关链接不继承页内目录的负边距", () => {
+  const css = readFileSync(join(docs, "assets", "docs.css"), "utf8");
+  const relatedRule = css.match(/\.related-links a \{([^}]+)\}/)?.[1];
+  assert.ok(relatedRule, "缺少相关链接样式");
+  assert.match(relatedRule, /margin: 0/);
+  assert.doesNotMatch(relatedRule, /margin-left: -/);
 });
