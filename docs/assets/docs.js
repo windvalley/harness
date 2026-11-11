@@ -1,7 +1,9 @@
 (() => {
-  const themeSelect = document.getElementById("theme-select");
+  const themeToggle = document.getElementById("theme-toggle");
   const colorScheme = document.querySelector('meta[name="color-scheme"]');
-  const validThemes = new Set(["auto", "light", "dark"]);
+  const themeOrder = ["auto", "light", "dark"];
+  const themeNames = { auto: "跟随系统", light: "浅色", dark: "深色" };
+  const validThemes = new Set(themeOrder);
 
   function storedTheme() {
     try {
@@ -15,12 +17,15 @@
   function applyTheme(theme) {
     const value = validThemes.has(theme) ? theme : "auto";
     colorScheme.content = value === "auto" ? "light dark" : value;
-    themeSelect.value = value;
+    const label = `颜色主题：${themeNames[value]}，点击切换`;
+    themeToggle.dataset.theme = value;
+    themeToggle.setAttribute("aria-label", label);
+    themeToggle.title = label;
   }
 
   applyTheme(storedTheme());
-  themeSelect.addEventListener("change", () => {
-    const theme = themeSelect.value;
+  themeToggle.addEventListener("click", () => {
+    const theme = themeOrder[(themeOrder.indexOf(themeToggle.dataset.theme) + 1) % themeOrder.length];
     applyTheme(theme);
     try {
       if (theme === "auto") localStorage.removeItem("harness-theme");

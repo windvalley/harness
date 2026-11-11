@@ -14,24 +14,32 @@ const assetVersion = createHash("sha256")
   .slice(0, 10);
 
 const pages = [
-  { slug: "index", file: "index.html", source: "overview.html", title: "使用教程", group: "核心概念", home: true, description: "了解 harness 如何帮助 Agent 完成可验证、可审计的研发交付。" },
-  { slug: "quickstart", file: "quickstart.html", source: "quickstart.html", title: "快速开始", group: "开始使用", description: "从接入项目到完成第一次受控交付，按步骤检查每一项结果。" },
-  { slug: "daily", file: "daily.html", source: "daily.html", title: "日常工作流", group: "开始使用", description: "用自然语言提出需求，了解 Agent 如何实施、验证、评审并交付。" },
-  { slug: "blocked", file: "blocked.html", source: "blocked.html", title: "被拦截时怎么办", group: "开始使用", description: "理解常见拦截与拒绝原因，按提示恢复任务。" },
-  { slug: "architecture", file: "architecture.html", source: "architecture.html", title: "架构总览", group: "核心概念", description: "了解三层防线、组件关系，以及门禁数据存放的位置。" },
-  { slug: "principles", file: "principles.html", source: "principles.html", title: "核心原理", group: "核心概念", description: "了解证据绑定、独立评审、实施授权与版本锁定等核心机制。" },
-  { slug: "customize", file: "customize.html", source: "customize.html", title: "按项目定制", group: "配置与维护", description: "按项目实际情况调整配置、验证检查和拦截规则。" },
-  { slug: "team", file: "team.html", source: "team.html", title: "团队与多机", group: "配置与维护", description: "在新机器接入项目，完成升级、同步与多会话协作。" },
-  { slug: "limits", file: "limits.html", source: "limits.html", title: "信任模型与限制", group: "配置与维护", description: "明确本机门禁的保护边界、使用前提和已知限制。" },
-  { slug: "cheatsheet", file: "cheatsheet.html", source: "cheatsheet.html", title: "命令速查", group: "参考", description: "查阅验证、评审、交付、同步与维护命令。" },
+  { slug: "index", file: "index.html", source: "overview.html", title: "概览", home: true, description: "了解 harness 如何帮助 Agent 完成可验证、可审计的研发交付。" },
+  { slug: "quickstart", file: "quickstart.html", source: "quickstart.html", title: "快速开始", description: "从接入项目到完成第一次受控交付，按步骤检查每一项结果。" },
+  { slug: "daily", file: "daily.html", source: "daily.html", title: "日常工作流", description: "用自然语言提出需求，了解 Agent 如何实施、验证、评审并交付。" },
+  { slug: "blocked", file: "blocked.html", source: "blocked.html", title: "被拦截时怎么办", description: "理解常见拦截与拒绝原因，按提示恢复任务。" },
+  { slug: "architecture", file: "architecture.html", source: "architecture.html", title: "架构总览", description: "了解三层防线、组件关系，以及门禁数据存放的位置。" },
+  { slug: "principles", file: "principles.html", source: "principles.html", title: "核心原理", description: "了解证据绑定、独立评审、实施授权与版本锁定等核心机制。" },
+  { slug: "limits", file: "limits.html", source: "limits.html", title: "信任模型与限制", description: "明确本机门禁的保护边界、使用前提和已知限制。" },
+  { slug: "customize", file: "customize.html", source: "customize.html", title: "按项目定制", description: "按项目实际情况调整配置、验证检查和拦截规则。" },
+  { slug: "team", file: "team.html", source: "team.html", title: "团队与多机", description: "在新机器接入项目，完成升级、同步与多会话协作。" },
+  { slug: "cheatsheet", file: "cheatsheet.html", source: "cheatsheet.html", title: "命令速查", description: "查阅验证、评审、交付、同步与维护命令。" },
 ];
 
 const groups = [
-  { title: "开始使用", slugs: ["quickstart", "daily", "blocked"] },
-  { title: "核心概念", slugs: ["index", "architecture", "principles"] },
-  { title: "配置与维护", slugs: ["customize", "team", "limits"] },
+  { title: "开始使用", slugs: ["index", "quickstart", "daily", "blocked"] },
+  { title: "核心概念", slugs: ["architecture", "principles", "limits"] },
+  { title: "配置与维护", slugs: ["customize", "team"] },
   { title: "参考", slugs: ["cheatsheet"], reference: true },
 ];
+
+const groupOf = new Map(groups.flatMap((group) => group.slugs.map((slug) => [slug, group.title])));
+for (const page of pages) {
+  if (!groupOf.has(page.slug)) throw new Error(`页面 ${page.slug} 未加入任何导航分组`);
+  page.group = groupOf.get(page.slug);
+}
+const orderedPages = groups.flatMap((group) => group.slugs.map((slug) => pages.find((page) => page.slug === slug)));
+if (orderedPages.length !== pages.length) throw new Error("导航分组与页面列表的数量不一致");
 
 function escapeHtml(value) {
   return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
@@ -51,7 +59,7 @@ function textOf(html) {
 }
 
 const anchorTargets = {};
-for (const page of pages) {
+for (const page of orderedPages) {
   const source = readFileSync(join(root, "content", page.source), "utf8");
   const firstHeading = source.match(/<h2\b[^>]*\bid="([^"]+)"/g)?.[0];
   const pageAnchor = firstHeading?.match(/id="([^"]+)"/)?.[1];
@@ -60,6 +68,8 @@ for (const page of pages) {
   }
 }
 
+const externalIcon = `<svg class="external" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6"/><path d="M20 4 10 14"/><path d="M18 13v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h6"/></svg>`;
+
 function navigation(currentSlug, mobile = false) {
   const sections = groups.map((group) => {
     const links = group.slugs.map((slug) => {
@@ -67,7 +77,7 @@ function navigation(currentSlug, mobile = false) {
       const current = slug === currentSlug;
       return `<li><a href="${page.file}"${current ? ' aria-current="page"' : ""}>${page.title}</a></li>`;
     }).join("");
-    const referenceLink = group.reference ? `<li><a href="${reference}">参考手册</a></li>` : "";
+    const referenceLink = group.reference ? `<li><a href="${reference}">参考手册${externalIcon}</a></li>` : "";
     return `<section class="nav-group"><h2>${group.title}</h2><ul>${links}${referenceLink}</ul></section>`;
   }).join("");
   return `<nav class="docs-nav" aria-label="${mobile ? "移动端文档导航" : "文档导航"}">${sections}</nav>`;
@@ -111,7 +121,7 @@ function prepareContent(page) {
 }
 
 function pagination(page) {
-  const index = pages.indexOf(page);
+  const index = orderedPages.indexOf(page);
   const previous = pages[index - 1];
   const next = pages[index + 1];
   if (!previous && !next) return "";
@@ -152,7 +162,7 @@ ${legacyRedirect}
       <a class="wide" href="${reference}">参考手册</a>
       <a class="wide" href="${repository}">GitHub</a>
       <button class="search-open" id="search-open" type="button" aria-label="搜索文档" aria-keyshortcuts="Meta+K Control+K"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><span class="wide">搜索文档</span><kbd class="wide">⌘K</kbd></button>
-      <label class="theme-control"><span class="visually-hidden">颜色主题</span><select id="theme-select" aria-label="颜色主题"><option value="auto">自动</option><option value="light">浅色</option><option value="dark">深色</option></select></label>
+      <button class="theme-toggle" id="theme-toggle" type="button" data-theme="auto" aria-label="颜色主题：跟随系统，点击切换" title="颜色主题：跟随系统，点击切换"><svg class="i-auto" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg><svg class="i-light" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><svg class="i-dark" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4 8 8 0 1 0 20 14.5z"/></svg></button>
       <button class="drawer-open" id="drawer-open" type="button" aria-label="打开文档目录" aria-expanded="false" aria-controls="docs-drawer"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg><span>目录</span></button>
     </nav>
   </div>
@@ -184,7 +194,7 @@ ${legacyRedirect}
 
 const outputs = new Map();
 const searchIndex = [];
-for (const page of pages) {
+for (const page of orderedPages) {
   const content = prepareContent(page);
   const toc = pageToc(content);
   outputs.set(page.file, renderPage(page, content, toc));
