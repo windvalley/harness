@@ -8,7 +8,8 @@ export const MAX_ENTRIES = 40;
 export const MAX_BYTES = 8192;
 const MAX_LEN = { signature: 60, symptom: 100, fix: 160 };
 const LABEL = { signature: "signature", symptom: "现象", fix: "做法" };
-const CONFLICT = /^(<{7}|={7}|>{7})/m;
+// 只认冲突块的起止行：单独的 ======= 也是 Markdown 标题下划线，不能当冲突。
+const CONFLICT = /^(<{7}|>{7})( |$)/m;
 
 const HEADER = `# 项目坑位记录
 
@@ -31,7 +32,7 @@ export function parsePitfalls(text) {
   let current = null;
   for (const line of first < 0 ? [] : lines.slice(first)) {
     if (line.startsWith("## ")) {
-      current = { signature: line.slice(3).trim(), symptom: "", fix: "", hits: [] };
+      current = { signature: line.slice(3).trim(), symptom: "", fix: "", hits: [], extra: [] };
       raw.push(current);
       continue;
     }
@@ -39,6 +40,7 @@ export function parsePitfalls(text) {
     const hit = line.match(/^- 命中:\s*(\S+)(?:\s+(.*))?$/);
     if (field) current[field[1] === "现象" ? "symptom" : "fix"] = field[2].trim();
     else if (hit) current.hits.push({ date: hit[1], branch: (hit[2] ?? "").trim() });
+    else if (line.trim()) current.extra.push(line);
   }
   // 并行分支各自新增同一个坑，合并后会出现同名条目：合成一条，命中记录取并集。
   const merged = new Map();
@@ -50,6 +52,7 @@ export function parsePitfalls(text) {
       known.symptom ||= entry.symptom;
       known.fix ||= entry.fix;
       known.hits.push(...entry.hits);
+      known.extra.push(...entry.extra.filter((line) => !known.extra.includes(line)));
     }
   }
   const entries = [...merged.values()];
@@ -67,6 +70,7 @@ function render({ preamble, entries }) {
       `- 现象: ${entry.symptom}`,
       `- 做法: ${entry.fix}`,
       ...entry.hits.map((hit) => `- 命中: ${hit.date}${hit.branch ? ` ${hit.branch}` : ""}`),
+      ...entry.extra,
     ].join("\n"),
   );
   return `${[preamble, ...blocks].join("\n\n")}\n`;
@@ -107,7 +111,7 @@ export function addPitfall(root, { signature, symptom, fix, branch = "", date = 
   const newSymptom = field("symptom", symptom, { required: created });
   const newFix = field("fix", fix, { required: created });
   if (created) {
-    target = { signature: sig, symptom: newSymptom, fix: newFix, hits: [] };
+    target = { signature: sig, symptom: newSymptom, fix: newFix, hits: [], extra: [] };
     doc.entries.push(target);
   } else {
     if (newSymptom) target.symptom = newSymptom;

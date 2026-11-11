@@ -740,10 +740,15 @@ function cmdEscalate(argv) {
   }
 }
 
+// parseArgs 把以 - 开头的值当成选项；shell 报错原文常以 - 开头，改成 --选项=值 的写法就没有歧义。
+const PITFALL_VALUE_OPTIONS = new Set(["--signature", "--symptom", "--fix"]);
+
 function cmdPitfall(argv) {
   const [action, ...rest] = argv;
+  const args = [];
+  for (let i = 0; i < rest.length; i++) args.push(PITFALL_VALUE_OPTIONS.has(rest[i]) && i + 1 < rest.length ? `${rest[i]}=${rest[++i]}` : rest[i]);
   const { values } = parseArgs({
-    args: rest,
+    args,
     options: { signature: { type: "string" }, symptom: { type: "string" }, fix: { type: "string" }, flagged: { type: "boolean", default: false } },
   });
   const root = repoRoot(process.cwd());

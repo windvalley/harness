@@ -123,6 +123,36 @@ describe("harness pitfall add", () => {
     assert.match(result.stderr, /合并冲突/);
   });
 
+  test("Markdown 的 ======= 标题下划线不是合并冲突", () => {
+    const repo = setup();
+    const file = join(repo.root, FILE);
+    write(repo.root, FILE, `说明\n=======\n\n${readFileSync(file, "utf8")}`);
+    const result = add(repo, "after-setext");
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(readFileSync(file, "utf8"), /^说明\n=======\n/);
+    assert.match(repo.cli("conformance").stdout, /PASS context/);
+  });
+
+  test("条目下人工补的其他行在后续记录里保留，合并同名条目时也不丢", () => {
+    const dir = scratch();
+    write(dir, FILE, "# 坑位记录\n\n## a\n- 现象: s\n- 做法: f\n- 命中: 2026-11-01 x\n备注: 人工补充的上下文\n\n## b\n- 现象: s\n- 做法: f\n- 命中: 2026-11-01 x\n\n## b\n- 现象: s\n- 做法: f\n- 命中: 2026-11-02 y\n备注: 来自另一分支\n");
+    addPitfall(dir, { signature: "a", date: "2026-11-03" });
+    const text = readFileSync(join(dir, FILE), "utf8");
+    assert.match(text, /备注: 人工补充的上下文/);
+    assert.match(text, /备注: 来自另一分支/);
+    assert.equal(parsePitfalls(text).entries.length, 2);
+  });
+
+  test("以连字符开头的 signature 与做法（例如 shell 报错原文）可以记录", () => {
+    const repo = setup();
+    const result = repo.cli("pitfall", "add", "--signature", "-bash: foo: command not found", "--symptom", "-bash 找不到命令", "--fix", "--改用绝对路径");
+    assert.equal(result.status, 0, result.stderr);
+    const entry = parsePitfalls(readFileSync(join(repo.root, FILE), "utf8")).entries[0];
+    assert.equal(entry.signature, "-bash: foo: command not found");
+    assert.equal(entry.symptom, "-bash 找不到命令");
+    assert.equal(entry.fix, "--改用绝对路径");
+  });
+
   test("两个分支合并后出现同名条目，下次记录时合并成一条并保留双方命中", () => {
     const dir = scratch();
     const header = "# 坑位记录\n\n";
