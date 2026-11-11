@@ -14,6 +14,7 @@ import { latestSubmit } from "./delivery/submit.mjs";
 import { unresolvedStop } from "./stop/session.mjs";
 import { commitRangeProblems, commitRuleErrorAt } from "./policy/commit-message.mjs";
 import { resolvePolicy } from "./policy/resolve.mjs";
+import { FLAG_HITS, PITFALL_FILE, pitfallSummary } from "./pitfall/pitfall.mjs";
 
 // 确认记录绑定合并结果的 tree：快进时就是分支的 tree，三方合并时算出合并后的 tree。
 function confirmFor(project, root, branch) {
@@ -243,6 +244,15 @@ export function branchStatus({ cwd, branch }) {
     else {
       add("risk", "fail", `${risk.confirmReasons.join("；")}，${when}需要人工确认：harness confirm --branch ${branch}`);
       block("risk_unconfirmed", "风险改动待确认");
+    }
+  }
+
+  const pitfalls = pitfallSummary(showBlob(root, branchCommit, PITFALL_FILE));
+  if (pitfalls?.total > 0) {
+    if (pitfalls.flagged.length > 0) {
+      add("pitfalls", "warn", `坑位 ${pitfalls.total} 条，其中 ${pitfalls.flagged.length} 条命中满 ${FLAG_HITS} 次，建议由人固化为检查或规则：${pitfalls.flagged.join("、")}`);
+    } else {
+      add("pitfalls", "info", `坑位 ${pitfalls.total} 条，暂无需要固化的`);
     }
   }
 

@@ -5,6 +5,7 @@ import { PACKAGE_ROOT } from "../policy/resolve.mjs";
 import { HOOK_NAMES, installAll, publishVersion, storeEntry, versionDir, worktreeHooksConfig } from "./install.mjs";
 import { pruneBuiltinCopies } from "../golden/builtin.mjs";
 import { managedBlockBody, packageVersion, writeManagedBlock, writeRules } from "./managed.mjs";
+import { ensurePitfallsFile, PITFALL_FILE } from "../pitfall/pitfall.mjs";
 import { survey } from "./survey.mjs";
 import { RISK_DEFAULTS, planSettings } from "../plan/plan.mjs";
 
@@ -278,6 +279,7 @@ function plannedWrites(root, { force }) {
     const rel = `.harness/${name}`;
     if (force || !existsSync(join(root, rel))) consider(rel);
   }
+  if (!existsSync(join(root, PITFALL_FILE))) consider(PITFALL_FILE);
   for (const rel of [".harness/bin/harness", ".harness/rules/", ".harness/templates/", ".claude/settings.json", ".codex/hooks.json", ".gitignore", "AGENTS.md"]) {
     consider(rel);
   }
@@ -328,6 +330,7 @@ export function initProject({ cwd = process.cwd(), force = false, dryRun = false
     written.push(".harness/golden/tasks.json");
   }
   mkdirSync(join(dir, "acceptance"), { recursive: true });
+  if (ensurePitfallsFile(root)) written.push(PITFALL_FILE);
 
   writeRules({ root, version });
   writeManagedBlock({ root, body: managedBlockBody() });
@@ -340,6 +343,7 @@ export function upgradeProject({ cwd = process.cwd() } = {}) {
   const version = packageVersion();
   publishVersion({ version });
   writeRules({ root, version });
+  ensurePitfallsFile(root);
   // 托管块随版本更新：Agent 每次都会加载 AGENTS.md，任务分级等硬性要求写在这里才不会被跳过。
   writeManagedBlock({ root, body: managedBlockBody() });
   const shim = installAll({ cwd: root });

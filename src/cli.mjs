@@ -4,7 +4,7 @@ import { parseArgs } from "node:util";
 import { redact } from "./lib/redact.mjs";
 import { rewrittenLandings } from "./lib/landed.mjs";
 import { deliverySettings, describeDelivery, loadCurrentProject, loadGateProject, loadGuardProject, loadTrustedProject, mainBranch } from "./lib/config.mjs";
-import { changedPaths, git, gitOk, mainWorktreeRoot, mergeBase, repoRoot, resolveCommit } from "./lib/git.mjs";
+import { changedPaths, currentBranch, git, gitOk, mainWorktreeRoot, mergeBase, repoRoot, resolveCommit } from "./lib/git.mjs";
 import { keyStatus, readLedger, rotateKey, scanRecords } from "./lib/store.mjs";
 import { resolvePolicy, ruleStats } from "./policy/resolve.mjs";
 import { evaluateCall } from "./policy/engine.mjs";
@@ -28,6 +28,7 @@ import { DEFAULT_PLAN_ATTEMPT_TIMEOUT_SECONDS, DEFAULT_PLAN_MAX_QUERIES, DEFAULT
 import { checkCommitMessage, checkStaged, guardReference } from "./githook.mjs";
 import { branchMessageProblems, commitRuleErrorAt } from "./policy/commit-message.mjs";
 import { answerEscalation, listEscalations, openEscalation, readEscalation, resumePlan } from "./escalate/escalate.mjs";
+import { addPitfall, FLAG_HITS, formatPitfalls, listPitfalls, MAX_HITS } from "./pitfall/pitfall.mjs";
 import { runGolden } from "./golden/golden.mjs";
 import { computeMetrics, formatMetrics } from "./golden/metrics.mjs";
 import { initProject, upgradeProject } from "./install/init.mjs";
@@ -90,6 +91,8 @@ const USAGE = `harness <命令> [参数]
 
 人用
   escalate <open|list|show|answer|resume>             例外上报
+  pitfall  add --signature <特征> --symptom <现象> --fix <做法>   记录本项目反复踩的坑；同一特征再次记录会累加命中次数
+  pitfall  list [--flagged]                           列出坑位；--flagged 只列命中满 3 次、建议固化的
 `;
 
 function print(text) {
@@ -737,6 +740,34 @@ function cmdEscalate(argv) {
   }
 }
 
+function cmdPitfall(argv) {
+  const [action, ...rest] = argv;
+  const { values } = parseArgs({
+    args: rest,
+    options: { signature: { type: "string" }, symptom: { type: "string" }, fix: { type: "string" }, flagged: { type: "boolean", default: false } },
+  });
+  const root = repoRoot(process.cwd());
+  switch (action) {
+    case "add": {
+      const result = addPitfall(root, { signature: values.signature, symptom: values.symptom, fix: values.fix, branch: currentBranch(root) });
+      const count = `${result.hits}${result.hits >= MAX_HITS ? "+" : ""}`;
+      const notes = [];
+      if (result.flagged) notes.push(`已满 ${FLAG_HITS} 次，建议固化：交付汇报里告诉人，由人决定是否固化为检查或规则，不要自行改门禁文件`);
+      if (result.evicted.length > 0) notes.push(`已淘汰最久未命中的条目：${result.evicted.join("、")}`);
+      print(`${result.created ? "已新增" : "已累计"}坑位「${result.signature}」，命中 ${count} 次${notes.map((note) => `；${note}`).join("")}`);
+      return 0;
+    }
+    case "list": {
+      const entries = listPitfalls(root);
+      print(formatPitfalls(values.flagged ? entries.filter((entry) => entry.flagged) : entries));
+      return 0;
+    }
+    default:
+      process.stderr.write("用法: harness pitfall <add|list>\n");
+      return 2;
+  }
+}
+
 const RECORD_CODE_LABELS = {
   key_rotated: "由另一把密钥签发",
   signature: "签名不符",
@@ -1100,6 +1131,8 @@ export async function main(argv) {
         return cmdCheck(rest);
       case "escalate":
         return cmdEscalate(rest);
+      case "pitfall":
+        return cmdPitfall(rest);
       case "key":
         return cmdKey(rest);
       case "reviewer":

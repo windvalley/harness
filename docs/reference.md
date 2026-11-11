@@ -83,6 +83,7 @@ Agent 调用工具 ----> [1] 实时拦截：读写文件、执行命令之前按
 | `.harness/golden/tasks.json` | 项目自己的黄金任务，以及对内置用例的覆盖与停用 | 是 |
 | `.harness/rules/`、`.harness/templates/` | 给 Agent 读的研发规范，以及验收清单、行为说明、实施方案模板，`upgrade` 会整份重写 | 是 |
 | `.harness/acceptance/` | 验收清单 | 是 |
+| `.harness/pitfalls.md` | 本项目反复踩的坑与做法，由 `harness pitfall` 维护；项目自有，`upgrade` 不覆盖，不属于门禁文件 | 是 |
 | `.harness/bin/harness`、`.harness/VERSION` | 入口与锁定的版本号 | 是 |
 | `.claude/settings.json`、`.codex/hooks.json` | 客户端的实时拦截配置 | 是 |
 | `AGENTS.md` 里的托管块 | Agent 每次都会加载的硬性要求：先读规范、任务分级、先红后绿、按门禁流程合并 | 是 |
@@ -214,6 +215,7 @@ node ~/github/harness/bin/harness.mjs sync                                    # 
 1. `.harness/` 下的 `config.json`、`policy.json`、`verify.json`、`golden/tasks.json`、`rules/`、`templates/`、`VERSION` 和空的 `acceptance/`。
    已存在的 `config.json`、`policy.json`、`verify.json` 保持不动，加 `--force` 才覆盖；已有的 `golden/tasks.json` 始终保留。
    `golden/tasks.json` 只是放项目自己用例的空文件，规则回归用的内置用例随 harness 版本分发，不拷进项目。
+   另外补一个只有说明的 `.harness/pitfalls.md`（坑位记录），已有的文件始终保留，见“坑位记录”。
 2. 起始检查只按项目声明过的命令生成，探测根目录与一级子目录：`go.mod` 对应 `go test` 与 `go build`，`package.json` 里声明的类型检查脚本用项目自己的包管理器执行，`Cargo.toml` 对应 `cargo test`，声明了 pytest 配置的项目对应 `pytest`。
    另外还有通用的 `lint` 占位与 `harness-golden` 规则回归检查，见“verify.json：检查映射”。
 3. 把当前版本的代码装进 `~/.local/share/harness/versions/<版本>/` 并写入内容哈希清单；本机还没有签名密钥时生成一把。
@@ -1211,6 +1213,29 @@ harness escalate resume --id esc-1a2b3c4d  # 续跑前读取人的决定
 `defaultAction` 必须是某个选项的 `id`。
 阻塞的是某个任务分支时，`context.branch` 填这个分支名，收尾检查据此放行。
 
+### 坑位记录
+
+Agent 在本项目里反复踩同一个环境类的坑（构建命令、路径约定、工具版本差异、平台行为）会浪费时间和 token。
+`.harness/pitfalls.md` 把这些坑和做法记下来，AGENTS.md 托管块只放一行引用，开始任务前 Agent 先读它，托管块本身不会因此变长。
+
+```bash
+harness pitfall add --signature "npm ci 报 EINTEGRITY" --symptom "安装依赖时校验失败" --fix "删除 node_modules 后重装"
+harness pitfall list            # 列出全部
+harness pitfall list --flagged  # 只列命中满 3 次、建议固化的
+```
+
+- 第一次遇到就记；`--signature` 是这个坑的稳定特征，忽略空白与大小写后相同就算同一个坑，再次记录只累加命中次数，不新增条目。
+  再次记录时给出新的 `--symptom` 或 `--fix` 会替换旧的。
+- 满 3 次的条目标记为建议固化：`harness status` 在 `pitfalls` 一行里点名，Agent 在交付汇报里告诉人。
+  固化为检查或规则属于门禁改动，要走人工确认，所以 harness 不自动做，由人挑时间处理；固化后从文件里删掉对应条目即可。
+- 只记本项目的环境事实，不记通用工程知识；现象不超过 100 个字符，做法不超过 160 个字符，signature 不超过 60 个字符，都是单行文本。
+- 容量有上限：最多 40 条、整个文件不超过 8192 字节，每条只保留最近 5 次命中。
+  超出时淘汰最久未命中、命中最少的条目；已建议固化的条目不淘汰，剩下的条目全是它们时拒绝新增，提示先由人处理。
+- 文件不在门禁文件之列，追加不触发人工确认，随任务分支提交并一起评审。
+  并行分支各自记录会产生合并冲突：保留双方的条目与命中记录即可；文件里残留冲突标记时 `pitfall add` 拒绝写入，`conformance` 的 `context` 判据也会报出。
+  两个分支分别新增了同一个坑时合并出两条同名条目，下一次 `pitfall add` 会把它们合成一条。
+- 默认卸载保留这个文件，`uninstall --purge` 才连 `.harness/` 一起删。
+
 ### 收尾检查
 
 Agent 做到一半、门禁没有拒绝也没有遇到阻塞，自己结束了回复，前面三层都拦不住：它们只管不合格的改动进不了主分支。
@@ -1869,6 +1894,7 @@ harness reviewer set mine --client command --command-json '["my-reviewer","--jso
 | `conformance` | 按“配置就位、行为已验证、运行稳定”三层逐项判定 L3 判据，缺证据的项标 `PEND`，不计为完成：行为层看自动检查能否执行、策略判定、黄金任务最近一次结果与客户端链路是否实测；稳定层要求受控合并至少 20 次、合并后验证失败率不超过 5%，且黄金任务最近一次全部通过 |
 | `key status`、`key rotate [--yes]` | 查看证据密钥；轮换由人执行 |
 | `escalate <open\|list\|show\|answer\|resume>` | 例外上报 |
+| `pitfall add --signature <特征> --symptom <现象> --fix <做法>`、`pitfall list [--flagged]` | 记录与查看本项目反复踩的坑，见“坑位记录” |
 | `init [--dry-run] [--take-over] [--force]` | 接入当前项目，`--dry-run` 只预览 |
 | `install [--take-over]`、`install --local`、`install --version <版本>` | 重新生成入口、钩子与客户端配置；`--local` 只刷新本机，不改入库文件；`--version` 只把指定版本装进版本目录 |
 | `upgrade` | 把项目升级到运行它的 harness 版本 |

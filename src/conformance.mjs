@@ -7,6 +7,7 @@ import { evaluateCall } from "./policy/engine.mjs";
 import { resolvePolicy } from "./policy/resolve.mjs";
 import { checkConfigProblem } from "./verify/verify.mjs";
 import { doctor } from "./install/doctor.mjs";
+import { PITFALL_FILE, pitfallProblems } from "./pitfall/pitfall.mjs";
 import { computeMetrics } from "./golden/metrics.mjs";
 
 // 每条判据都要能用命令判定，不能靠“看起来实现了”。
@@ -35,6 +36,8 @@ function checkContext(project, root) {
   if (!existsSync(agents) || !readFileSync(agents, "utf8").includes("<!-- harness:start -->")) {
     problems.push("AGENTS.md 缺少 harness 托管块");
   }
+  const pitfalls = join(root, PITFALL_FILE);
+  if (existsSync(pitfalls)) problems.push(...pitfallProblems(readFileSync(pitfalls, "utf8")));
   return {
     id: "context",
     layer: "config",
