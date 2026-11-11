@@ -43,8 +43,8 @@ function legacyProject() {
   });
   repos.push(repo);
   // makeRepo 预置了带 harness 托管块的 AGENTS.md，这里换成真实项目的样子。
-  write(repo.root, "AGENTS.md", "# 项目规范\n\n<!-- wisharness:start -->\n读 `.wisharness/rules/core.md`\n<!-- wisharness:end -->\n");
-  write(repo.root, ".wisharness/rules/core.md", "规则\n");
+  write(repo.root, "AGENTS.md", "# 项目规范\n\n<!-- legacy-harness:start -->\n读 `.legacy-harness/rules/core.md`\n<!-- legacy-harness:end -->\n");
+  write(repo.root, ".legacy-harness/rules/core.md", "规则\n");
   write(repo.root, "legacy/guard.mjs", "// 旧门禁\n");
   write(repo.root, "legacy/claude-hook.mjs", "// 旧拦截\n");
   write(repo.root, ".gitignore", "bin/\n*.log\n");
@@ -92,10 +92,10 @@ describe("接入已有项目", () => {
     assert.match(result.stdout, /pre-commit: 原有脚本，保留/);
     assert.match(result.stdout, /reference-transaction 里已有其他工具的主分支保护/);
     assert.match(result.stdout, /legacy\/claude-hook\.mjs/);
-    assert.match(result.stdout, /AGENTS\.md 里其他工具的托管块: wisharness/);
+    assert.match(result.stdout, /AGENTS\.md 里其他工具的托管块: legacy-harness/);
     assert.match(result.stdout, /\.gitignore 会忽略入口/);
     assert.match(result.stdout, /可在接入合并后退役的目录.*legacy\//);
-    assert.match(result.stdout, /\.wisharness\//);
+    assert.match(result.stdout, /\.legacy-harness\//);
     assert.match(result.stdout, /新建 \.harness\/config\.json/);
     assert.match(result.stdout, /以上为预览/);
   });

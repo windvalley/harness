@@ -12,6 +12,15 @@ npm test
 
 测试在临时仓库中执行，使用隔离的数据、密钥和版本目录，不会修改本机已有的 harness 安装。
 
+## 文档站
+
+文档正文维护在 `docs/content/`，共享样式和交互位于 `docs/assets/`。
+页面结构、导航、分页、旧锚点映射和搜索索引由 `docs/build.mjs` 统一管理。
+修改内容源或构建脚本后运行 `npm run docs:build`，不要直接编辑生成的 HTML 和 `docs/assets/search-index.json`。
+提交前运行 `npm run docs:check`，确认生成结果与源文件一致。
+
+本地预览可在仓库根目录运行 `python3 -m http.server 8000`，再访问 `http://127.0.0.1:8000/docs/`。
+
 ## 版本管理
 
 - 版本号只维护在 `package.json` 中。

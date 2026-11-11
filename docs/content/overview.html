@@ -1,0 +1,72 @@
+<section class="hero">
+      <h1>harness 概览</h1>
+      <p class="lead">harness 是一套面向 AI 编程 Agent 的 AI-Native 研发流程与交付门禁。Agent 主导从需求到交付的完整研发过程，通过自动化验证、独立评审和门禁把关质量，你只需参与关键决策和最终验收。</p>
+      <ul class="chips">
+        <li>门禁不依赖云端 CI</li>
+        <li>Node.js 20+</li>
+        <li>git 2.38+</li>
+        <li>macOS / Linux</li>
+        <li>MIT 许可</li>
+      </ul>
+      <div class="actions">
+        <a class="btn primary" href="#quickstart">快速开始</a>
+        <a class="btn" href="#arch">看架构图</a>
+        <a class="btn" href="https://github.com/windvalley/harness/blob/main/docs/reference.md">参考手册</a>
+      </div>
+    </section>
+
+    <!-- ============ 为什么 ============ -->
+    <h2 id="why">它解决什么问题</h2>
+    <p>Agent 已经能写代码、写测试、跑检查，但要放心让它从需求一路做到交付，还要防住它常犯又不自知的错：</p>
+    <ul>
+      <li>读到私钥、凭据，或者把它们写进命令外发；</li>
+      <li>用 <code>git reset --hard</code>、<code>git stash</code>、<code>rm -rf</code>、强推，丢掉自己或别人的改动；</li>
+      <li>测试没跑或没跑全，就宣布“完成”；</li>
+      <li>直接在主分支上提交，或者为了让检查通过，顺手把检查规则改松；</li>
+      <li>大需求不先对齐方案就动手，改完才发现方向不对。</li>
+    </ul>
+    <p>写进提示词或规范里的要求，Agent 未必每次都遵守。harness 把研发流程写成项目规范，并<strong>把其中能机械判定的要求变成门禁</strong>：在本机判定、拦截并记录。小任务核实范围后可直接实施，大需求要先完成方案并获得实施授权。检查或评审不通过时，Agent 按原因修复并重新验证；遇到门禁变更、权限不足、业务决策或无法自行解决的问题时再请你介入。门禁只检查已配置并实际生效的条件，具体边界见<a href="#limits">信任模型与限制</a>。</p>
+    <div class="cards">
+      <div class="card"><h4>当场纠正</h4><p>危险的工具调用在执行之前被拦下，拦截信息带着原因和正确做法。</p></div>
+      <div class="card"><h4>结果把关</h4><p>通过 <code>harness merge</code> 或 <code>harness submit</code> 交付时，缺少必需的验证证据、独立评审或授权确认就会被拒绝；平台合并仍由平台保护规则把关。</p></div>
+      <div class="card"><h4>放宽不了自己</h4><p>任务分支改了规则也不影响它自己的判定，门禁改动交付前必须由人确认。</p></div>
+      <div class="card"><h4>本机、可审计</h4><p>判定都在本机完成，记录签名后存进仓库自己的 git 目录，随时可以核对。</p></div>
+    </div>
+
+    <h3 id="delivery">一个需求怎么交付</h3>
+    <div class="table-wrap"><table class="t-key">
+      <thead><tr><th>阶段</th><th>Agent 做什么</th><th>由什么保证</th></tr></thead>
+      <tbody>
+        <tr><td>理解与澄清</td><td>读仓库、判断任务分级；大需求逐个澄清关键问题，写出验收清单、行为说明与实施方案，配置了评审者时先让另一个模型审一轮方案（只给建议，不是门禁），然后停下，等你同意实施</td><td>启用方案优先钩子时，未授权方案任务不能提前写代码；交付时还会核对必要的实施授权记录</td></tr>
+        <tr><td>实施</td><td>先把每条验收标准写成单元、集成或 E2E 测试并确认失败，再实现到全部通过；只在缺权限、需要业务拍板等情况下停下</td><td>读取密钥、不可逆的 git 操作等危险调用当场被拦下，Agent 按提示改道继续</td></tr>
+        <tr><td>验证</td><td>在固定检出里按改动路径执行自动检查；需要真实浏览器或登录态的检查在外部运行后，用 <code>attest</code> 登记结果</td><td>自动证据绑定提交；外部证据绑定检查定义和它覆盖的文件，改到相关内容才需要重验</td></tr>
+        <tr><td>独立评审</td><td>由不了解实现过程的评审进程按合并前验收清单核对需求符合度，并评工程质量；被拒时按发现修改后重新验证、评审</td><td>合并前需求未满足或有高危发现即拒绝；合并后验收单独跟踪</td></tr>
+        <tr><td>交付到主分支</td><td>本地交付运行 <code>harness merge</code> 合入主分支；远程交付运行 <code>harness submit</code> 推送核对过的提交并创建或更新 PR/MR，由你或团队在平台上合并</td><td>两条路都先核对证据与评审对最新提交仍然有效；本地主分支只接受 <code>harness merge</code> 与 <code>harness sync</code> 写入</td></tr>
+        <tr><td>交付</td><td>逐条给出验收证据、交付状态与待处理项；有合并后检查时，在实际合入后继续完成并登记</td><td>由你最终验收；<code>status</code> 会分清“已合入”和“合并后验收完成”</td></tr>
+      </tbody>
+    </table></div>
+    <p>小需求核实范围后跳过方案，直接从实施开始。任务分级和先红后绿由 Agent 按项目规范执行，门禁兜底其中能机械判定的部分：配置了 <code>testFirst</code> 与 <code>coverage</code> 的项目，验证会复算“还原实现后新增的测试必须失败”和“改动行必须被测试执行到”，见<a href="#limits">信任模型与限制</a>。</p>
+
+    <h3 id="delivery-modes">两种交付方式</h3>
+    <div class="table-wrap"><table>
+      <thead><tr><th scope="col"><span class="visually-hidden">项目</span></th><th>本地交付（默认）</th><th>远程交付（PR/MR）</th></tr></thead>
+      <tbody>
+        <tr><th scope="row">适合</th><td>由 Agent 本地合并的项目，也可以有远程仓库</td><td>要求在 GitHub 或 GitLab 上审核并合并 PR/MR 的项目</td></tr>
+        <tr><th scope="row">门禁通过后</th><td><code>harness merge</code> 合入本地主分支</td><td><code>harness submit</code> 推送任务分支，创建或更新 PR/MR</td></tr>
+        <tr><th scope="row">谁来合并</th><td>Agent，在项目授权范围内</td><td>你或团队在平台上合并，harness 不代为合并</td></tr>
+        <tr><th scope="row">推送主分支</th><td>默认由你推送；配置 <code>"push": true</code> 后由 <code>harness merge</code> 合入后推送</td><td>不适用，推送与合并走 <code>submit</code>、<code>sync</code> 和平台</td></tr>
+        <tr><th scope="row">本地主分支怎么更新</th><td><code>harness merge</code></td><td>平台合入后用 <code>harness sync</code> 快进</td></tr>
+        <tr><th scope="row">需要准备</th><td>无</td><td>本机安装并登录 <code>gh</code>（GitHub）或 <code>glab</code>（GitLab）</td></tr>
+      </tbody>
+    </table></div>
+    <p>两种方式<strong>只能选一种</strong>，由主分支上 <code>.harness/config.json</code> 的 <code>delivery</code> 决定：本地交付下 <code>submit</code> 会被拒绝，远程交付下 <code>merge</code> 会被拒绝；<code>sync</code> 只同步远程主分支，两种方式下都能用。默认是本地交付，<code>init</code> 写入 <code>"delivery": { "mode": "local" }</code>，没有这一段的项目也按本地交付处理。</p>
+    <p>远程交付下，harness 保证它提交的 PR/MR 通过了本机门禁；平台上最终合入什么，由团队在平台上配置的保护规则把关。</p>
+    <p>接入时就想用 PR/MR，告诉 Agent 平台是哪个，接入分支本身就以 PR/MR 提交。已经接入的项目改用 PR/MR，对 Agent 说明即可：</p>
+    <div class="code"><span class="label">切换需求示例</span><pre class="prompt"><code>这个项目改用 PR/MR 交付，平台是 GitHub。</code></pre></div>
+    <ol class="steps">
+      <li><h4>你准备平台命令</h4><p>在本机安装并登录 <code>gh</code> 或 <code>glab</code>；本地主分支有没推送的提交时先推送，让本地与远程主分支一致。</p></li>
+      <li><h4>Agent 在任务分支改交付设置</h4><p>把 <code>delivery</code> 改为 <code>{ "mode": "remote", "provider": "github" }</code>，验证、评审后给你看确认摘要，摘要里写明它由此获得的推送任务分支和创建 PR/MR 的权限。</p></li>
+      <li><h4>你确认，Agent 提交 PR/MR</h4><p>你执行确认命令后，Agent 运行 <code>harness submit</code>，把这个改动本身作为 PR/MR 提交。</p></li>
+      <li><h4>平台合并后同步</h4><p>你在平台上合并后，Agent 运行 <code>harness sync</code>，此后就改走 PR/MR。</p></li>
+    </ol>
+    <p>改回本地交付按同样的步骤把 <code>mode</code> 改回 <code>local</code>。交付方式的任何变化都要你确认，不受其他开关影响，详见<a href="https://github.com/windvalley/harness/blob/main/docs/reference.md#交付方式本地与远程">参考手册</a>。</p>

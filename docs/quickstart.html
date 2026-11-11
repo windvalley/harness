@@ -1,0 +1,110 @@
+<!doctype html>
+<!-- 本文件由 node docs/build.mjs 生成，请勿直接编辑。 -->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>快速开始 | harness 文档</title>
+<meta name="description" content="从接入项目到完成第一次受控交付，按步骤检查每一项结果。">
+<link rel="canonical" href="https://windvalley.github.io/harness/quickstart.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="harness 文档">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:title" content="快速开始 | harness 文档">
+<meta property="og:description" content="从接入项目到完成第一次受控交付，按步骤检查每一项结果。">
+<meta property="og:url" content="https://windvalley.github.io/harness/quickstart.html">
+<meta name="color-scheme" content="light dark">
+<script>try{const theme=localStorage.getItem("harness-theme");if(theme==="light"||theme==="dark")document.querySelector('meta[name="color-scheme"]').content=theme;}catch{}</script>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%230f766e' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6z'/%3E%3Cpath d='M8.5 12l2.5 2.5 4.5-5'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="assets/docs.css?v=58bf31c812">
+
+<script src="assets/docs.js?v=58bf31c812" defer></script>
+</head>
+<body data-page="quickstart" data-index="39d81d67f6">
+<a class="skip-link" href="#main-content">跳到主要内容</a>
+<header class="topbar">
+  <div class="topbar-inner">
+    <a class="brand" href="index.html" aria-label="harness 文档首页"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6z"/><path d="M8.5 12l2.5 2.5 4.5-5"/></svg><span>harness</span></a>
+    <span class="brand-divider" aria-hidden="true"></span><span class="product-area">文档</span>
+    <nav class="topnav" aria-label="主导航">
+      <a class="wide" href="https://github.com/windvalley/harness/blob/main/docs/reference.md">参考手册</a>
+      <a class="wide" href="https://github.com/windvalley/harness">GitHub</a>
+      <button class="search-open" id="search-open" type="button" aria-label="搜索文档" aria-keyshortcuts="Meta+K Control+K"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><span class="wide">搜索文档</span><kbd class="wide" aria-hidden="true">⌘K</kbd></button>
+      <button class="theme-toggle" id="theme-toggle" type="button" data-theme="auto" aria-label="颜色主题：跟随系统，点击切换" title="颜色主题：跟随系统，点击切换"><svg class="i-auto" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg><svg class="i-light" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><svg class="i-dark" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4 8 8 0 1 0 20 14.5z"/></svg></button>
+      <button class="drawer-open" id="drawer-open" type="button" aria-label="打开文档目录" aria-expanded="false" aria-controls="docs-drawer"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg><span>目录</span></button>
+    </nav>
+  </div>
+</header>
+<div class="layout">
+  <aside class="sidebar"><nav class="docs-nav" aria-label="文档导航"><section class="nav-group"><h2>开始使用</h2><ul><li><a href="index.html">概览</a></li><li><a href="quickstart.html" aria-current="page">快速开始</a></li><li><a href="daily.html">日常工作流</a></li><li><a href="blocked.html">被拦截时怎么办</a></li></ul></section><section class="nav-group"><h2>核心概念</h2><ul><li><a href="architecture.html">架构总览</a></li><li><a href="principles.html">核心原理</a></li><li><a href="limits.html">信任模型与限制</a></li></ul></section><section class="nav-group"><h2>配置与维护</h2><ul><li><a href="customize.html">按项目定制</a></li><li><a href="team.html">团队与多机</a></li></ul></section><section class="nav-group"><h2>参考</h2><ul><li><a href="cheatsheet.html">命令速查</a></li><li><a href="https://github.com/windvalley/harness/blob/main/docs/reference.md">参考手册<svg class="external" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6"/><path d="M20 4 10 14"/><path d="M18 13v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h6"/></svg></a></li></ul></section></nav></aside>
+  <main id="main-content"><header class="page-header"><p class="eyebrow">开始使用</p><h1 tabindex="-1" id="quickstart">快速开始</h1><p class="lead">从接入项目到完成第一次受控交付，按步骤检查每一项结果。</p></header><details class="mobile-page-toc"><summary>本页内容</summary><div class="page-toc-title">本页内容</div><ol><li class="toc-level-2"><a href="#step-1">在项目里向 Agent 提出接入请求</a></li><li class="toc-level-2"><a href="#step-2">查看接入方案与检查配置</a></li><li class="toc-level-2"><a href="#step-3">亲自确认门禁改动，再让 Agent 继续</a></li><li class="toc-level-2"><a href="#step-4">让客户端用上实时拦截</a></li><li class="toc-level-2"><a href="#step-5">检查结果，保留任务工作区</a></li></ol></details>
+    <div class="callout">
+      <p><strong>需要</strong>：macOS 或 Linux、Node.js 20 及以上、git 2.38 及以上（合并用到 <code>git merge-tree --write-tree</code>），以及一个用于独立代码评审的 AI 工具。推荐使用本机已登录的 Claude Code CLI（<code>claude</code>）或 Codex（<code>codex</code>）；其他工具或服务需符合<a href="https://github.com/windvalley/harness/blob/main/docs/reference.md#独立评审的后端">评审接口要求</a>。</p>
+    </div>
+
+    <ol class="steps">
+      <li>
+        <h2 tabindex="-1" id="step-1">在项目里向 Agent 提出接入请求</h2>
+        <p>在 AI 编程客户端中打开待接入项目，说出接入目标并提供仓库地址即可。Agent 会直接从 GitHub 获取最新版本并安装，阅读接入说明并检查当前项目。</p>
+        <div class="code"><span class="label">接入需求示例</span><pre class="prompt"><code>我想给当前项目接入 harness：https://github.com/windvalley/harness
+请直接从 GitHub 获取最新版本并安装到本机，不依赖本机已有的 harness 仓库或安装；然后适配并接入当前项目，保留已有有效规则和配置，完成验证、评审与交付。需要我亲自操作时，请给出具体步骤。</code></pre></div>
+        <p>Agent 会将所需版本安装到本机共享目录；项目通过仓库内的入口锁定版本，多个项目可以共用同一安装版本。</p>
+      </li>
+      <li>
+        <h2 tabindex="-1" id="step-2">查看接入方案与检查配置</h2>
+        <p>Agent 调查并预览接入改动，按项目规则准备任务分支和工作环境，再写入配置、提交、验证与独立评审。用户不需要先创建 Worktree，也不一律需要新建一个；同目录任务分支、已有隔离工作区或新建 Linked Worktree 都按实际约束选择。</p>
+        <p><code>init</code> 会写入配置、规则、入口、git 钩子、客户端配置和 <code>AGENTS.md</code> 托管块。起始检查需要对照项目真实命令核实，占位与未执行项应明确列出。</p>
+        <p>接入的关键一步，是把项目自己要求通过的检查（lint、build、test 等）配成验证里的必过项（<code>gate</code>）。Agent 会先在接入前的代码上逐条试跑这些检查：能通过的配成 <code>gate</code>，之后任何一项失败都合不进主分支；接入前就已经失败的，Agent 列给你，由你决定先修好、暂时豁免还是改为手工验收。没有配成 <code>gate</code> 的检查拦不住任何交付。例如 <code>init</code> 生成的 <code>lint</code> 只是占位，要换成项目真实的 lint 命令并设为 <code>gate</code> 才会生效。</p>
+        <p>已有 husky、自定义钩子等其他门禁时，Agent 应说明保留或迁移方式，需要舍弃现有规则时先由你决定。详细命令见<a href="https://github.com/windvalley/harness/blob/main/docs/reference.md#首次接入">参考手册</a>。</p>
+      </li>
+      <li>
+        <h2 tabindex="-1" id="step-3">亲自确认门禁改动，再让 Agent 继续</h2>
+        <p>接入时 Agent 会和你确定交付方式，默认本地交付；主分支在平台上、合并走 PR/MR 时见<a href="index.html#delivery-modes">两种交付方式</a>。首次接入交付前，Agent 展示涉及的门禁文件、将生效的规则与检查项，并给出包含实际路径和分支的确认命令。看过摘要后，由你在自己的终端执行带 <code>--yes</code> 的确认；在 Claude Code 中也可以用 <code>!</code> 前缀亲自执行。</p>
+        <p>对话里的同意不能代替这条人工确认。执行后告诉 Agent“已确认，请继续”：本地交付由它完成已获授权的本地合并；远程交付由它提交 PR/MR，你在平台上合并后再由它同步。它会汇报结果。</p>
+      </li>
+      <li>
+        <h2 tabindex="-1" id="step-4">让客户端用上实时拦截</h2>
+        <ul>
+          <li><strong>Claude Code</strong>：重启正在运行的会话，钩子在会话启动时读入。</li>
+          <li><strong>Codex</strong>：运行 <code>/hooks</code>，进入 <code>Review hooks</code> 后按 <code>t</code> 信任；每个 Worktree 首次使用时各信任一次。</li>
+          <li><strong>DeepSeek Harness</strong>：每台机器为用到的 profile 注册一次本机插件，所有项目共用，注册后重启。桌面版要用 App 自带的命令行，先打开一次桌面版再完全退出后运行；浏览器版用 <code>dsh</code>：</li>
+        </ul>
+        <div class="code"><pre><code># 桌面版
+"/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh" plugin --profile desktop add ~/.local/share/harness/dsh-plugin
+# 浏览器版
+dsh plugin --profile web add ~/.local/share/harness/dsh-plugin</code></pre></div>
+        <p>完成当前客户端的操作后，告知 Agent 已完成即可，由它接续诊断并解释已验证与仍待验证的部分，下面是输出示意：</p>
+        <div class="code term"><span class="label">输出节选</span><pre><code>  [ok] git:reference-transaction: &lt;项目&gt;/.git/hooks/reference-transaction
+  [ok] client:claude: PreToolUse 已接入（CLI 已验证；桌面版仅静态确认，未端到端实测）
+  [!!] client:codex: 钩子已接入但尚未信任：在 Codex 里运行 /hooks 批准一次，否则命令不会经过门禁
+  [ok] project:main: 配置取自主分支 main
+  [ok] main-worktree: &lt;项目&gt; 停在 main 且洁净，可以接收合并</code></pre></div>
+        <p><code>[!!]</code> 表示需要处理，<code>[?]</code> 表示仍待验证。配置就位、产品曾经实测与当前客户端实际调用已验证分别说明，不能只凭初始化成功宣布全部接入完成。</p>
+      </li>
+      <li>
+        <h2 tabindex="-1" id="step-5">检查结果，保留任务工作区</h2>
+        <p>确认接入已按约定交付（本地合并，或 PR/MR 合入后已同步），真实检查与验证、评审证据齐全，诊断中的待处理项有明确解释。接入分支和任务 Worktree 保留，需要清理时再按<a href="daily.html#cleanup">清理流程</a>发起请求。</p>
+      </li>
+    </ol>
+    <div class="callout warn">
+      <p>项目规则允许、没有其他门禁且你明确选择不走受控评审的小项目，可采用主分支直接接入的简化方式。由 Agent 先说明区别，再由你决定，见<a href="https://github.com/windvalley/harness/blob/main/docs/reference.md#小项目直接在主分支接入">参考手册</a>。</p>
+    </div><nav class="pagination" aria-label="文档分页"><a class="previous" href="index.html"><span>上一篇</span><strong>概览</strong></a><a class="next" href="daily.html"><span>下一篇</span><strong>日常工作流</strong></a></nav></main>
+  <aside class="page-toc"><nav aria-label="本页内容"><div class="page-toc-title">本页内容</div><ol><li class="toc-level-2"><a href="#step-1">在项目里向 Agent 提出接入请求</a></li><li class="toc-level-2"><a href="#step-2">查看接入方案与检查配置</a></li><li class="toc-level-2"><a href="#step-3">亲自确认门禁改动，再让 Agent 继续</a></li><li class="toc-level-2"><a href="#step-4">让客户端用上实时拦截</a></li><li class="toc-level-2"><a href="#step-5">检查结果，保留任务工作区</a></li></ol></nav><div class="related-links"><h2>相关链接</h2><a href="https://github.com/windvalley/harness/blob/main/docs/reference.md">参考手册</a><a href="https://github.com/windvalley/harness">GitHub 仓库</a></div></aside>
+</div>
+<footer>harness · MIT 许可 · <a href="https://github.com/windvalley/harness">GitHub</a> · <a href="https://github.com/windvalley/harness/blob/main/docs/reference.md">参考手册</a></footer>
+<dialog class="drawer" id="docs-drawer" aria-label="文档导航">
+  <div class="drawer-scroller">
+    <div class="drawer-sheet">
+      <div class="drawer-header"><strong>文档导航</strong><button id="drawer-close" type="button" aria-label="关闭文档目录" autofocus>关闭</button></div>
+      <nav class="docs-nav" aria-label="移动端文档导航"><section class="nav-group"><h2>开始使用</h2><ul><li><a href="index.html">概览</a></li><li><a href="quickstart.html" aria-current="page">快速开始</a></li><li><a href="daily.html">日常工作流</a></li><li><a href="blocked.html">被拦截时怎么办</a></li></ul></section><section class="nav-group"><h2>核心概念</h2><ul><li><a href="architecture.html">架构总览</a></li><li><a href="principles.html">核心原理</a></li><li><a href="limits.html">信任模型与限制</a></li></ul></section><section class="nav-group"><h2>配置与维护</h2><ul><li><a href="customize.html">按项目定制</a></li><li><a href="team.html">团队与多机</a></li></ul></section><section class="nav-group"><h2>参考</h2><ul><li><a href="cheatsheet.html">命令速查</a></li><li><a href="https://github.com/windvalley/harness/blob/main/docs/reference.md">参考手册<svg class="external" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6"/><path d="M20 4 10 14"/><path d="M18 13v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h6"/></svg></a></li></ul></section></nav>
+    </div>
+  </div>
+</dialog>
+<dialog class="search-dialog" id="search-dialog" aria-labelledby="search-title">
+  <div class="search-header"><h2 id="search-title">搜索文档</h2><button id="search-close" type="button" aria-label="关闭搜索">关闭</button></div>
+  <label class="search-field"><span class="visually-hidden">搜索关键词</span><input id="search-input" type="search" placeholder="搜索标题、正文或命令" autocomplete="off"></label>
+  <p class="search-status" id="search-status" role="status">输入关键词开始搜索</p>
+  <ul class="search-results" id="search-results"></ul>
+</dialog>
+</body>
+</html>

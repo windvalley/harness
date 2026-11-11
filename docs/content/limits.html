@@ -1,0 +1,10 @@
+<h2 id="limits">信任模型与限制</h2>
+    <p>harness 防的是 Agent 的误操作，以及被提示注入后常见的绕过写法；<strong>不防</strong>拥有本机权限、有意破坏的人或进程。</p>
+    <ul>
+      <li>签名密钥在你的用户目录里，能读到它的进程就能伪造记录。密钥损坏或怀疑泄露时，由人运行 <code>harness key rotate --yes</code>，已有记录全部作废。</li>
+      <li><code>HARNESS_MAIN_BYPASS</code> 等环境变量与 <code>core.hooksPath</code> 能让门禁失效，只能由人使用，Agent 设置或读取会被拦截。</li>
+      <li>路径规则只约束写文件、读文件类的工具调用；用 shell 命令读写同一个文件，要靠命令规则覆盖。</li>
+      <li>Codex 没有信任钩子时没有实时拦截；DeepSeek Harness 的本机插件尚未在运行中的客户端里端到端实测；Claude 桌面版只做了静态确认。git 层对它们都生效。</li>
+      <li>经通用入口接入的 Agent 只有实时拦截，没有收尾检查，harness 也无法验证 Agent 是否真的因拒绝而不执行。</li>
+      <li>任务分级仍由 Agent 判断，门禁只兜底能机械判定的部分；先红后绿与改动行覆盖率在配置了 <code>testFirst</code>、<code>coverage</code> 后由验证复算，但只证明“有测试会红、改动行被执行过”，不证明断言有效，没配置的项目仍靠评审与抽查；授权记录里的原话要靠你在合并输出或 <code>harness status</code> 里核对。</li>
+    </ul>
