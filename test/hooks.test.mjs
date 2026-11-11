@@ -204,9 +204,13 @@ describe("安装与自检", () => {
 
   test("托管块写出没有机械判定的分级条件，机械条件交给 core.md 与 verify --plan", () => {
     const block = managedBlockBody();
-    for (const pattern of [/在第一条回复里说明判断和依据/, /分析、评审、诊断类请求保持只读/, /需求已明确的小优化、小迭代或缺陷修复/, /对外接口契约、权限与数据兼容性/, /^  不满足或拿不准时先探索/m, /harness verify --plan/]) {
+    for (const pattern of [/在第一条回复里说明判断和依据/, /分析、评审、诊断类请求保持只读/, /需求已明确的小优化、小迭代或缺陷修复/, /不改库表、对外接口契约与数据兼容性的，直接实施/, /^  不满足或拿不准时先探索/m, /harness verify --plan/]) {
       assert.match(block, pattern, `托管块应包含: ${pattern}`);
     }
+    // 访问控制属于业务逻辑，由澄清与评审把关，不作为分级条件。
+    assert.doesNotMatch(block, /接口契约、权限/, "分级条件不含权限");
+    const core = readFileSync(join(PACKAGE_ROOT_TEST, "assets/rules/core.md"), "utf8");
+    assert.match(core, /^- 不改库表结构与迁移，不改对外接口契约与数据兼容性。$/m, "core.md 的分级条件不含权限");
     // 机械条件由 core.md 与 verify --plan 判定，托管块再复述一遍容易与规则不一致。
     for (const pattern of [/intent\.plan\.maxLines/, /risk\.(mode|paths|deps)/, /observe/]) {
       assert.doesNotMatch(block, pattern, `托管块不应复述机械条件: ${pattern}`);
