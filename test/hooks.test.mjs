@@ -204,7 +204,7 @@ describe("安装与自检", () => {
 
   test("托管块写出没有机械判定的分级条件，机械条件交给 core.md 与 verify --plan", () => {
     const block = managedBlockBody();
-    for (const pattern of [/在第一条回复里说明判断和依据/, /分析、评审、诊断类请求保持只读/, /缺陷修复/, /需求明确/, /权限与数据兼容性/, /拿不准时/, /harness verify --plan/]) {
+    for (const pattern of [/在第一条回复里说明判断和依据/, /分析、评审、诊断类请求保持只读/, /需求已明确的小优化、小迭代或缺陷修复/, /对外接口契约、权限与数据兼容性/, /^  不满足或拿不准时先探索/m, /harness verify --plan/]) {
       assert.match(block, pattern, `托管块应包含: ${pattern}`);
     }
     // 机械条件由 core.md 与 verify --plan 判定，托管块再复述一遍容易与规则不一致。
