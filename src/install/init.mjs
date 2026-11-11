@@ -31,7 +31,7 @@ function defaultConfig({ mainBranch }) {
     // risk：机械风险信号。paths 命中的改动合并前要人确认，exclude 豁免其中的文档与测试夹具；deps 命中的改动要实施授权（plan-first 预设生效时）。按项目补充路径；默认 mode 为 observe，只记录命中、不拦截，看过真实命中情况后改成 enforce 才开始执行。
     risk: { mode: "observe", paths: [...RISK_DEFAULTS.paths], deps: [...RISK_DEFAULTS.deps], exclude: [...RISK_DEFAULTS.exclude] },
     escalate: {
-      triggers: ["需求有歧义且会改变行为或权限", "必要验证被既有问题阻塞", "涉及推送、远程 MR、部署或生产操作", "同一个问题连续三轮没有解决"],
+      triggers: ["需求有歧义且会改变行为或权限", "必要验证被既有问题阻塞", "交付设置授权范围之外的推送、远程 MR、部署或生产操作", "同一个问题连续三轮没有解决"],
     },
     env: {},
     // 清理任务 Worktree 前在里面依次运行的命令，例如停服务、删隔离数据库；见 harness worktree clean。

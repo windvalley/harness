@@ -1,4 +1,4 @@
-import { acceptancePath, deliverySettings, gatePaths, loadGateProject, mainBranch } from "./lib/config.mjs";
+import { acceptancePath, deliveryAt, deliverySettings, gatePaths, loadGateProject, mainBranch } from "./lib/config.mjs";
 import { matchAny } from "./lib/glob.mjs";
 import { changedPaths, gitOk, isAncestor, mainWorktreeRoot, refExists, showBlob } from "./lib/git.mjs";
 import { readRecord } from "./lib/store.mjs";
@@ -8,7 +8,7 @@ import { collectObligations } from "./verify/obligation.mjs";
 import { landedIn } from "./lib/landed.mjs";
 import { REVIEW_KIND, reviewerSummary } from "./review/review.mjs";
 import { CONFIRM_KIND } from "./confirm/confirm.mjs";
-import { mainWorktreeProblems, planMergeResult, reuseDecision, reviewStaleFiles } from "./merge/merge.mjs";
+import { mainWorktreeProblems, mergePushTarget, planMergeResult, reuseDecision, reviewStaleFiles } from "./merge/merge.mjs";
 import { approvalState, assessRisk, planEnforced } from "./plan/plan.mjs";
 import { latestSubmit } from "./delivery/submit.mjs";
 import { unresolvedStop } from "./stop/session.mjs";
@@ -267,6 +267,18 @@ export function branchStatus({ cwd, branch }) {
 
   if (delivery.mode === "remote") submitStep({ result, add, root, branch, branchCommit });
 
+  // 本地交付下这次合并会不会顺带推送：与 merge 用同一份判定，让 Agent 不必翻 config.json 也知道推送已在授权内。
+  if (delivery.mode === "local") {
+    try {
+      const planned = planMergeResult({ project, root, branch });
+      const after = deliveryAt(root, planned.resultCommit) ?? deliverySettings(undefined);
+      const target = mergePushTarget({ bootstrap: project.bootstrap, before: delivery, after });
+      if (target) result.pushTarget = { remote: target.remote, mainRef };
+    } catch {
+      // 分支已合入或有冲突时算不出合并结果，这时也就不提示推送。
+    }
+  }
+
   result.ready = result.blockers.length === 0;
   return result;
 }
@@ -307,7 +319,9 @@ export function formatStatus(status) {
     else if (submitted?.stage === "ready") lines.push(`已提交：${submitted.url}，等平台合并；合入后运行 harness sync 更新本地主分支`);
     else if (submitted) lines.push(`已推送，PR/MR 还没有就绪：重跑 harness submit --branch ${status.branch} 补上`);
     else lines.push(`可以提交：harness submit --branch ${status.branch}`);
-  } else if (status.ready) lines.push("可以合并：harness merge --branch " + status.branch);
-  else lines.push(`还差 ${status.blockers.length} 步：${status.blockers.join("、")}`);
+  } else if (status.ready) {
+    const target = status.pushTarget ? `（合并后推送到 ${status.pushTarget.remote}/${status.pushTarget.mainRef}，属于已确认的交付授权，不需要另行请示）` : "";
+    lines.push(`可以合并：harness merge --branch ${status.branch}${target}`);
+  } else lines.push(`还差 ${status.blockers.length} 步：${status.blockers.join("、")}`);
   return lines.join("\n");
 }

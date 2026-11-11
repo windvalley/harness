@@ -95,6 +95,20 @@ describe("收尾检查", () => {
     assert.equal(stop(repo, { active: true }), null, "合并后放行");
   });
 
+  test("开启合并后推送的项目，收尾提示写明推送目标已属授权，不需要另行请示", () => {
+    const repo = setup({ project: { ".harness/config.json": { ...CONFIG, delivery: { mode: "local", remote: "origin", push: true } } } });
+    const dir = linkedTask(repo);
+    agentCommit(repo, dir, { "src/a.js": "export const a = 1;\n" });
+    toolCall(repo, bashCall(`.harness/bin/harness verify --branch ${BRANCH}`));
+    assert.equal(repo.cli("verify", "--branch", BRANCH).status, 0);
+    writeReview(repo, git(repo.root, "rev-parse", BRANCH), "approve");
+    const owed = stop(repo, { active: true });
+    assert.equal(owed?.decision, "block", "门禁齐备但没合并");
+    assert.match(owed.reason, /下一步 harness merge --branch task\/a/);
+    assert.match(owed.reason, /合并后会推送到 origin\/main/);
+    assert.match(owed.reason, /属于已确认的交付授权，不需要另行请示/);
+  });
+
   test("分支上有不符合规范的提交信息时拦下，下一步先改写提交信息", () => {
     const repo = setup();
     const dir = linkedTask(repo);

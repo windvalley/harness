@@ -875,7 +875,7 @@ dsh plugin --profile web add ~/.local/share/harness/dsh-plugin</code></pre></div
       <li><strong>看阶段</strong>：大需求先讨论并交付方案，明确授权后才实施；小需求核实范围后可以直接实施。</li>
       <li><strong>看效果</strong>：从约定入口查看已经实施的结果；例如小需求中非法邮箱会提示错误并阻止提交，合法邮箱仍可正常提交。</li>
       <li><strong>看证据</strong>：验收逐条对应需求，验证与独立评审有结果，未执行项与阻塞明确列出。</li>
-      <li><strong>看状态</strong>：本地交付说明已合并、待授权合并还是被阻塞；远程交付说明已提交 PR/MR 等平台合并、平台已合入并已同步还是被阻塞。同时给出分支、提交与工作区位置。</li>
+      <li><strong>看状态</strong>：本地交付说明已合并、待你同意合并还是被阻塞；远程交付说明已提交 PR/MR 等平台合并、平台已合入并已同步还是被阻塞。同时给出分支、提交与工作区位置。</li>
     </ul>
     <p>Agent 可以通过 <code>status</code> 汇总还差什么。下面示例表示门禁条件已满足，但没有验收清单，需求符合度仍是 <code>unknown</code>，不能据此宣布用户需求已经验收通过：</p>
     <div class="code term"><pre><code>分支 feat/login -> main

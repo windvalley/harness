@@ -150,7 +150,8 @@ function owedBy({ root, branch, escalations, worktrees }) {
     if (status.submitted?.current && status.submitted.stage === "ready") return null;
     return owed("门禁已经齐备，还没有提交 PR/MR", `harness submit --branch ${branch}`);
   }
-  return owed("门禁已经齐备，还没有合并", `harness merge --branch ${branch}`);
+  const hint = status.pushTarget ? `（合并后会推送到 ${status.pushTarget.remote}/${status.pushTarget.mainRef}，属于已确认的交付授权，不需要另行请示）` : "";
+  return owed("门禁已经齐备，还没有合并", `harness merge --branch ${branch}${hint}`);
 }
 
 /** 进展指纹：分支顶端、阻塞项与任务 Worktree 里未提交文件的内容。两次结束之间指纹没变，说明没有进展。 */
@@ -180,7 +181,7 @@ export function formatStopReason(owed) {
   lines.push(
     "harness 命令经项目入口 .harness/bin/harness 运行。",
     "按 .harness/rules/harness.md 的“一次任务”连续推进到合并（远程交付到 submit）；轮次长短、耗时与上下文大小都不是停下的理由。",
-    "缺权限、需要用户拍板、没有合并授权，或必要验证被外部问题阻塞时，先运行 harness escalate open 写明阻塞与选项（context.branch 填任务分支），再结束这一轮并向用户说明。",
+    "缺权限、需要用户拍板、用户明确要求暂不合并，或必要验证被外部问题阻塞时，先运行 harness escalate open 写明阻塞与选项（context.branch 填任务分支），再结束这一轮并向用户说明。",
     "用户在本轮明确要求暂停时，在回复里照录用户原话说明为什么停下。",
   );
   return lines.join("\n");

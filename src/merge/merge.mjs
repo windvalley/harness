@@ -578,6 +578,17 @@ export function afterMainUpdate({ project, root, mainRoot, resultPaths, bootstra
   return { refresh, notes, postMerge };
 }
 
+/**
+ * 这次合并会不会推送、推送到哪个远程。只看合并前主分支上的交付设置：
+ * 开启推送的那次合并读到的还是 push 为 false，不推；合并结果关闭推送、换远程的合并同样不推。
+ * merge 用它决定推送，status 与收尾检查用它说明“合并后会推送到哪里”，两边判定保持同一份。
+ */
+export function mergePushTarget({ bootstrap, before, after }) {
+  if (bootstrap) return null;
+  const pinned = before ?? deliverySettings(undefined);
+  return pinned.mode === "local" && pinned.push && sameDelivery(pinned, after) ? { remote: pinned.remote } : null;
+}
+
 /** 推送前先看远程主分支：它必须已经包含在本地主分支里，否则合并后推不上去，本地与远程会分叉。 */
 function preflightPush({ root, remote, mainRef, mainCommit }) {
   let relay;
@@ -661,7 +672,9 @@ export async function mergeTask({ cwd, branch, dryRun = false, log = console.err
 
     const gates = await checkGates({ project, root, branch, log, dryRun });
     const { mainCommit, branchCommit, fastForward, resultTree, newHead, resultPaths, gateTouched } = gates;
-    if (dryRun) return { dryRun: true, fastForward, newHead, resultTree, gateTouched, postMergeChecks: gates.postMergeChecks };
+    // 推送计划在 dry-run 时也算出来，只报告不推送、不做远程预检。
+    const plannedTarget = mergePushTarget({ bootstrap, before: deliveryAt(root, mainCommit), after: gates.delivery.after });
+    if (dryRun) return { dryRun: true, fastForward, newHead, resultTree, gateTouched, pushTarget: plannedTarget, postMergeChecks: gates.postMergeChecks };
 
     const latestMain = resolveCommit(root, mainRef);
     if (latestMain !== mainCommit) {
@@ -677,7 +690,8 @@ export async function mergeTask({ cwd, branch, dryRun = false, log = console.err
     if (!sameDelivery(pinned, gates.delivery.before ?? pinned)) {
       throw new MergeError(`${mainRef} 上的交付设置在合并过程中变了，重新运行 harness merge 即可复用已有证据`, "main_moved");
     }
-    const pushPlan = !bootstrap && pinned.mode === "local" && pinned.push && sameDelivery(pinned, gates.delivery.after) ? preflightPush({ root, remote: pinned.remote, mainRef, mainCommit }) : null;
+    const target = mergePushTarget({ bootstrap, before: pinned, after: gates.delivery.after });
+    const pushPlan = target ? preflightPush({ root, remote: target.remote, mainRef, mainCommit }) : null;
 
     // 主分支更新之前写下合并后验收义务：合并没有真正完成时分支顶端不是主分支的祖先，义务不会到期。
     writeObligations({ root, branch, tip: branchCommit, items: gates.postMergeChecks });

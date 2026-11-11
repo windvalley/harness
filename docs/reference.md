@@ -661,7 +661,7 @@ harness merge  --branch feat/login   # 本地交付：核对证据与评审，�
 
 - 从约定入口观察到需求中的结果，正常路径与约定边界都有验收证据。
 - 验证与独立评审结果明确，缺少验收清单时不能把工程质量评审当作需求已经验收通过。
-- 交付状态明确，并列出分支、提交、任务工作区与未完成项：本地交付是已合并、待授权合并或阻塞；远程交付是已提交 PR/MR 等平台合并、平台已合入并已同步或阻塞。
+- 交付状态明确，并列出分支、提交、任务工作区与未完成项：本地交付是已合并、待用户同意合并或阻塞；远程交付是已提交 PR/MR 等平台合并、平台已合入并已同步或阻塞。
 
 ### 清理任务 Worktree
 
@@ -1198,7 +1198,7 @@ HARNESS_MAIN_BYPASS=1 git merge --ff-only origin/main
 
 ### 例外上报
 
-遇到需要人拍板的情况（需求有歧义、必要验证被既有问题阻塞、要推送或部署、同一个问题连续三轮没有解决），Agent 用上报把决定交给人：
+遇到需要人拍板的情况（需求有歧义、必要验证被既有问题阻塞、在交付设置授权范围之外推送、创建或更新远程 MR、部署或生产操作、同一个问题连续三轮没有解决），Agent 用上报把决定交给人：
 
 ```bash
 harness escalate open --file esc.json      # 不带 --file 时从标准输入读
@@ -1231,7 +1231,7 @@ Agent 做到一半、门禁没有拒绝也没有遇到阻塞，自己结束了�
 | 只差人工确认门禁改动、首次接入确认，或主 Worktree 未就绪 | 放行：要人来做，汇报里说明 |
 | 对这个分支开了上报，之后分支没有新提交 | 放行：已经把决定交给人；之后又提交了，旧上报不再算数 |
 | 缺验证证据、验证未通过、缺评审、评审被拒、`review_stale`、`required` 下缺清单 | 拦下，提示下一条命令 |
-| 门禁齐备但还没有 `merge` 或 `submit` | 拦下，提示交付命令；没有合并授权时 Agent 上报后结束 |
+| 门禁齐备但还没有 `merge` 或 `submit` | 拦下，提示交付命令；用户明确要求暂不合并时 Agent 上报后结束 |
 | 分支没有新提交，但任务 Worktree 里有未提交的改动 | 拦下，提示提交后验证、评审 |
 
 拦下时 Agent 收到的信息列出每个分支还差什么和下一条命令，并说明轮次长短、耗时与上下文大小都不是停下的理由。
@@ -1346,7 +1346,7 @@ node ~/github/harness/bin/harness.mjs install --local   # 按新锁定的版本�
 | `risk.deps` | 新项目由 `init` 写入 `go.mod`、`requirements*.txt`、`Pipfile`、`Gemfile`，没有这一项则不启用 | 依赖清单 glob；命中的分支要实施授权，启用 `plan-first` 时生效，不套用 `intent.plan.exclude` |
 | `governance.confirmOnGateChange` | `true` | 门禁改动是否要人工确认；首次接入不受这个开关影响 |
 | `governance.gatePaths` | `[]` | 追加的门禁文件 glob |
-| `escalate.triggers` | 四条 | 建议上报的情形，写给 Agent 看，harness 不据此自动触发 |
+| `escalate.triggers` | 四条 | 建议上报的情形，写给 Agent 看，harness 不据此自动触发；交付设置授权范围内的推送不在其中 |
 | `env` | `{}` | 执行检查时附加的环境变量 |
 | `worktree.cleanup` | `[]` | `harness worktree clean` 删除 Worktree 前在里面依次运行的命令，见“清理任务 Worktree” |
 | `delivery.mode` | `local` | 交付方式：`local` 由 `harness merge` 合入本地主分支，`remote` 由 `harness submit` 推送并创建 PR/MR，见“交付方式” |

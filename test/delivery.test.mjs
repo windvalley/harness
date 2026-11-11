@@ -225,6 +225,8 @@ describe("配置与默认行为", () => {
     assert.match(init.stdout, /"mode": "remote", "provider": "github"/, "init 给出改为 PR/MR 的写法");
     assert.match(init.stdout, /harness submit --branch/, "init 说明远程交付改用 submit");
     assert.ok(generated.escalate.triggers.includes("同一个问题连续三轮没有解决"), "上报条件与 core.md 的停下条件一致");
+    assert.ok(generated.escalate.triggers.includes("交付设置授权范围之外的推送、远程 MR、部署或生产操作"), "上报条件不再把交付设置内的推送列为要上报的情形");
+    assert.equal(generated.escalate.triggers.some((item) => /^涉及推送/.test(item)), false);
 
     const existing = setup();
     const rerun = existing.rawCli("init");
@@ -252,6 +254,14 @@ describe("配置与默认行为", () => {
     assert.match(rules, /远程交付运行 `harness submit --branch <接入分支>`/, "接入流程覆盖远程交付");
     assert.match(rules, /门禁拒绝时/, "规则写明门禁拒绝后怎样修复与何时停下");
     assert.match(block, /未配置时为 `local`/, "托管块写明默认交付方式");
+    assert.match(block, /不逐次请示/, "托管块写明交付设置即远程写入授权，不逐次请示");
+    assert.match(block, /推标签、强推、在平台上合并、部署与生产操作仍须单独授权/, "托管块写明授权范围之外仍须单独授权");
+    assert.match(rules, /### 交付授权/, "规则给出交付授权的定义");
+    assert.match(rules, /不由实施授权推导，也不被实施授权替代/);
+    assert.match(rules, /不逐次请示/);
+    for (const code of ["push_rejected", "not_fast_forward", "push_failed", "push_skipped"]) {
+      assert.match(rules, new RegExp(code), `规则列出推送相关的停下码 ${code}`);
+    }
     assert.match(readFileSync(join(fresh.root, ".harness/rules/core.md"), "utf8"), /远程提交/);
     const safety = JSON.parse(readFileSync(join(PACKAGE_ROOT, "assets/presets/git-safety.json"), "utf8"));
     for (const id of ["main-write-on-branch", "main-ref-plumbing"]) {
@@ -1291,6 +1301,56 @@ describe("本地交付 delivery.push", () => {
     withRemote(repo);
     const ready = repo.cli("doctor");
     assert.match(ready.stdout, /\[ok\] delivery: 本地交付.*推送到 origin 的主分支/);
+  });
+
+  test("pushTarget 只在这条合并会推送时给出目标", async () => {
+    const { mergePushTarget } = await import("../src/merge/merge.mjs");
+    const local = { mode: "local", remote: "origin", provider: null, push: false };
+    const pushing = { ...local, push: true };
+    assert.deepEqual(mergePushTarget({ bootstrap: false, before: pushing, after: pushing }), { remote: "origin" });
+    assert.equal(mergePushTarget({ bootstrap: true, before: pushing, after: pushing }), null, "首次接入不推送");
+    assert.equal(mergePushTarget({ bootstrap: false, before: local, after: pushing }), null, "开启推送的那次不推送");
+    assert.equal(mergePushTarget({ bootstrap: false, before: pushing, after: local }), null, "合并结果关闭推送时不推送");
+  });
+
+  test("status 在会推送时于可以合并一行写明推送目标，不推时不提", () => {
+    const { repo } = pushing();
+    task(repo);
+    assert.equal(repo.cli("verify", "--branch", "task/a").status, 0);
+    const last = repo.cli("status", "--branch", "task/a").stdout.trim().split("\n").at(-1);
+    assert.match(last, /可以合并：harness merge --branch task\/a/, last);
+    assert.match(last, /合并后推送到 origin\/main/, last);
+    assert.match(last, /不需要另行请示/, last);
+
+    const plain = setup();
+    withRemote(plain);
+    task(plain);
+    assert.equal(plain.cli("verify", "--branch", "task/a").status, 0);
+    const plainLast = plain.cli("status", "--branch", "task/a").stdout.trim().split("\n").at(-1);
+    assert.match(plainLast, /可以合并：harness merge --branch task\/a/, plainLast);
+    assert.doesNotMatch(plainLast, /推送到 origin\/main/, "未开启推送时不提推送");
+  });
+
+  test("开启推送的那次合并，status 与 dry-run 都不预告推送", () => {
+    const repo = setup();
+    withRemote(repo);
+    setDelivery(repo, "chore/push-on", PUSH);
+    assert.equal(repo.cli("verify", "--branch", "chore/push-on").status, 0);
+    const last = repo.cli("status", "--branch", "chore/push-on").stdout.trim().split("\n").at(-1);
+    assert.doesNotMatch(last, /推送到 origin\/main/, "开启推送的那次不推送，不能预告");
+
+    assert.equal(repo.cli("confirm", "--branch", "chore/push-on", "--yes").status, 0);
+    const dry = repo.cli("merge", "--branch", "chore/push-on", "--dry-run");
+    assert.equal(dry.status, 0, dry.stderr);
+    assert.equal(JSON.parse(dry.stdout).pushTarget, null, "开启推送的那次 dry-run 不报告推送");
+    const enabled = repo.cli("merge", "--branch", "chore/push-on");
+    assert.equal(enabled.status, 0, enabled.stderr);
+    assert.equal(JSON.parse(enabled.stdout).push, null, "开启推送的那次合并不推送");
+
+    task(repo);
+    const next = repo.cli("merge", "--branch", "task/a", "--dry-run");
+    assert.equal(next.status, 0, next.stderr);
+    assert.deepEqual(JSON.parse(next.stdout).pushTarget, { remote: "origin" });
   });
 });
 
