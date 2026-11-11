@@ -139,7 +139,7 @@
       </div>
       <figcaption>图 4　同一个钩子，两种结果。令牌只能由持有密钥的 <code>harness merge</code> 与 <code>harness sync</code> 生成，而且只对这一次“旧提交到新提交”有效。</figcaption>
     </figure>
-    <p>所以在主分支上 <code>git commit</code> 或 <code>git pull</code> 被拒绝是预期行为。同步远端主分支的做法见 <a href="#team">团队与多机</a>。</p>
+    <p>所以在主分支上 <code>git commit</code> 或 <code>git pull</code> 被拒绝是预期行为。同步远程主分支的做法见 <a href="#team">团队与多机</a>。</p>
 
     <h3 id="trust-root">配置只从主分支读取</h3>
     <p>如果任务分支能改规则并立即生效，Agent 就可以“先关掉检查再提交”。harness 的所有判定（实时拦截、git 钩子、verify 选检查、merge 的合并条件）都<strong>从主分支的 git 对象读取配置</strong>，不读工作区，也不读任务分支。</p>

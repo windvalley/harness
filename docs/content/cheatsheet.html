@@ -8,7 +8,9 @@
         <tr><td><code>verify --branch &lt;分支&gt; [--plan] [--no-reuse]</code></td><td>验证并写签名证据；<code>--plan</code> 只列计划，<code>--no-reuse</code> 不复用已有结果</td></tr>
         <tr><td><code>attest --branch &lt;分支&gt; --check &lt;检查ID&gt; --command &lt;实际命令&gt; --report &lt;报告&gt;</code></td><td>登记已经成功的外部检查，供验证状态与独立评审使用</td></tr>
         <tr><td><code>review --branch &lt;分支&gt;</code></td><td>独立评审</td></tr>
+        <tr><td><code>review-plan --branch &lt;分支&gt; [--all]</code></td><td>方案评审，只给建议；默认只展示 high 及以上的发现，<code>--all</code> 展示全部</td></tr>
         <tr><td><code>status [--branch &lt;分支&gt;]</code></td><td>只读汇总还差哪几步才能交付</td></tr>
+        <tr><td><code>status --post-merge [--branch &lt;分支&gt;]</code></td><td>列出到期而未登记的合并后验收义务，有待办时退出码为 1</td></tr>
         <tr><td><code>confirm --branch &lt;分支&gt; [--yes]</code></td><td>查看门禁改动摘要；带 <code>--yes</code> 由人记录确认</td></tr>
         <tr><td><code>approve --branch &lt;分支&gt; [--yes --note &lt;原话&gt;]</code></td><td>查看方案与授权状态；记录实施授权</td></tr>
         <tr><td><code>merge --branch &lt;分支&gt; [--dry-run]</code></td><td>受控合并到主分支（本地交付）</td></tr>
@@ -16,11 +18,16 @@
         <tr><td><code>sync [--remote &lt;远程&gt;]</code></td><td>把本地主分支快进到远程主分支；<code>--remote</code> 只在首次接入时使用</td></tr>
         <tr><td><code>worktree clean [--yes] [--with-local-files]</code></td><td>预览并清理已合并的任务 Worktree；含本机文件的目录需加 <code>--with-local-files</code> 单独同意</td></tr>
         <tr><td><code>doctor</code></td><td>安装与接入自检</td></tr>
+        <tr><td><code>conformance</code></td><td>按“配置就位、行为已验证、运行稳定”三层判定 L3 判据，缺证据的项标 <code>PEND</code></td></tr>
+        <tr><td><code>metrics [--days &lt;n&gt;]</code></td><td>按周统计合并、验证、评审与拦截情况</td></tr>
         <tr><td><code>rules</code>、<code>check --kind ...</code></td><td>列出生效规则；手工判定一次调用</td></tr>
         <tr><td><code>golden [--worktree]</code></td><td>重放黄金任务</td></tr>
         <tr><td><code>install --local</code>、<code>install --version &lt;版本&gt;</code>、<code>upgrade</code></td><td>新机器安装；只把指定版本装进版本目录；升级项目到当前版本</td></tr>
         <tr><td><code>reviewer list</code>、<code>set</code>、<code>remove</code>、<code>prefer</code>、<code>test</code></td><td>管理本机评审者：客户端、模型、推理强度、端点与 key</td></tr>
         <tr><td><code>key status</code>、<code>key rotate [--yes]</code></td><td>查看证据密钥；轮换由人执行</td></tr>
+        <tr><td><code>escalate &lt;open|list|show|answer|resume&gt;</code></td><td>例外上报</td></tr>
+        <tr><td><code>versions</code>、<code>prune [--keep &lt;v,...&gt;] [--dry-run]</code></td><td>列出、清理本机安装的版本</td></tr>
+        <tr><td><code>publish [--version &lt;v&gt;]</code>、<code>version</code></td><td>把当前代码装进版本目录；打印版本号</td></tr>
         <tr><td><code>uninstall [--dry-run] [--purge]</code></td><td>解除接入</td></tr>
       </tbody>
     </table></div>

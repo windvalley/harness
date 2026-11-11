@@ -7,7 +7,7 @@ import { test } from "node:test";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const docs = join(root, "docs");
-const pages = readdirSync(docs).filter((file) => file.endsWith(".html"));
+const pages = readdirSync(docs).filter((file) => file.endsWith(".html") && file !== "404.html");
 
 test("文档站生成结果与内容源一致", () => {
   const result = spawnSync(process.execPath, ["docs/build.mjs", "--check"], { cwd: root, encoding: "utf8" });
@@ -74,6 +74,18 @@ test("上一篇和下一篇与侧栏顺序一致", () => {
     assert.equal(previous, order[index - 1], `${file} 的上一篇不符合侧栏顺序`);
     assert.equal(next, order[index + 1], `${file} 的下一篇不符合侧栏顺序`);
   });
+});
+
+test("每个页面带 canonical 与 og 标签，站点地图覆盖全部页面", () => {
+  const sitemap = readFileSync(join(docs, "sitemap.xml"), "utf8");
+  for (const file of pages) {
+    const html = readFileSync(join(docs, file), "utf8");
+    const canonical = html.match(/<link rel="canonical" href="([^"]+)"/)?.[1];
+    assert.ok(canonical?.startsWith("https://"), `${file} 缺少 canonical`);
+    assert.ok(html.includes(`<meta property="og:url" content="${canonical}">`), `${file} 的 og:url 与 canonical 不一致`);
+    assert.ok(sitemap.includes(`<loc>${canonical}</loc>`), `${file} 不在站点地图里`);
+  }
+  assert.ok(existsSync(join(docs, "404.html")) && existsSync(join(docs, "robots.txt")));
 });
 
 test("相关链接不继承页内目录的负边距", () => {

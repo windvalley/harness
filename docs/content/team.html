@@ -18,19 +18,19 @@ node ~/github/harness/bin/harness.mjs install --local
     <p><code>upgrade</code> 会整份重写 <code>rules/</code> 与 <code>templates/</code>，项目自己的规范请写在 <code>AGENTS.md</code> 托管块之外；已有配置和黄金任务的迁移由 Agent 核对并说明。</p>
     <p>具体命令与其他成员的接续操作见<a href="https://github.com/windvalley/harness/blob/main/docs/reference.md#升级">升级参考</a>。</p>
 
-    <h3 id="sync">与远端同步</h3>
-    <div class="code"><span class="label">同步需求示例</span><pre class="prompt"><code>我想把远端主分支的更新同步到本地。</code></pre></div>
+    <h3 id="sync">与远程同步</h3>
+    <div class="code"><span class="label">同步需求示例</span><pre class="prompt"><code>我想把远程主分支的更新同步到本地。</code></pre></div>
     <p>Agent 应检查差异并说明同步方式和影响，在项目授权范围内处理，最后汇报结果。</p>
     <p>远程写入仍须按项目规则单独取得授权，请求本地接入或合并不代表允许推送。下面是同步机制与命令参考。</p>
     <p>harness 只管本地主分支。Agent 推送主分支会被拦截，由人推送；Agent 可以推送任务分支，但不能强推。</p>
     <p>本地交付下，想让合并后自动推送，在 <code>delivery</code> 里加 <code>"push": true</code>：<code>harness merge</code> 随后把核对过的提交普通推送到远程主分支，不强推、不推标签。它授予推送主分支的权限，所以要人确认，开启的那次合并不推送；主分支受保护、只接受 PR/MR 的仓库请改用远程交付。</p>
     <p>接入后优先用 <code>harness sync</code>：它把本地主分支快进到远程主分支，核对远程带来的门禁改动（需要时由人运行 <code>harness confirm --branch origin/main</code>），刷新本机安装并执行 <code>merge.postMergeCommand</code>。本地有远程没有的提交时它拒绝，不改写历史。两种交付方式下都能用，远程交付下它是更新本地主分支的唯一方式，见<a href="#delivery-modes">两种交付方式</a>。</p>
-    <p>需要人工判断时，也可以用下面两种做法同步远端主分支：</p>
+    <p>需要人工判断时，也可以用下面两种做法同步远程主分支：</p>
     <div class="code"><span class="label">做法一：走一遍本机门禁</span><pre><code>git fetch origin
 harness verify --branch origin/main
 harness review --branch origin/main
 harness merge  --branch origin/main</code></pre></div>
-    <div class="code"><span class="label">做法二：由人决定信任远端，只能快进</span><pre><code>git fetch origin
+    <div class="code"><span class="label">做法二：由人决定信任远程，只能快进</span><pre><code>git fetch origin
 HARNESS_MAIN_BYPASS=1 git merge --ff-only origin/main</code></pre></div>
     <p><code>HARNESS_MAIN_BYPASS</code> 是绕过开关，只能由人在自己的终端使用，Agent 设置它会被拦截。</p>
 

@@ -7,6 +7,8 @@ const root = dirname(fileURLToPath(import.meta.url));
 const checkOnly = process.argv.includes("--check");
 const repository = "https://github.com/windvalley/harness";
 const reference = `${repository}/blob/main/docs/reference.md`;
+let indexVersion = "";
+const siteUrl = "https://windvalley.github.io/harness/";
 const assetVersion = createHash("sha256")
   .update(readFileSync(join(root, "assets", "docs.css")))
   .update(readFileSync(join(root, "assets", "docs.js")))
@@ -154,6 +156,13 @@ function renderPage(page, content, toc) {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${page.title} | harness 文档</title>
 <meta name="description" content="${escapeHtml(page.description)}">
+<link rel="canonical" href="${siteUrl}${page.home ? "" : page.file}">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="harness 文档">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:title" content="${page.title} | harness 文档">
+<meta property="og:description" content="${escapeHtml(page.description)}">
+<meta property="og:url" content="${siteUrl}${page.home ? "" : page.file}">
 <meta name="color-scheme" content="light dark">
 <script>try{const theme=localStorage.getItem("harness-theme");if(theme==="light"||theme==="dark")document.querySelector('meta[name="color-scheme"]').content=theme;}catch{}</script>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%230f766e' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6z'/%3E%3Cpath d='M8.5 12l2.5 2.5 4.5-5'/%3E%3C/svg%3E">
@@ -161,7 +170,7 @@ function renderPage(page, content, toc) {
 ${legacyRedirect}
 <script src="assets/docs.js?v=${assetVersion}" defer></script>
 </head>
-<body data-page="${page.slug}">
+<body data-page="${page.slug}" data-index="${indexVersion}">
 <a class="skip-link" href="#main-content">跳到主要内容</a>
 <header class="topbar">
   <div class="topbar-inner">
@@ -203,13 +212,61 @@ ${legacyRedirect}
 
 const outputs = new Map();
 const searchIndex = [];
+const rendered = [];
+
+function searchSections(page, content) {
+  const headings = [...content.matchAll(/<h([123])\b[^>]*\bid="([^"]+)"[^>]*>([\s\S]*?)<\/h\1>/g)];
+  const sections = [];
+  const intro = content.slice(0, headings[0]?.index ?? content.length);
+  if (textOf(intro)) sections.push({ heading: "", id: "", text: textOf(intro) });
+  headings.forEach((match, index) => {
+    const end = headings[index + 1]?.index ?? content.length;
+    const body = content.slice(match.index + match[0].length, end);
+    sections.push({ heading: textOf(match[3]), id: match[2], text: textOf(body) });
+  });
+  return sections;
+}
+
 for (const page of orderedPages) {
   const content = prepareContent(page);
-  const toc = pageToc(content);
-  outputs.set(page.file, renderPage(page, content, toc));
-  searchIndex.push({ title: page.title, group: page.group, description: page.description, url: page.file, text: textOf(content) });
+  rendered.push({ page, content, toc: pageToc(content) });
+  for (const section of searchSections(page, content)) {
+    const first = !section.heading || (!page.home && section.id === content.match(/<h1\b[^>]*\bid="([^"]+)"/)?.[1]);
+    searchIndex.push({
+      title: page.title,
+      group: page.group,
+      section: first ? "" : section.heading,
+      url: first || !section.id ? page.file : `${page.file}#${section.id}`,
+      text: section.text,
+    });
+  }
 }
-outputs.set("assets/search-index.json", `${JSON.stringify(searchIndex)}\n`);
+const searchIndexJson = `${JSON.stringify(searchIndex)}\n`;
+indexVersion = createHash("sha256").update(searchIndexJson).digest("hex").slice(0, 10);
+for (const { page, content, toc } of rendered) outputs.set(page.file, renderPage(page, content, toc));
+outputs.set("assets/search-index.json", searchIndexJson);
+outputs.set("sitemap.xml", `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${orderedPages.map((page) => `  <url><loc>${siteUrl}${page.home ? "" : page.file}</loc></url>`).join("\n")}\n</urlset>\n`);
+outputs.set("robots.txt", `User-agent: *\nAllow: /\nSitemap: ${siteUrl}sitemap.xml\n`);
+outputs.set("404.html", `<!doctype html>
+<!-- 本文件由 node docs/build.mjs 生成，请勿直接编辑。 -->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<meta name="color-scheme" content="light dark">
+<title>页面不存在 | harness 文档</title>
+<style>:root{color-scheme:light dark}body{margin:0;min-height:100dvh;display:grid;place-items:center;font:16px/1.8 -apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans SC","Segoe UI",sans-serif;background:light-dark(#fff,#121416);color:light-dark(#1d1f22,#e5e7e9)}main{max-width:32rem;padding:24px}a{color:light-dark(#0f766e,#2dd4bf)}</style>
+</head>
+<body>
+<main>
+<h1>页面不存在</h1>
+<p>这个地址没有对应的文档页面，可能是链接过期或输入有误。</p>
+<p><a href="${siteUrl}">回到文档首页</a>，或从导航里找到需要的页面。</p>
+</main>
+</body>
+</html>
+`);
 
 let stale = [];
 for (const [file, content] of outputs) {

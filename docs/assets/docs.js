@@ -105,7 +105,7 @@
 
   function loadSearchIndex() {
     if (!searchIndexPromise) {
-      searchIndexPromise = fetch("assets/search-index.json").then((response) => {
+      searchIndexPromise = fetch(`assets/search-index.json?v=${document.body.dataset.index || ""}`).then((response) => {
         if (!response.ok) throw new Error(`搜索索引请求失败: ${response.status}`);
         return response.json();
       }).catch((error) => {
@@ -116,36 +116,47 @@
     return searchIndexPromise;
   }
 
-  function resultSnippet(item, query) {
-    const position = item.text.toLowerCase().indexOf(query);
-    if (position < 0) return item.description;
+  function resultSnippet(item, terms) {
+    const text = item.text;
+    const lower = text.toLowerCase();
+    const position = Math.min(...terms.map((term) => lower.indexOf(term)).filter((value) => value >= 0), Infinity);
+    if (!Number.isFinite(position)) return text.slice(0, 110) + (text.length > 110 ? "…" : "");
     const start = Math.max(0, position - 42);
-    const end = Math.min(item.text.length, position + query.length + 78);
-    return `${start ? "…" : ""}${item.text.slice(start, end)}${end < item.text.length ? "…" : ""}`;
+    const end = Math.min(text.length, position + 90);
+    return `${start ? "…" : ""}${text.slice(start, end)}${end < text.length ? "…" : ""}`;
+  }
+
+  function scoreItem(item, terms) {
+    const title = item.title.toLowerCase();
+    const section = item.section.toLowerCase();
+    const group = item.group.toLowerCase();
+    const text = item.text.toLowerCase();
+    let score = 0;
+    for (const term of terms) {
+      let hit = 0;
+      if (section === term || title === term) hit += 120;
+      else if (section.includes(term)) hit += 80;
+      else if (title.includes(term)) hit += 60;
+      if (group.includes(term)) hit += 10;
+      if (text.includes(term)) hit += 10;
+      if (!hit) return 0;
+      score += hit;
+    }
+    return score;
   }
 
   function renderSearchResults(index) {
-    const query = searchInput.value.trim().toLowerCase();
+    const terms = searchInput.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
     searchResults.replaceChildren();
-    if (!query) {
+    if (!terms.length) {
       searchStatus.textContent = "输入关键词开始搜索";
       return;
     }
-    const matches = index.map((item) => {
-      const title = item.title.toLowerCase();
-      const group = item.group.toLowerCase();
-      const description = item.description.toLowerCase();
-      const text = item.text.toLowerCase();
-      let score = 0;
-      if (title === query) score += 200;
-      else if (title.includes(query)) score += 100;
-      if (group.includes(query)) score += 30;
-      if (description.includes(query)) score += 40;
-      if (text.includes(query)) score += 10;
-      return { item, score };
-    }).filter((match) => match.score > 0).sort((a, b) => b.score - a.score).slice(0, 8);
+    const all = index.map((item) => ({ item, score: scoreItem(item, terms) })).filter((match) => match.score > 0).sort((a, b) => b.score - a.score);
+    const matches = all.slice(0, 8);
 
-    searchStatus.textContent = matches.length ? `找到 ${matches.length} 个相关页面` : "没有找到相关内容";
+    if (!all.length) searchStatus.textContent = "没有找到相关内容";
+    else searchStatus.textContent = all.length > matches.length ? `找到 ${all.length} 处相关内容，显示前 ${matches.length} 处` : `找到 ${all.length} 处相关内容`;
     for (const { item } of matches) {
       const li = document.createElement("li");
       const link = document.createElement("a");
@@ -153,9 +164,9 @@
       const group = document.createElement("small");
       const snippet = document.createElement("p");
       link.href = item.url;
-      title.textContent = item.title;
-      group.textContent = item.group;
-      snippet.textContent = resultSnippet(item, query);
+      title.textContent = item.section || item.title;
+      group.textContent = item.section ? `${item.group} / ${item.title}` : item.group;
+      snippet.textContent = resultSnippet(item, terms);
       link.append(title, group, snippet);
       link.addEventListener("click", () => searchDialog.close());
       li.append(link);
