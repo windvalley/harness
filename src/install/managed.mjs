@@ -13,25 +13,22 @@ export function assetPath(rel) {
   return join(PACKAGE_ROOT, "assets", rel);
 }
 
+/** 把托管块写进 AGENTS.md 的现有内容（null 表示文件不存在）；块外内容原样保留。 */
+export function renderManagedBlock(text, body) {
+  const block = `${MARK_START}\n${body.trim()}\n${MARK_END}`;
+  if (text === null) return `${block}\n`;
+  const start = text.indexOf(MARK_START);
+  const end = text.indexOf(MARK_END);
+  if (start >= 0 && end > start) return `${text.slice(0, start)}${block}${text.slice(end + MARK_END.length)}`;
+  return `${text.replace(/\n+$/, "")}\n\n${block}\n`;
+}
+
 /** 替换或追加 AGENTS.md 里的托管块；块外内容原样保留。 */
 export function writeManagedBlock({ root, body }) {
   const file = join(root, "AGENTS.md");
-  const block = `${MARK_START}\n${body.trim()}\n${MARK_END}`;
-  if (!existsSync(file)) {
-    writeFileSync(file, `${block}\n`);
-    return { path: "AGENTS.md", created: true };
-  }
-  const text = readFileSync(file, "utf8");
-  const start = text.indexOf(MARK_START);
-  const end = text.indexOf(MARK_END);
-  let next;
-  if (start >= 0 && end > start) {
-    next = `${text.slice(0, start)}${block}${text.slice(end + MARK_END.length)}`;
-  } else {
-    next = `${text.replace(/\n+$/, "")}\n\n${block}\n`;
-  }
-  writeFileSync(file, next);
-  return { path: "AGENTS.md", created: false };
+  const created = !existsSync(file);
+  writeFileSync(file, renderManagedBlock(created ? null : readFileSync(file, "utf8"), body));
+  return { path: "AGENTS.md", created };
 }
 
 export function removeManagedBlock({ root }) {
@@ -45,6 +42,25 @@ export function removeManagedBlock({ root }) {
   return true;
 }
 
+const RULE_SOURCES = [
+  "rules/core.md",
+  "rules/harness.md",
+  "rules/method-requirements.md",
+  "rules/method-diagnosis.md",
+  "rules/method-test-design.md",
+  "rules/method-design-planning.md",
+  "rules/method-review.md",
+  "rules/method-retrospective.md",
+  "templates/acceptance.md",
+  "templates/spec.md",
+  "templates/plan.md",
+];
+
+/** 随版本分发、会被 upgrade 整份重写的规则与模板：[.harness 下的相对路径, 内容]。 */
+export function ruleEntries() {
+  return RULE_SOURCES.filter((rel) => existsSync(assetPath(rel))).map((rel) => [rel, readFileSync(assetPath(rel), "utf8")]);
+}
+
 /** 写入项目内的规则文件（项目自有，可改，可随版本升级重写）。 */
 export function writeRules({ root, version }) {
   const write = (rel, content) => {
@@ -53,24 +69,7 @@ export function writeRules({ root, version }) {
     writeFileSync(target, content);
     return `.harness/${rel}`;
   };
-  const written = [];
-  const rules = [
-    ["rules/core.md", assetPath("rules/core.md")],
-    ["rules/harness.md", assetPath("rules/harness.md")],
-    ["rules/method-requirements.md", assetPath("rules/method-requirements.md")],
-    ["rules/method-diagnosis.md", assetPath("rules/method-diagnosis.md")],
-    ["rules/method-test-design.md", assetPath("rules/method-test-design.md")],
-    ["rules/method-design-planning.md", assetPath("rules/method-design-planning.md")],
-    ["rules/method-review.md", assetPath("rules/method-review.md")],
-    ["rules/method-retrospective.md", assetPath("rules/method-retrospective.md")],
-    ["templates/acceptance.md", assetPath("templates/acceptance.md")],
-    ["templates/spec.md", assetPath("templates/spec.md")],
-    ["templates/plan.md", assetPath("templates/plan.md")],
-  ];
-  for (const [rel, source] of rules) {
-    if (!existsSync(source)) continue;
-    written.push(write(rel, readFileSync(source, "utf8")));
-  }
+  const written = ruleEntries().map(([rel, content]) => write(rel, content));
   write("VERSION", `${version}\n`);
   return written;
 }

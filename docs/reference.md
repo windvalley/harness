@@ -1314,6 +1314,7 @@ git clone --depth 1 https://github.com/windvalley/harness.git "$harness_source"
 cd <项目>
 git worktree add -b chore/harness-upgrade ../<项目>-upgrade main
 cd ../<项目>-upgrade
+node "$harness_source/bin/harness.mjs" upgrade --dry-run   # 先预览会改哪些文件，不写入
 node "$harness_source/bin/harness.mjs" upgrade
 git add -A
 git commit -m "chore(harness): 升级到 <版本>" -m "- 更新入口锁定的版本与规则文档"
@@ -1321,6 +1322,8 @@ git commit -m "chore(harness): 升级到 <版本>" -m "- 更新入口锁定的�
 
 然后按日常任务的流程 verify、review、confirm、merge。
 `upgrade` 安装新版本、改写入口锁定的版本、重新生成钩子与客户端配置，并整份重写 `rules/` 与 `templates/`。
+`upgrade --dry-run` 只比对并列出会新增或更新的规则、模板、版本标记、入口与 `AGENTS.md` 托管块，以及会被移除的黄金任务旧副本；它不写文件、不安装版本目录，钩子与客户端配置在正式升级时才重新生成，预览里不逐项比对。
+`upgrade` 只接受 `--dry-run`，其他参数一律报错，不会被忽略。
 `AGENTS.md` 里的托管块也会刷新，块外的内容保持不动。
 `config.json`、`policy.json`、`verify.json` 保持不动，新版本带来的可选预设与配置要自己加，见 `CHANGELOG.md` 的升级说明。
 `upgrade` 结束时列出这个项目还没配置的 `risk`、`testFirst`、`coverage`、`requiredPaths`，以及本地交付下的 `delivery.push`，并标明前三项有 `observe` 模式、只记录不拦截，`requiredPaths` 配置后会直接拦截，`delivery.push` 授予推送主分支的权限；它只提示，不写这些文件。
@@ -1870,7 +1873,8 @@ harness reviewer set mine --client command --command-json '["my-reviewer","--jso
 
 ## 命令速查
 
-运行 `harness help` 查看全部命令与参数。
+运行 `harness help` 查看全部命令与参数，`harness <命令> --help`（或 `-h`、`harness help <命令>`）只看某个命令的用法，不会执行该命令。
+命令的选项写错时报错并以退出码 2 结束，不会被忽略后继续执行。
 
 | 命令 | 用途 |
 | --- | --- |
@@ -1898,7 +1902,7 @@ harness reviewer set mine --client command --command-json '["my-reviewer","--jso
 | `pitfall add --signature <特征> --symptom <现象> --fix <做法>`、`pitfall list [--flagged]` | 记录与查看本项目反复踩的坑，见“坑位记录” |
 | `init [--dry-run] [--take-over] [--force]` | 接入当前项目，`--dry-run` 只预览 |
 | `install [--take-over]`、`install --local`、`install --version <版本>` | 重新生成入口、钩子与客户端配置；`--local` 只刷新本机，不改入库文件；`--version` 只把指定版本装进版本目录 |
-| `upgrade` | 把项目升级到运行它的 harness 版本 |
+| `upgrade [--dry-run]` | 把项目升级到运行它的 harness 版本；`--dry-run` 只预览将新增或更新的文件，不写任何文件 |
 | `uninstall [--dry-run] [--purge]` | 解除接入 |
 | `versions`、`prune [--keep <v,...>] [--dry-run]` | 列出、清理本机安装的版本 |
 | `publish [--version <v>]`、`version` | 把当前代码装进版本目录，`--version` 只能是当前代码的版本；打印版本号 |

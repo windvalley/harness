@@ -32,8 +32,18 @@ export function resolveGolden(projectGolden) {
  * 与内置不同的同 id 用例不动，交给人决定是自己的改动还是过期副本。
  */
 export function pruneBuiltinCopies(root) {
+  const plan = planBuiltinCopies(root);
+  if (plan.removed.length > 0) {
+    const file = join(root, ".harness", "golden", "tasks.json");
+    writeFileSync(file, `${JSON.stringify({ ...plan.golden, tasks: plan.kept }, null, 2)}\n`);
+  }
+  return { removed: plan.removed, overrides: plan.overrides };
+}
+
+/** pruneBuiltinCopies 的只读判定：哪些旧副本会被移除，哪些同 id 用例与内置不同。 */
+export function planBuiltinCopies(root) {
   const file = join(root, ".harness", "golden", "tasks.json");
-  if (!existsSync(file)) return { removed: [], overrides: [] };
+  if (!existsSync(file)) return { removed: [], overrides: [], kept: [], golden: null };
   const golden = JSON.parse(readFileSync(file, "utf8"));
   const builtin = new Map(builtinTasks().map((task) => [task.id, task]));
   const removed = [];
@@ -47,6 +57,5 @@ export function pruneBuiltinCopies(root) {
       if (base) overrides.push(task.id);
     }
   }
-  if (removed.length > 0) writeFileSync(file, `${JSON.stringify({ ...golden, tasks: kept }, null, 2)}\n`);
-  return { removed, overrides };
+  return { removed, overrides, kept, golden };
 }
