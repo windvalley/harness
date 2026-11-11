@@ -234,6 +234,15 @@ tr:last-child td { border-bottom: 0; }
 td code { white-space: nowrap; }
 .t-cmd td:first-child code { white-space: normal; }
 .t-cmd .arg { display: inline-block; white-space: nowrap; }
+.t-cmd td:nth-child(2) code { white-space: normal; overflow-wrap: anywhere; }
+@media (max-width: 640px) {
+  .t-cmd thead { display: none; }
+  .t-cmd, .t-cmd tbody, .t-cmd tr, .t-cmd td { display: block; width: 100%; }
+  .t-cmd tr { padding: 12px 14px; border-bottom: 1px solid var(--line); }
+  .t-cmd tr:last-child { border-bottom: 0; }
+  .t-cmd td { padding: 0; border: 0; }
+  .t-cmd td:first-child { margin-bottom: 6px; }
+}
 .t-key td:first-child, .t-key th:first-child, .t-files td:last-child, .t-files th:last-child { white-space: nowrap; }
 .code { position: relative; margin: 1.4rem 0; }
 .code pre { margin: 0; background: var(--code-bg); border: 1px solid var(--line); border-radius: var(--radius); padding: 40px 16px 16px; overflow-x: auto; font-size: .875rem; line-height: 1.7; }

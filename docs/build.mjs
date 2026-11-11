@@ -104,9 +104,12 @@ function pageToc(content) {
 }
 
 function keepCommandArgsTogether(content) {
-  return content.replace(/(<table class="t-cmd">[\s\S]*?<\/table>)/, (table) => table.replace(/<tr><td><code>([^<]*)<\/code>/g, (_, command) => {
-    const parts = command.split(" ").map((part) => `<span class="arg">${part}</span>`);
-    return `<tr><td><code>${parts.join(" ")}</code>`;
+  return content.replace(/(<table class="t-cmd">[\s\S]*?<\/table>)/, (table) => table.replace(/<tr><td>(.*?)<\/td>/g, (_, cell) => {
+    const wrapped = cell.replace(/<code>([^<]*)<\/code>/g, (__, command) => {
+      const parts = command.split(" ").map((part) => `<span class="arg">${part}</span>`);
+      return `<code>${parts.join(" ")}</code>`;
+    });
+    return `<tr><td>${wrapped}</td>`;
   }));
 }
 
