@@ -54,6 +54,7 @@
 
   const drawerObserver = new IntersectionObserver((entries) => {
     const entry = entries.at(-1);
+    if (!drawer.open) return;
     if (entry.intersectionRatio < visibleThreshold) onDrawerClosed();
     if (entry.intersectionRatio === 1) onDrawerOpened();
   }, { root: drawer, threshold: [visibleThreshold, 1] });
@@ -107,6 +108,9 @@
       searchIndexPromise = fetch("assets/search-index.json").then((response) => {
         if (!response.ok) throw new Error(`搜索索引请求失败: ${response.status}`);
         return response.json();
+      }).catch((error) => {
+        searchIndexPromise = undefined;
+        throw error;
       });
     }
     return searchIndexPromise;
@@ -203,6 +207,9 @@
     button.className = "copy";
     button.textContent = "复制";
     button.setAttribute("aria-label", "复制代码");
+    const live = document.createElement("span");
+    live.className = "visually-hidden";
+    live.setAttribute("role", "status");
     let resetTimer;
     button.addEventListener("click", async () => {
       const text = pre.innerText.replace(/\n$/, "");
@@ -214,22 +221,28 @@
         const textarea = document.createElement("textarea");
         textarea.value = text;
         textarea.className = "visually-hidden";
-        document.body.append(textarea);
-        textarea.focus();
+        textarea.setAttribute("aria-hidden", "true");
+        box.append(textarea);
+        textarea.focus({ preventScroll: true });
         textarea.select();
         copied = document.execCommand("copy");
         textarea.remove();
+        button.focus({ preventScroll: true });
       }
       clearTimeout(resetTimer);
       button.textContent = copied ? "已复制" : "复制失败";
+      live.textContent = copied ? "已复制到剪贴板" : "复制失败";
       button.dataset.state = copied ? "done" : "failed";
       resetTimer = setTimeout(() => {
         button.textContent = "复制";
+        live.textContent = "";
         delete button.dataset.state;
       }, 1500);
     });
-    box.append(button);
+    box.append(button, live);
   });
+
+  requestAnimationFrame(() => document.documentElement.classList.add("page-ready"));
 
   const tocLinks = Array.from(document.querySelectorAll(".page-toc a[href^='#']"));
   const headings = tocLinks.map((link) => document.getElementById(link.getAttribute("href").slice(1))).filter(Boolean);

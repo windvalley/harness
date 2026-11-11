@@ -29,7 +29,7 @@
 * { box-sizing: border-box; }
 html { scroll-padding-top: 88px; }
 @media (prefers-reduced-motion: no-preference) {
-  html { scroll-behavior: smooth; }
+  html.page-ready { scroll-behavior: smooth; }
 }
 body {
   margin: 0;
@@ -40,6 +40,8 @@ body {
 }
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
+main a:not(.btn, .pagination a), footer a { text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; text-decoration-color: color-mix(in srgb, currentColor 45%, transparent); }
+main a:not(.btn, .pagination a):hover, footer a:hover { text-decoration-color: currentColor; }
 button, input, select { font: inherit; }
 button, select { color: var(--fg); }
 button { cursor: pointer; }
@@ -56,9 +58,10 @@ li { margin: .25rem 0; }
 strong { font-weight: 600; }
 [tabindex="-1"]:focus { outline: none; }
 :where(a, button, input, select, summary, pre):focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+:where(.sidebar, .page-toc, .drawer-sheet) :where(a):focus-visible { outline-offset: -3px; }
 .visually-hidden:where(:not(:focus-within, :active)) {
   position: absolute !important;
-  clip: inset(50%) !important;
+  clip-path: inset(50%) !important;
   overflow: hidden !important;
   width: 1px !important;
   height: 1px !important;
@@ -190,7 +193,7 @@ main { min-width: 0; width: 100%; padding: 36px 0 88px; }
 .btn { display: inline-flex; align-items: center; justify-content: center; min-height: 40px; padding: 7px 16px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--fg); font-weight: 500; font-size: .94rem; }
 .btn:hover { text-decoration: none; border-color: var(--accent); }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-contrast); }
-.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 1.2rem 0; }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: 12px; margin: 1.2rem 0; }
 .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px; box-shadow: var(--shadow); }
 .card h2, .card h3 { border: 0; margin: 0 0 .35rem; padding: 0; font-size: 1rem; }
 .card p { margin: 0; font-size: .91rem; color: var(--muted); }
@@ -226,8 +229,11 @@ main { min-width: 0; width: 100%; padding: 36px 0 88px; }
 table { border-collapse: collapse; width: 100%; font-size: .9rem; }
 th, td { text-align: left; vertical-align: top; padding: 10px 12px; border-bottom: 1px solid var(--line); }
 th { background: var(--surface-2); font-weight: 600; white-space: nowrap; }
+tbody th[scope="row"] { background: transparent; white-space: normal; min-width: 7em; }
 tr:last-child td { border-bottom: 0; }
 td code { white-space: nowrap; }
+.t-cmd td:first-child code { white-space: normal; }
+.t-cmd .arg { display: inline-block; white-space: nowrap; }
 .t-key td:first-child, .t-key th:first-child, .t-files td:last-child, .t-files th:last-child { white-space: nowrap; }
 .code { position: relative; margin: 1.4rem 0; }
 .code pre { margin: 0; background: var(--code-bg); border: 1px solid var(--line); border-radius: var(--radius); padding: 40px 16px 16px; overflow-x: auto; font-size: .875rem; line-height: 1.7; }
@@ -372,7 +378,6 @@ footer { border-top: 1px solid var(--line); color: var(--muted); padding: 24px; 
   .hero h1 { font-size: 1.9rem; }
   .lead, .hero .lead { font-size: 1rem; }
   .layout { padding: 0 16px; }
-  .cards { grid-template-columns: 1fr; }
   .code pre { font-size: .8rem; padding-left: 12px; padding-right: 12px; }
   .code .label { left: 12px; }
   ol.steps > li { margin-left: 12px; padding-left: 22px; }

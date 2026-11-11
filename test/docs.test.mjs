@@ -39,6 +39,43 @@ test("文档页面保留唯一标题、导航状态和内部链接目标", () =>
   }
 });
 
+test("SVG 的 url(#id) 引用都能在同页找到定义", () => {
+  for (const file of pages) {
+    const html = readFileSync(join(docs, file), "utf8");
+    const ids = new Set(Array.from(html.matchAll(/\bid="([^"]+)"/g), (match) => match[1]));
+    for (const match of html.matchAll(/url\(#([^)]+)\)/g)) {
+      assert.ok(ids.has(match[1]), `${file} 引用了不存在的 ${match[1]}`);
+    }
+  }
+});
+
+test("正文标题层级不跳级，目录只含二三级标题", () => {
+  for (const file of pages) {
+    const html = readFileSync(join(docs, file), "utf8");
+    const main = html.match(/<main\b[\s\S]*?<\/main>/)[0];
+    let previous = 1;
+    for (const match of main.matchAll(/<h([1-6])\b/g)) {
+      const level = Number(match[1]);
+      assert.ok(level <= previous + 1, `${file} 标题从 h${previous} 跳到 h${level}`);
+      previous = level;
+    }
+  }
+});
+
+test("上一篇和下一篇与侧栏顺序一致", () => {
+  const read = (file) => readFileSync(join(docs, file), "utf8");
+  const order = Array.from(read("index.html").matchAll(/<nav class="docs-nav" aria-label="文档导航">([\s\S]*?)<\/nav>/g))
+    .flatMap((nav) => Array.from(nav[1].matchAll(/<a href="([a-z]+\.html)"/g), (match) => match[1]));
+  assert.equal(order.length, pages.length);
+  order.forEach((file, index) => {
+    const html = read(file);
+    const previous = html.match(/<a class="previous" href="([^"]+)"/)?.[1];
+    const next = html.match(/<a class="next" href="([^"]+)"/)?.[1];
+    assert.equal(previous, order[index - 1], `${file} 的上一篇不符合侧栏顺序`);
+    assert.equal(next, order[index + 1], `${file} 的下一篇不符合侧栏顺序`);
+  });
+});
+
 test("相关链接不继承页内目录的负边距", () => {
   const css = readFileSync(join(docs, "assets", "docs.css"), "utf8");
   const relatedRule = css.match(/\.related-links a \{([^}]+)\}/)?.[1];

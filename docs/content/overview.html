@@ -49,14 +49,14 @@
 
     <h3 id="delivery-modes">两种交付方式</h3>
     <div class="table-wrap"><table>
-      <thead><tr><th></th><th>本地交付（默认）</th><th>远程交付（PR/MR）</th></tr></thead>
+      <thead><tr><th scope="col"><span class="visually-hidden">项目</span></th><th>本地交付（默认）</th><th>远程交付（PR/MR）</th></tr></thead>
       <tbody>
-        <tr><td>适合</td><td>由 Agent 本地合并的项目，也可以有远程仓库</td><td>要求在 GitHub 或 GitLab 上审核并合并 PR/MR 的项目</td></tr>
-        <tr><td>门禁通过后</td><td><code>harness merge</code> 合入本地主分支</td><td><code>harness submit</code> 推送任务分支，创建或更新 PR/MR</td></tr>
-        <tr><td>谁来合并</td><td>Agent，在项目授权范围内</td><td>你或团队在平台上合并，harness 不代为合并</td></tr>
-        <tr><td>推送主分支</td><td>默认由你推送；配置 <code>"push": true</code> 后由 <code>harness merge</code> 合入后推送</td><td>不适用，推送与合并走 <code>submit</code>、<code>sync</code> 和平台</td></tr>
-        <tr><td>本地主分支怎么更新</td><td><code>harness merge</code></td><td>平台合入后用 <code>harness sync</code> 快进</td></tr>
-        <tr><td>需要准备</td><td>无</td><td>本机安装并登录 <code>gh</code>（GitHub）或 <code>glab</code>（GitLab）</td></tr>
+        <tr><th scope="row">适合</th><td>由 Agent 本地合并的项目，也可以有远程仓库</td><td>要求在 GitHub 或 GitLab 上审核并合并 PR/MR 的项目</td></tr>
+        <tr><th scope="row">门禁通过后</th><td><code>harness merge</code> 合入本地主分支</td><td><code>harness submit</code> 推送任务分支，创建或更新 PR/MR</td></tr>
+        <tr><th scope="row">谁来合并</th><td>Agent，在项目授权范围内</td><td>你或团队在平台上合并，harness 不代为合并</td></tr>
+        <tr><th scope="row">推送主分支</th><td>默认由你推送；配置 <code>"push": true</code> 后由 <code>harness merge</code> 合入后推送</td><td>不适用，推送与合并走 <code>submit</code>、<code>sync</code> 和平台</td></tr>
+        <tr><th scope="row">本地主分支怎么更新</th><td><code>harness merge</code></td><td>平台合入后用 <code>harness sync</code> 快进</td></tr>
+        <tr><th scope="row">需要准备</th><td>无</td><td>本机安装并登录 <code>gh</code>（GitHub）或 <code>glab</code>（GitLab）</td></tr>
       </tbody>
     </table></div>
     <p>两种方式<strong>只能选一种</strong>，由主分支上 <code>.harness/config.json</code> 的 <code>delivery</code> 决定：本地交付下 <code>submit</code> 会被拒绝，远程交付下 <code>merge</code> 会被拒绝；<code>sync</code> 只同步远程主分支，两种方式下都能用。默认是本地交付，<code>init</code> 写入 <code>"delivery": { "mode": "local" }</code>，没有这一段的项目也按本地交付处理。</p>

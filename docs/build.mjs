@@ -84,11 +84,12 @@ function navigation(currentSlug, mobile = false) {
 }
 
 function changeHeadingLevels(content, page) {
-  if (page.home) return content.replace(/<(\/?)h4\b/g, "<$1h3");
   const stepsAsSections = page.slug === "quickstart" || page.slug === "customize";
-  let result = content.replace(/<(\/?)h4\b/g, `<$1h${stepsAsSections ? 2 : 3}`);
-  return result.replace(/<(\/?)h3\b/g, "<$1h2");
+  const levels = page.home ? { 3: 3, 4: 3 } : { 3: 2, 4: stepsAsSections ? 2 : 3 };
+  return content.replace(/<(\/?)h([34])\b/g, (_, slash, level) => `<${slash}h${levels[level]}`);
 }
+
+const arrowDefs = `<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false"><defs>${["", "accent", "deny", "allow"].map((kind) => `<marker id="${kind ? `ar-${kind}` : "ar"}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk${kind ? ` ${kind}` : ""}" d="M0,0 L10,5 L0,10 z"/></marker>`).join("")}</defs></svg>`;
 
 function pageToc(content) {
   const items = [];
@@ -100,6 +101,13 @@ function pageToc(content) {
   return { html: `<div class="page-toc-title">本页内容</div><ol>${links}</ol>`, items };
 }
 
+function keepCommandArgsTogether(content) {
+  return content.replace(/(<table class="t-cmd">[\s\S]*?<\/table>)/, (table) => table.replace(/<tr><td><code>([^<]*)<\/code>/g, (_, command) => {
+    const parts = command.split(" ").map((part) => `<span class="arg">${part}</span>`);
+    return `<tr><td><code>${parts.join(" ")}</code>`;
+  }));
+}
+
 function prepareContent(page) {
   let content = readFileSync(join(root, "content", page.source), "utf8").trim();
   if (!page.home) {
@@ -109,6 +117,7 @@ function prepareContent(page) {
     content = content.replace(firstHeading[0], header);
   }
   content = changeHeadingLevels(content, page);
+  if (page.slug === "cheatsheet") content = keepCommandArgsTogether(content);
   let generatedHeading = 0;
   content = content.replace(/<h2(?![^>]*\bid=)([^>]*)>/g, () => {
     generatedHeading += 1;
@@ -122,8 +131,8 @@ function prepareContent(page) {
 
 function pagination(page) {
   const index = orderedPages.indexOf(page);
-  const previous = pages[index - 1];
-  const next = pages[index + 1];
+  const previous = orderedPages[index - 1];
+  const next = orderedPages[index + 1];
   if (!previous && !next) return "";
   return `<nav class="pagination" aria-label="文档分页">${previous ? `<a class="previous" href="${previous.file}"><span>上一篇</span><strong>${previous.title}</strong></a>` : "<span></span>"}${next ? `<a class="next" href="${next.file}"><span>下一篇</span><strong>${next.title}</strong></a>` : ""}</nav>`;
 }
@@ -161,7 +170,7 @@ ${legacyRedirect}
     <nav class="topnav" aria-label="主导航">
       <a class="wide" href="${reference}">参考手册</a>
       <a class="wide" href="${repository}">GitHub</a>
-      <button class="search-open" id="search-open" type="button" aria-label="搜索文档" aria-keyshortcuts="Meta+K Control+K"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><span class="wide">搜索文档</span><kbd class="wide">⌘K</kbd></button>
+      <button class="search-open" id="search-open" type="button" aria-label="搜索文档" aria-keyshortcuts="Meta+K Control+K"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><span class="wide">搜索文档</span><kbd class="wide" aria-hidden="true">⌘K</kbd></button>
       <button class="theme-toggle" id="theme-toggle" type="button" data-theme="auto" aria-label="颜色主题：跟随系统，点击切换" title="颜色主题：跟随系统，点击切换"><svg class="i-auto" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg><svg class="i-light" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><svg class="i-dark" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4 8 8 0 1 0 20 14.5z"/></svg></button>
       <button class="drawer-open" id="drawer-open" type="button" aria-label="打开文档目录" aria-expanded="false" aria-controls="docs-drawer"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg><span>目录</span></button>
     </nav>
@@ -169,8 +178,8 @@ ${legacyRedirect}
 </header>
 <div class="layout">
   <aside class="sidebar">${navigation(page.slug)}</aside>
-  <main id="main-content">${content}${pagination(page)}</main>
-  <aside class="page-toc"><nav aria-label="本页内容">${toc.html}</nav><div class="related-links"><h2>相关链接</h2><a href="${reference}">参考手册</a><a href="${repository}">GitHub 仓库</a></div></aside>
+  <main id="main-content">${content.includes("url(#ar") ? arrowDefs : ""}${content}${pagination(page)}</main>
+  <aside class="page-toc">${toc.html ? `<nav aria-label="本页内容">${toc.html}</nav>` : ""}<div class="related-links"><h2>相关链接</h2><a href="${reference}">参考手册</a><a href="${repository}">GitHub 仓库</a></div></aside>
 </div>
 <footer>harness · MIT 许可 · <a href="${repository}">GitHub</a> · <a href="${reference}">参考手册</a></footer>
 <dialog class="drawer" id="docs-drawer" aria-label="文档导航">
