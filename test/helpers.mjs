@@ -139,6 +139,11 @@ export function makeRepo({ files = {}, project = {}, install = true, trustCodex 
     HARNESS_REVIEWERS_FILE: join(base, "reviewers.json"),
     // 测试可能跑在 Claude Code 会话里，继承来的会话编号会让评审去读真实的会话记录；默认当作没有会话。
     CLAUDE_CODE_SESSION_ID: "",
+    // 开发机可能把 opus、sonnet 等别名映射到别的具体模型，会改变“是否同模型”的判断，夹具里一律清空。
+    ANTHROPIC_DEFAULT_OPUS_MODEL: "",
+    ANTHROPIC_DEFAULT_SONNET_MODEL: "",
+    ANTHROPIC_DEFAULT_HAIKU_MODEL: "",
+    ANTHROPIC_DEFAULT_FABLE_MODEL: "",
   };
 
   REPO_ENV.set(root, env);

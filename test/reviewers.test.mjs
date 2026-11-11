@@ -116,7 +116,7 @@ describe("按会话模型调整顺序", () => {
   const names = (list) => list.map((item) => item.name);
 
   test("与会话同模型的排到最后，其余保持原有先后；没写模型的无法判断，留在原位", () => {
-    const { ordered, reordered } = orderReviewers(entries, "claude-opus-5-5");
+    const { ordered, reordered } = orderReviewers(entries, "claude-opus-5-5", true, {});
     assert.deepEqual(names(ordered), ["flash", "sonnet", "codex", "opus"]);
     assert.equal(reordered, true);
   });
@@ -192,7 +192,7 @@ describe("评审计划", () => {
 
   test("计划说明写出顺序、会话模型和是否调整过", () => {
     const entries = [{ name: "opus", client: "claude", model: "anthropic/claude-opus-5.5" }, SONNET];
-    const text = describePlan(planReviewers({}, { local: local(entries), has, overrideBin: undefined, detect }));
+    const text = describePlan(planReviewers({}, { local: local(entries), has, overrideBin: undefined, detect, env: {} }));
     assert.match(text, /sonnet\(sonnet\) -> opus\(anthropic\/claude-opus-5\.5\)；与会话模型 claude-opus-5-5 相同的排到了后面/);
     const unknown = describePlan(planReviewers({}, { local: local(entries), has, overrideBin: undefined, detect: () => ({ model: null, reason: "当前环境没有会话编号" }) }));
     assert.match(unknown, /会话模型未知（当前环境没有会话编号），按文件里的顺序/);
