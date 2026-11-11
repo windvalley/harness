@@ -1,0 +1,89 @@
+<!doctype html>
+<!-- 本文件由 node docs/build.mjs 生成，请勿直接编辑。 -->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>团队与多机 | harness 文档</title>
+<meta name="description" content="在新机器接入项目，完成升级、同步与多会话协作。">
+<meta name="color-scheme" content="light dark">
+<script>try{const theme=localStorage.getItem("harness-theme");if(theme==="light"||theme==="dark")document.querySelector('meta[name="color-scheme"]').content=theme;}catch{}</script>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%230f766e' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6z'/%3E%3Cpath d='M8.5 12l2.5 2.5 4.5-5'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="assets/docs.css">
+
+<script src="assets/docs.js" defer></script>
+</head>
+<body data-page="team">
+<a class="skip-link" href="#main-content">跳到主要内容</a>
+<header class="topbar">
+  <div class="topbar-inner">
+    <a class="brand" href="index.html" aria-label="harness 文档首页"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6z"/><path d="M8.5 12l2.5 2.5 4.5-5"/></svg><span>harness</span></a>
+    <span class="brand-divider" aria-hidden="true"></span><span class="product-area">文档</span>
+    <nav class="topnav" aria-label="主导航">
+      <a class="wide" href="https://github.com/windvalley/harness/blob/main/docs/reference.md">参考手册</a>
+      <a class="wide" href="https://github.com/windvalley/harness">GitHub</a>
+      <button class="search-open" id="search-open" type="button" aria-label="搜索文档" aria-keyshortcuts="Meta+K Control+K"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><span class="wide">搜索文档</span><kbd class="wide">⌘K</kbd></button>
+      <label class="theme-control"><span class="visually-hidden">颜色主题</span><select id="theme-select" aria-label="颜色主题"><option value="auto">自动</option><option value="light">浅色</option><option value="dark">深色</option></select></label>
+      <button class="drawer-open" id="drawer-open" type="button" aria-label="打开文档目录" aria-expanded="false" aria-controls="docs-drawer"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg><span>目录</span></button>
+    </nav>
+  </div>
+</header>
+<div class="layout">
+  <aside class="sidebar"><nav class="docs-nav" aria-label="文档导航"><section class="nav-group"><h2>开始使用</h2><ul><li><a href="quickstart.html">快速开始</a></li><li><a href="daily.html">日常工作流</a></li><li><a href="blocked.html">被拦截时怎么办</a></li></ul></section><section class="nav-group"><h2>核心概念</h2><ul><li><a href="index.html">使用教程</a></li><li><a href="architecture.html">架构总览</a></li><li><a href="principles.html">核心原理</a></li></ul></section><section class="nav-group"><h2>配置与维护</h2><ul><li><a href="customize.html">按项目定制</a></li><li><a href="team.html" aria-current="page">团队与多机</a></li><li><a href="limits.html">信任模型与限制</a></li></ul></section><section class="nav-group"><h2>参考</h2><ul><li><a href="cheatsheet.html">命令速查</a></li><li><a href="https://github.com/windvalley/harness/blob/main/docs/reference.md">参考手册</a></li></ul></section></nav></aside>
+  <main id="main-content"><header class="page-header"><p class="eyebrow">配置与维护</p><h1 tabindex="-1" id="team">团队与多机</h1><p class="lead">在新机器接入项目，完成升级、同步与多会话协作。</p></header><details class="mobile-page-toc"><summary>本页内容</summary><div class="page-toc-title">本页内容</div><ol><li class="toc-level-2"><a href="#new-machine">新成员或新机器</a></li><li class="toc-level-2"><a href="#upgrade">升级</a></li><li class="toc-level-2"><a href="#sync">与远端同步</a></li><li class="toc-level-2"><a href="#parallel">多个会话并行</a></li></ol></details>
+
+    <h2 tabindex="-1" id="new-machine">新成员或新机器</h2>
+    <p>入口与客户端配置随仓库分发，门禁代码与 git 钩子留在各自的机器上。工具调用可用时，可以交给 Agent：</p>
+    <div class="code"><span class="label">说明当前目标</span><pre class="prompt"><code>我想在这台新电脑上继续开发这个项目。</code></pre></div>
+    <p>Agent 应检查项目锁定的版本，完成本机安装与诊断，并说明需要用户完成的客户端操作。</p>
+    <p>本机没有安装锁定版本时，已启用的实时拦截可能拒绝所有 Agent 工具调用。此时由人在项目目录的终端先完成安装，再让 Agent 接续诊断：</p>
+    <div class="code"><span class="label">工具调用被拦截时，由人执行</span><pre><code>cd &lt;项目&gt;
+node ~/github/harness/bin/harness.mjs install --local
+.harness/bin/harness doctor</code></pre></div>
+    <p><code>install --local</code> 按项目锁定的版本安装代码（必要时从对应的 <code>v&lt;版本&gt;</code> 标签导出），再写入本机的钩子与插件目录，不改任何入库文件。装好之前，Claude Code 与 Codex 的实时拦截会拒绝一切调用并提示这条命令。</p>
+
+    <h2 tabindex="-1" id="upgrade">升级</h2>
+    <div class="code"><span class="label">升级需求示例</span><pre class="prompt"><code>请从 GitHub 获取 harness 最新版本：https://github.com/windvalley/harness
+
+安装并升级当前项目，保留已有规则和配置，完成迁移检查、验证、评审与交付。需要我操作时，请提供具体步骤。</code></pre></div>
+    <p>Agent 应直接从 GitHub 获取最新版本并安装到本机，检查项目当前版本并说明升级影响，准备任务分支及需要的 Worktree，完成验证、评审和必要确认后按交付方式交付，主动报告结果与待处理项。</p>
+    <p><code>upgrade</code> 会整份重写 <code>rules/</code> 与 <code>templates/</code>，项目自己的规范请写在 <code>AGENTS.md</code> 托管块之外；已有配置和黄金任务的迁移由 Agent 核对并说明。</p>
+    <p>具体命令与其他成员的接续操作见<a href="https://github.com/windvalley/harness/blob/main/docs/reference.md#升级">升级参考</a>。</p>
+
+    <h2 tabindex="-1" id="sync">与远端同步</h2>
+    <div class="code"><span class="label">同步需求示例</span><pre class="prompt"><code>我想把远端主分支的更新同步到本地。</code></pre></div>
+    <p>Agent 应检查差异并说明同步方式和影响，在项目授权范围内处理，最后汇报结果。</p>
+    <p>远程写入仍须按项目规则单独取得授权，请求本地接入或合并不代表允许推送。下面是同步机制与命令参考。</p>
+    <p>harness 只管本地主分支。Agent 推送主分支会被拦截，由人推送；Agent 可以推送任务分支，但不能强推。</p>
+    <p>本地交付下，想让合并后自动推送，在 <code>delivery</code> 里加 <code>"push": true</code>：<code>harness merge</code> 随后把核对过的提交普通推送到远程主分支，不强推、不推标签。它授予推送主分支的权限，所以要人确认，开启的那次合并不推送；主分支受保护、只接受 PR/MR 的仓库请改用远程交付。</p>
+    <p>接入后优先用 <code>harness sync</code>：它把本地主分支快进到远程主分支，核对远程带来的门禁改动（需要时由人运行 <code>harness confirm --branch origin/main</code>），刷新本机安装并执行 <code>merge.postMergeCommand</code>。本地有远程没有的提交时它拒绝，不改写历史。两种交付方式下都能用，远程交付下它是更新本地主分支的唯一方式，见<a href="index.html#delivery-modes">两种交付方式</a>。</p>
+    <p>需要人工判断时，也可以用下面两种做法同步远端主分支：</p>
+    <div class="code"><span class="label">做法一：走一遍本机门禁</span><pre><code>git fetch origin
+harness verify --branch origin/main
+harness review --branch origin/main
+harness merge  --branch origin/main</code></pre></div>
+    <div class="code"><span class="label">做法二：由人决定信任远端，只能快进</span><pre><code>git fetch origin
+HARNESS_MAIN_BYPASS=1 git merge --ff-only origin/main</code></pre></div>
+    <p><code>HARNESS_MAIN_BYPASS</code> 是绕过开关，只能由人在自己的终端使用，Agent 设置它会被拦截。</p>
+
+    <h2 tabindex="-1" id="parallel">多个会话并行</h2>
+    <p>只要有一个 Agent 在主 Worktree 里切走分支或留下改动，所有任务的合并都会被挡住。并行的项目建议在 <code>policy.json</code> 的 <code>presets</code> 里加上 <code>main-worktree</code>：Agent 不能改主 Worktree 里的文件、不能把它切离主分支，<code>pre-commit</code> 也拒绝主 Worktree 里的提交。</p><nav class="pagination" aria-label="文档分页"><a class="previous" href="customize.html"><span>上一篇</span><strong>按项目定制</strong></a><a class="next" href="limits.html"><span>下一篇</span><strong>信任模型与限制</strong></a></nav></main>
+  <aside class="page-toc"><nav aria-label="本页内容"><div class="page-toc-title">本页内容</div><ol><li class="toc-level-2"><a href="#new-machine">新成员或新机器</a></li><li class="toc-level-2"><a href="#upgrade">升级</a></li><li class="toc-level-2"><a href="#sync">与远端同步</a></li><li class="toc-level-2"><a href="#parallel">多个会话并行</a></li></ol></nav><div class="related-links"><h2>相关链接</h2><a href="https://github.com/windvalley/harness/blob/main/docs/reference.md">参考手册</a><a href="https://github.com/windvalley/harness">GitHub 仓库</a></div></aside>
+</div>
+<footer>harness · MIT 许可 · <a href="https://github.com/windvalley/harness">GitHub</a> · <a href="https://github.com/windvalley/harness/blob/main/docs/reference.md">参考手册</a></footer>
+<dialog class="drawer" id="docs-drawer" aria-label="文档导航">
+  <div class="drawer-scroller">
+    <div class="drawer-sheet">
+      <div class="drawer-header"><strong>文档导航</strong><button id="drawer-close" type="button" aria-label="关闭文档目录" autofocus>关闭</button></div>
+      <nav class="docs-nav" aria-label="移动端文档导航"><section class="nav-group"><h2>开始使用</h2><ul><li><a href="quickstart.html">快速开始</a></li><li><a href="daily.html">日常工作流</a></li><li><a href="blocked.html">被拦截时怎么办</a></li></ul></section><section class="nav-group"><h2>核心概念</h2><ul><li><a href="index.html">使用教程</a></li><li><a href="architecture.html">架构总览</a></li><li><a href="principles.html">核心原理</a></li></ul></section><section class="nav-group"><h2>配置与维护</h2><ul><li><a href="customize.html">按项目定制</a></li><li><a href="team.html" aria-current="page">团队与多机</a></li><li><a href="limits.html">信任模型与限制</a></li></ul></section><section class="nav-group"><h2>参考</h2><ul><li><a href="cheatsheet.html">命令速查</a></li><li><a href="https://github.com/windvalley/harness/blob/main/docs/reference.md">参考手册</a></li></ul></section></nav>
+    </div>
+  </div>
+</dialog>
+<dialog class="search-dialog" id="search-dialog" aria-labelledby="search-title">
+  <div class="search-header"><h2 id="search-title">搜索文档</h2><button id="search-close" type="button" aria-label="关闭搜索">关闭</button></div>
+  <label class="search-field"><span class="visually-hidden">搜索关键词</span><input id="search-input" type="search" placeholder="搜索标题、正文或命令" autocomplete="off"></label>
+  <p class="search-status" id="search-status" role="status">输入关键词开始搜索</p>
+  <ul class="search-results" id="search-results"></ul>
+</dialog>
+</body>
+</html>

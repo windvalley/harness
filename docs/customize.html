@@ -1,0 +1,80 @@
+<!doctype html>
+<!-- 本文件由 node docs/build.mjs 生成，请勿直接编辑。 -->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>按项目定制 | harness 文档</title>
+<meta name="description" content="按项目实际情况调整配置、验证检查和拦截规则。">
+<meta name="color-scheme" content="light dark">
+<script>try{const theme=localStorage.getItem("harness-theme");if(theme==="light"||theme==="dark")document.querySelector('meta[name="color-scheme"]').content=theme;}catch{}</script>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%230f766e' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6z'/%3E%3Cpath d='M8.5 12l2.5 2.5 4.5-5'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="assets/docs.css">
+
+<script src="assets/docs.js" defer></script>
+</head>
+<body data-page="customize">
+<a class="skip-link" href="#main-content">跳到主要内容</a>
+<header class="topbar">
+  <div class="topbar-inner">
+    <a class="brand" href="index.html" aria-label="harness 文档首页"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6z"/><path d="M8.5 12l2.5 2.5 4.5-5"/></svg><span>harness</span></a>
+    <span class="brand-divider" aria-hidden="true"></span><span class="product-area">文档</span>
+    <nav class="topnav" aria-label="主导航">
+      <a class="wide" href="https://github.com/windvalley/harness/blob/main/docs/reference.md">参考手册</a>
+      <a class="wide" href="https://github.com/windvalley/harness">GitHub</a>
+      <button class="search-open" id="search-open" type="button" aria-label="搜索文档" aria-keyshortcuts="Meta+K Control+K"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><span class="wide">搜索文档</span><kbd class="wide">⌘K</kbd></button>
+      <label class="theme-control"><span class="visually-hidden">颜色主题</span><select id="theme-select" aria-label="颜色主题"><option value="auto">自动</option><option value="light">浅色</option><option value="dark">深色</option></select></label>
+      <button class="drawer-open" id="drawer-open" type="button" aria-label="打开文档目录" aria-expanded="false" aria-controls="docs-drawer"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg><span>目录</span></button>
+    </nav>
+  </div>
+</header>
+<div class="layout">
+  <aside class="sidebar"><nav class="docs-nav" aria-label="文档导航"><section class="nav-group"><h2>开始使用</h2><ul><li><a href="quickstart.html">快速开始</a></li><li><a href="daily.html">日常工作流</a></li><li><a href="blocked.html">被拦截时怎么办</a></li></ul></section><section class="nav-group"><h2>核心概念</h2><ul><li><a href="index.html">使用教程</a></li><li><a href="architecture.html">架构总览</a></li><li><a href="principles.html">核心原理</a></li></ul></section><section class="nav-group"><h2>配置与维护</h2><ul><li><a href="customize.html" aria-current="page">按项目定制</a></li><li><a href="team.html">团队与多机</a></li><li><a href="limits.html">信任模型与限制</a></li></ul></section><section class="nav-group"><h2>参考</h2><ul><li><a href="cheatsheet.html">命令速查</a></li><li><a href="https://github.com/windvalley/harness/blob/main/docs/reference.md">参考手册</a></li></ul></section></nav></aside>
+  <main id="main-content"><header class="page-header"><p class="eyebrow">配置与维护</p><h1 tabindex="-1" id="customize">按项目定制</h1><p class="lead">按项目实际情况调整配置、验证检查和拦截规则。</p></header><details class="mobile-page-toc"><summary>本页内容</summary><div class="page-toc-title">本页内容</div><ol><li class="toc-level-2"><a href="#customize-section-1">config.json</a></li><li class="toc-level-2"><a href="#customize-section-2">verify.json</a></li><li class="toc-level-2"><a href="#customize-section-3">policy.json</a></li><li class="toc-level-2"><a href="#customize-section-4">golden/tasks.json</a></li></ol></details>
+    <p>可以直接对 Agent 说“请检查当前规则和检查配置，按项目实际情况提出调整方案，说明影响并按授权实施”。配置改动仍按门禁流程验证、评审和人工确认。</p>
+    <p>四个文件决定门禁的行为，Agent 可以直接改，但它们都属于门禁改动，合并前要人确认，合入后才生效。</p>
+    <div class="cards">
+      <div class="card"><h2 tabindex="-1" id="customize-section-1"><code>config.json</code></h2><p>主分支名、合并要求、提交格式、评审后端、验收清单模式、任务分级阈值、Worktree 清理命令。</p></div>
+      <div class="card"><h2 tabindex="-1" id="customize-section-2"><code>verify.json</code></h2><p>改了哪些路径跑哪些检查、检查的级别、执行目录与依赖，以及先红后绿与改动行覆盖率的复算配置。</p></div>
+      <div class="card"><h2 tabindex="-1" id="customize-section-3"><code>policy.json</code></h2><p>启用哪些预设、关掉哪些规则、项目自己的拦截规则。</p></div>
+      <div class="card"><h2 tabindex="-1" id="customize-section-4"><code>golden/tasks.json</code></h2><p>对规则本身的回归用例，改坏规则的分支在 verify 阶段就被拦下。</p></div>
+    </div>
+    <p>加一条项目规则，例如禁止改已上线的迁移基线：</p>
+    <div class="code"><span class="label">policy.json 片段</span><pre><code>{
+  "id": "migration-baseline",
+  "kind": "write-protect",
+  "paths": ["db/migrations/0001_*.sql"],
+  "reason": "迁移基线已经上线，改它会让已部署的库与代码不一致",
+  "fix": "新增一个迁移文件，不要改已有的基线"
+}</code></pre></div>
+    <p>每条规则都要写 <code>reason</code> 和 <code>fix</code>，拦截时原样展示给 Agent。默认启用的预设：</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>预设</th><th>内容</th></tr></thead>
+      <tbody>
+        <tr><td><code>secrets</code></td><td>禁止读取、写入或用命令外发私钥、凭据与证据密钥；<code>.env</code> 这类开发环境的环境文件不拦</td></tr>
+        <tr><td><code>git-safety</code></td><td>拦截递归删除、丢弃改动、强删 Worktree、删分支、强推、<code>stash</code>、<code>--no-verify</code>，以及在主分支上合并、变基、重置</td></tr>
+        <tr><td><code>gate-self</code></td><td>保护执行器入口与绕过开关；轮换密钥与人工确认只能由人执行</td></tr>
+        <tr><td><code>plan-first</code></td><td>没有实施授权时只能写方案文件，大改动合并前必须有授权记录</td></tr>
+        <tr><td><code>main-worktree</code>（可选）</td><td>主 Worktree 只用来合并，多个会话并行时推荐启用</td></tr>
+      </tbody>
+    </table></div>
+    <p>字段的完整说明见参考手册的<a href="https://github.com/windvalley/harness/blob/main/docs/reference.md#配置">配置</a>一节。</p><nav class="pagination" aria-label="文档分页"><a class="previous" href="principles.html"><span>上一篇</span><strong>核心原理</strong></a><a class="next" href="team.html"><span>下一篇</span><strong>团队与多机</strong></a></nav></main>
+  <aside class="page-toc"><nav aria-label="本页内容"><div class="page-toc-title">本页内容</div><ol><li class="toc-level-2"><a href="#customize-section-1">config.json</a></li><li class="toc-level-2"><a href="#customize-section-2">verify.json</a></li><li class="toc-level-2"><a href="#customize-section-3">policy.json</a></li><li class="toc-level-2"><a href="#customize-section-4">golden/tasks.json</a></li></ol></nav><div class="related-links"><h2>相关链接</h2><a href="https://github.com/windvalley/harness/blob/main/docs/reference.md">参考手册</a><a href="https://github.com/windvalley/harness">GitHub 仓库</a></div></aside>
+</div>
+<footer>harness · MIT 许可 · <a href="https://github.com/windvalley/harness">GitHub</a> · <a href="https://github.com/windvalley/harness/blob/main/docs/reference.md">参考手册</a></footer>
+<dialog class="drawer" id="docs-drawer" aria-label="文档导航">
+  <div class="drawer-scroller">
+    <div class="drawer-sheet">
+      <div class="drawer-header"><strong>文档导航</strong><button id="drawer-close" type="button" aria-label="关闭文档目录" autofocus>关闭</button></div>
+      <nav class="docs-nav" aria-label="移动端文档导航"><section class="nav-group"><h2>开始使用</h2><ul><li><a href="quickstart.html">快速开始</a></li><li><a href="daily.html">日常工作流</a></li><li><a href="blocked.html">被拦截时怎么办</a></li></ul></section><section class="nav-group"><h2>核心概念</h2><ul><li><a href="index.html">使用教程</a></li><li><a href="architecture.html">架构总览</a></li><li><a href="principles.html">核心原理</a></li></ul></section><section class="nav-group"><h2>配置与维护</h2><ul><li><a href="customize.html" aria-current="page">按项目定制</a></li><li><a href="team.html">团队与多机</a></li><li><a href="limits.html">信任模型与限制</a></li></ul></section><section class="nav-group"><h2>参考</h2><ul><li><a href="cheatsheet.html">命令速查</a></li><li><a href="https://github.com/windvalley/harness/blob/main/docs/reference.md">参考手册</a></li></ul></section></nav>
+    </div>
+  </div>
+</dialog>
+<dialog class="search-dialog" id="search-dialog" aria-labelledby="search-title">
+  <div class="search-header"><h2 id="search-title">搜索文档</h2><button id="search-close" type="button" aria-label="关闭搜索">关闭</button></div>
+  <label class="search-field"><span class="visually-hidden">搜索关键词</span><input id="search-input" type="search" placeholder="搜索标题、正文或命令" autocomplete="off"></label>
+  <p class="search-status" id="search-status" role="status">输入关键词开始搜索</p>
+  <ul class="search-results" id="search-results"></ul>
+</dialog>
+</body>
+</html>

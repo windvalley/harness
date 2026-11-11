@@ -1,0 +1,159 @@
+<h2 id="arch">架构总览</h2>
+
+    <h3 id="layers">三层防线</h3>
+    <p>一次改动从 Agent 调用工具开始，到写进主分支为止，要依次经过三层检查。前两层在过程中纠正，第三层在结果上把关。</p>
+    <figure>
+      <div class="diagram">
+        <svg viewBox="0 0 900 345" role="img" aria-label="三层防线：Agent 的工具调用先经过实时拦截；提交经过 git 钩子；任务分支依次经过 verify、review、confirm，再由 merge 带着合并令牌写入主分支（远程交付时由 submit 推送并创建 PR/MR，平台合并后 sync 快进），其他对主分支的写入被 reference-transaction 钩子拒绝。">
+          <!-- 第一层 -->
+          <path class="d-line deny" d="M350,58 C350,22 95,22 95,58" marker-end="url(#ar-deny)"/>
+          <text class="d-l deny" x="222" y="22" text-anchor="middle">拒绝：原因 + 正确做法，Agent 改道</text>
+          <rect class="d-box" x="20" y="60" width="150" height="50" rx="8"/>
+          <text class="d-t" x="95" y="82" text-anchor="middle">Agent 调用工具</text>
+          <text class="d-s" x="95" y="100" text-anchor="middle">读、写、执行命令</text>
+          <line class="d-line" x1="170" y1="85" x2="246" y2="85" marker-end="url(#ar)"/>
+          <text class="d-l" x="208" y="78" text-anchor="middle">调用前</text>
+          <rect class="d-box accent" x="250" y="60" width="200" height="50" rx="8"/>
+          <text class="d-t" x="350" y="82" text-anchor="middle">① 实时拦截</text>
+          <text class="d-s" x="350" y="100" text-anchor="middle">客户端钩子 / DSH 插件</text>
+          <line class="d-line allow" x1="450" y1="85" x2="526" y2="85" marker-end="url(#ar-allow)"/>
+          <text class="d-l allow" x="488" y="78" text-anchor="middle">放行</text>
+          <rect class="d-box" x="530" y="60" width="150" height="50" rx="8"/>
+          <text class="d-t" x="605" y="90" text-anchor="middle">执行调用</text>
+
+          <!-- 左侧时间线 -->
+          <line class="d-line" x1="95" y1="110" x2="95" y2="166" marker-end="url(#ar)"/>
+          <text class="d-l" x="103" y="142">写完，提交</text>
+
+          <!-- 第二层 -->
+          <rect class="d-box" x="20" y="170" width="150" height="50" rx="8"/>
+          <text class="d-t" x="95" y="192" text-anchor="middle">git commit</text>
+          <text class="d-s" x="95" y="210" text-anchor="middle">Agent 或人</text>
+          <line class="d-line" x1="170" y1="195" x2="246" y2="195" marker-end="url(#ar)"/>
+          <rect class="d-box accent" x="250" y="170" width="200" height="50" rx="8"/>
+          <text class="d-t" x="350" y="192" text-anchor="middle">② git 钩子</text>
+          <text class="d-s" x="350" y="210" text-anchor="middle">pre-commit、commit-msg</text>
+          <line class="d-line allow" x1="450" y1="195" x2="526" y2="195" marker-end="url(#ar-allow)"/>
+          <text class="d-l allow" x="488" y="188" text-anchor="middle">通过</text>
+          <rect class="d-box" x="530" y="170" width="150" height="50" rx="8"/>
+          <text class="d-t" x="605" y="200" text-anchor="middle">提交进任务分支</text>
+
+          <line class="d-line" x1="95" y1="220" x2="95" y2="276" marker-end="url(#ar)"/>
+          <text class="d-l" x="103" y="252">准备合并</text>
+
+          <!-- 其他写入 -->
+          <rect class="d-box deny" x="730" y="170" width="150" height="50" rx="8"/>
+          <text class="d-t" x="805" y="192" text-anchor="middle">其他写入 main</text>
+          <text class="d-s" x="805" y="210" text-anchor="middle">commit、pull、reset</text>
+          <line class="d-line deny" x1="830" y1="220" x2="830" y2="276" marker-end="url(#ar-deny)"/>
+          <text class="d-l deny" x="820" y="246" text-anchor="end">reference-transaction</text>
+          <text class="d-l deny" x="820" y="262" text-anchor="end">钩子拒绝</text>
+
+          <!-- 第三层 -->
+          <rect class="d-box" x="20" y="280" width="150" height="52" rx="8"/>
+          <text class="d-t" x="95" y="303" text-anchor="middle">任务分支</text>
+          <text class="d-s" x="95" y="321" text-anchor="middle">Linked Worktree</text>
+          <line class="d-line" x1="170" y1="306" x2="206" y2="306" marker-end="url(#ar)"/>
+          <rect class="d-box" x="210" y="280" width="110" height="52" rx="8"/>
+          <text class="d-t" x="265" y="303" text-anchor="middle">verify</text>
+          <text class="d-s" x="265" y="321" text-anchor="middle">签名证据</text>
+          <line class="d-line" x1="320" y1="306" x2="346" y2="306" marker-end="url(#ar)"/>
+          <rect class="d-box" x="350" y="280" width="110" height="52" rx="8"/>
+          <text class="d-t" x="405" y="303" text-anchor="middle">review</text>
+          <text class="d-s" x="405" y="321" text-anchor="middle">独立评审</text>
+          <line class="d-line" x1="460" y1="306" x2="486" y2="306" marker-end="url(#ar)"/>
+          <rect class="d-box opt" x="490" y="280" width="110" height="52" rx="8"/>
+          <text class="d-t" x="545" y="303" text-anchor="middle">confirm</text>
+          <text class="d-s" x="545" y="321" text-anchor="middle">仅门禁改动</text>
+          <line class="d-line" x1="600" y1="306" x2="626" y2="306" marker-end="url(#ar)"/>
+          <rect class="d-box accent" x="630" y="280" width="110" height="52" rx="8"/>
+          <text class="d-t" x="685" y="303" text-anchor="middle">③ 交付</text>
+          <text class="d-s" x="685" y="321" text-anchor="middle">merge / submit</text>
+          <line class="d-line accent" x1="740" y1="306" x2="776" y2="306" marker-end="url(#ar-accent)"/>
+          <rect class="d-box allow" x="780" y="280" width="100" height="52" rx="8"/>
+          <text class="d-t" x="830" y="311" text-anchor="middle">main</text>
+        </svg>
+      </div>
+      <figcaption>图 1　三层防线。①② 在过程中当场纠正，③ 在结果上把关；能写本地主分支的只有 <code>harness merge</code> 与 <code>harness sync</code>。本地交付由 merge 带令牌写入主分支；远程交付改用 <code>harness submit</code> 提交 PR/MR，平台合并后由 sync 带令牌快进本地主分支，生命周期见图 3。</figcaption>
+    </figure>
+
+    <div class="table-wrap"><table class="t-key">
+      <thead><tr><th>层</th><th>何时生效</th><th>管什么</th><th>覆盖谁</th></tr></thead>
+      <tbody>
+        <tr><td>① 实时拦截</td><td>支持并已启用的客户端钩子调用工具之前</td><td>读取密钥、改写门禁入口、不可逆的 git 操作、绕过开关</td><td>正确接入钩子的客户端；通用入口仅提供拦截，没有收尾检查</td></tr>
+        <tr><td>② git 钩子</td><td>本机钩子安装并生效时的提交与引用更新</td><td>提交信息、暂存的密钥文件、主分支的写入</td><td>经过本机 git 钩子的客户端和人</td></tr>
+        <tr><td>③ 受控交付</td><td>通过 <code>harness merge</code> 或 <code>harness submit</code> 交付时</td><td>验证证据、独立评审、实施授权、门禁改动与交付设置变化的人工确认</td><td>使用 harness 交付命令的任务</td></tr>
+      </tbody>
+    </table></div>
+    <p>即使某个客户端没有接上实时拦截（例如 Codex 还没信任钩子），已安装且生效的 git 钩子仍会检查提交与本地主分支更新；使用 <code>harness merge</code> 或 <code>harness submit</code> 时，还必须满足验证、评审与相应授权条件。平台最终合入的内容由 GitHub/GitLab 的保护规则把关，harness 不防有意绕过本机机制的进程。</p>
+    <p>三层门禁也不能保证 Agent 会在结束回复前完成任务。为此支持的客户端钩子还挂了一道<strong>收尾检查</strong>：Agent 每次结束回复前，核对本会话推进过的任务是否已经交付；没有交付又没有上报阻塞时，告诉它还差哪几步，让它接着做。只差你确认门禁改动或同意方案时放行，两次结束之间没有任何进展时也放行，但会记下来，在 <code>harness status</code> 里给你看。</p>
+
+    <h3 id="components">组件与数据放在哪</h3>
+    <p>项目里只入库配置和一个很小的入口脚本，门禁代码、密钥和运行记录都留在本机。</p>
+    <figure>
+      <div class="diagram">
+        <svg viewBox="0 0 900 400" role="img" aria-label="组件关系：Agent 客户端的钩子和 git 钩子都调用项目里的入口 .harness/bin/harness，入口按锁定的版本转发到本机的门禁代码；门禁代码从主分支的 git 对象读取配置，用本机密钥签名后把记录写进 .git/harness，并在固定检出里执行检查。">
+          <rect class="d-box" x="20" y="40" width="190" height="56" rx="8"/>
+          <text class="d-t" x="115" y="64" text-anchor="middle">Agent 客户端</text>
+          <text class="d-s" x="115" y="83" text-anchor="middle">Claude Code、Codex、DSH 等</text>
+          <rect class="d-box" x="20" y="164" width="190" height="56" rx="8"/>
+          <text class="d-t" x="115" y="188" text-anchor="middle">git 钩子</text>
+          <text class="d-m" x="115" y="207" text-anchor="middle">.git/hooks/</text>
+
+          <rect class="d-box accent" x="290" y="100" width="210" height="60" rx="8"/>
+          <text class="d-t" x="395" y="125" text-anchor="middle">入口脚本</text>
+          <text class="d-m" x="395" y="145" text-anchor="middle">.harness/bin/harness</text>
+          <text class="d-tag" x="492" y="94" text-anchor="end">入库，锁定版本</text>
+
+          <line class="d-line" x1="210" y1="68" x2="286" y2="116" marker-end="url(#ar)"/>
+          <text class="d-l" x="226" y="64">工具调用前</text>
+          <line class="d-line" x1="210" y1="192" x2="286" y2="146" marker-end="url(#ar)"/>
+          <text class="d-l" x="238" y="202">提交、写引用</text>
+
+          <rect class="d-box" x="580" y="100" width="300" height="60" rx="8"/>
+          <text class="d-t" x="730" y="125" text-anchor="middle">门禁代码</text>
+          <text class="d-m" x="730" y="145" text-anchor="middle">~/.local/share/harness/versions/&lt;版本&gt;/</text>
+          <text class="d-tag" x="872" y="94" text-anchor="end">本机，所有项目共用</text>
+          <line class="d-line" x1="500" y1="130" x2="576" y2="130" marker-end="url(#ar)"/>
+          <text class="d-l" x="538" y="122" text-anchor="middle">转发</text>
+
+          <rect class="d-box" x="290" y="270" width="190" height="56" rx="8"/>
+          <text class="d-t" x="385" y="294" text-anchor="middle">主分支上的配置</text>
+          <text class="d-m" x="385" y="313" text-anchor="middle">main:.harness/*.json</text>
+          <rect class="d-box" x="500" y="270" width="190" height="56" rx="8"/>
+          <text class="d-t" x="595" y="294" text-anchor="middle">签名记录与账本</text>
+          <text class="d-m" x="595" y="313" text-anchor="middle">.git/harness/</text>
+          <rect class="d-box" x="710" y="270" width="170" height="56" rx="8"/>
+          <text class="d-t" x="795" y="294" text-anchor="middle">固定检出</text>
+          <text class="d-m" x="795" y="313" text-anchor="middle">~/.cache/harness/</text>
+
+          <line class="d-line" x1="640" y1="160" x2="400" y2="266" marker-end="url(#ar)"/>
+          <text class="d-l" x="470" y="210" text-anchor="middle">只读配置</text>
+          <line class="d-line" x1="700" y1="160" x2="610" y2="266" marker-end="url(#ar)"/>
+          <text class="d-l" x="636" y="215" text-anchor="end">签名写入</text>
+          <line class="d-line" x1="790" y1="160" x2="795" y2="266" marker-end="url(#ar)"/>
+          <text class="d-l" x="800" y="222">执行检查</text>
+
+          <rect class="d-box" x="500" y="350" width="190" height="40" rx="8"/>
+          <text class="d-m" x="595" y="375" text-anchor="middle">evidence.key（权限 600）</text>
+          <line class="d-line dash" x1="595" y1="350" x2="595" y2="326"/>
+          <text class="d-l" x="604" y="343">签名密钥</text>
+        </svg>
+      </div>
+      <figcaption>图 2　谁调用谁。客户端钩子与 git 钩子都只调用入口脚本；真正的判定代码按版本装在本机，配置一律从主分支读取。</figcaption>
+    </figure>
+    <div class="table-wrap"><table class="t-files">
+      <thead><tr><th>位置</th><th>内容</th><th>入库</th></tr></thead>
+      <tbody>
+        <tr><td><code>.harness/config.json</code>、<code>policy.json</code>、<code>verify.json</code></td><td>项目参数、拦截规则、检查映射</td><td>是</td></tr>
+        <tr><td><code>.harness/golden/tasks.json</code></td><td>对规则本身的回归用例（黄金任务）</td><td>是</td></tr>
+        <tr><td><code>.harness/rules/</code>、<code>.harness/templates/</code></td><td>给 Agent 读的研发规范与模板，升级时整份重写</td><td>是</td></tr>
+        <tr><td><code>.harness/bin/harness</code>、<code>.harness/VERSION</code></td><td>入口与锁定的版本号</td><td>是</td></tr>
+        <tr><td><code>.claude/settings.json</code>、<code>.codex/hooks.json</code></td><td>客户端的实时拦截配置</td><td>是</td></tr>
+        <tr><td><code>AGENTS.md</code> 托管块</td><td>Agent 每次都会加载的硬性要求</td><td>是</td></tr>
+        <tr><td><code>.git/hooks/</code></td><td><code>pre-commit</code>、<code>commit-msg</code>、<code>reference-transaction</code></td><td>默认否</td></tr>
+        <tr><td><code>.git/harness/</code></td><td>证据、评审、确认、授权记录与账本，所有 Worktree 共用</td><td>否</td></tr>
+        <tr><td><code>~/.local/share/harness/</code></td><td>按版本安装的门禁代码与签名密钥</td><td>否</td></tr>
+        <tr><td><code>~/.cache/harness/checkouts/</code></td><td>verify 的固定检出</td><td>否</td></tr>
+      </tbody>
+    </table></div>

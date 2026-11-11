@@ -1,0 +1,331 @@
+<!doctype html>
+<!-- 本文件由 node docs/build.mjs 生成，请勿直接编辑。 -->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>核心原理 | harness 文档</title>
+<meta name="description" content="了解证据绑定、独立评审、实施授权与版本锁定等核心机制。">
+<meta name="color-scheme" content="light dark">
+<script>try{const theme=localStorage.getItem("harness-theme");if(theme==="light"||theme==="dark")document.querySelector('meta[name="color-scheme"]').content=theme;}catch{}</script>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%230f766e' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6z'/%3E%3Cpath d='M8.5 12l2.5 2.5 4.5-5'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="assets/docs.css">
+
+<script src="assets/docs.js" defer></script>
+</head>
+<body data-page="principles">
+<a class="skip-link" href="#main-content">跳到主要内容</a>
+<header class="topbar">
+  <div class="topbar-inner">
+    <a class="brand" href="index.html" aria-label="harness 文档首页"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6z"/><path d="M8.5 12l2.5 2.5 4.5-5"/></svg><span>harness</span></a>
+    <span class="brand-divider" aria-hidden="true"></span><span class="product-area">文档</span>
+    <nav class="topnav" aria-label="主导航">
+      <a class="wide" href="https://github.com/windvalley/harness/blob/main/docs/reference.md">参考手册</a>
+      <a class="wide" href="https://github.com/windvalley/harness">GitHub</a>
+      <button class="search-open" id="search-open" type="button" aria-label="搜索文档" aria-keyshortcuts="Meta+K Control+K"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><span class="wide">搜索文档</span><kbd class="wide">⌘K</kbd></button>
+      <label class="theme-control"><span class="visually-hidden">颜色主题</span><select id="theme-select" aria-label="颜色主题"><option value="auto">自动</option><option value="light">浅色</option><option value="dark">深色</option></select></label>
+      <button class="drawer-open" id="drawer-open" type="button" aria-label="打开文档目录" aria-expanded="false" aria-controls="docs-drawer"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg><span>目录</span></button>
+    </nav>
+  </div>
+</header>
+<div class="layout">
+  <aside class="sidebar"><nav class="docs-nav" aria-label="文档导航"><section class="nav-group"><h2>开始使用</h2><ul><li><a href="quickstart.html">快速开始</a></li><li><a href="daily.html">日常工作流</a></li><li><a href="blocked.html">被拦截时怎么办</a></li></ul></section><section class="nav-group"><h2>核心概念</h2><ul><li><a href="index.html">使用教程</a></li><li><a href="architecture.html">架构总览</a></li><li><a href="principles.html" aria-current="page">核心原理</a></li></ul></section><section class="nav-group"><h2>配置与维护</h2><ul><li><a href="customize.html">按项目定制</a></li><li><a href="team.html">团队与多机</a></li><li><a href="limits.html">信任模型与限制</a></li></ul></section><section class="nav-group"><h2>参考</h2><ul><li><a href="cheatsheet.html">命令速查</a></li><li><a href="https://github.com/windvalley/harness/blob/main/docs/reference.md">参考手册</a></li></ul></section></nav></aside>
+  <main id="main-content"><header class="page-header"><p class="eyebrow">核心概念</p><h1 tabindex="-1" id="principles">核心原理</h1><p class="lead">了解证据绑定、独立评审、实施授权与版本锁定等核心机制。</p></header><details class="mobile-page-toc"><summary>本页内容</summary><div class="page-toc-title">本页内容</div><ol><li class="toc-level-2"><a href="#lifecycle">一次任务的生命周期</a></li><li class="toc-level-2"><a href="#signing">签名记录</a></li><li class="toc-level-2"><a href="#token">主分支只认合并令牌</a></li><li class="toc-level-2"><a href="#trust-root">配置只从主分支读取</a></li><li class="toc-level-2"><a href="#selection">按改动选检查</a></li><li class="toc-level-2"><a href="#external-evidence">外部验证与合并后验收</a></li><li class="toc-level-2"><a href="#principles-section-1">自动检查</a></li><li class="toc-level-2"><a href="#principles-section-2">外部验证</a></li><li class="toc-level-2"><a href="#principles-section-3">合并后验收</a></li><li class="toc-level-2"><a href="#test-evidence">测试证据：先红后绿与改动行覆盖率</a></li><li class="toc-level-2"><a href="#review">独立评审</a></li><li class="toc-level-2"><a href="#plan-first">任务分级与实施授权</a></li><li class="toc-level-2"><a href="#principles-section-4">直接实施</a></li><li class="toc-level-2"><a href="#principles-section-5">先方案后实施</a></li><li class="toc-level-2"><a href="#pinning">版本锁定的入口</a></li></ol></details>
+
+    <h2 tabindex="-1" id="lifecycle">一次任务的生命周期</h2>
+    <p>每一步都会留下一条签名记录，并且<strong>绑定到具体的内容</strong>上。自动检查与独立评审绑定分支提交；外部证据绑定检查定义和它覆盖的文件；合并后证据绑定实际集成结果。相关内容变化后旧证据失效，无关文档变化则不必重验。这样核对的永远是“这一份代码”的证据，而不是“某个时候跑过一次”。</p>
+    <figure>
+      <div class="diagram">
+        <svg viewBox="0 18 900 500" role="img" aria-label="任务生命周期：合并前依次经过授权、实现提交、verify、review、按需 confirm 和交付；外部 extended 检查成功后由 attest 登记并交给 review；本地 merge 或远程平台合入并 sync 后进入 main；配置合并后检查时，再执行 post-merge，成功后用 attest 登记并完成。验收失败则保持待完成，新建修复分支，重新实现、验证、评审、合入并验收，形成修复闭环。相关记录分别绑定验收清单、分支提交、检查覆盖文件、合并结果或实际集成结果。">
+          <path class="d-line dash" d="M455,96 C455,40 197,40 197,96" marker-end="url(#ar)"/>
+          <text class="d-l" x="326" y="36" text-anchor="middle">被拒或再提交：重新评审，证据按内容核对</text>
+          <path class="d-line dash" d="M680,98 C680,58 735,58 735,98" marker-end="url(#ar)"/>
+          <text class="d-l" x="707" y="50" text-anchor="middle">主分支前进：只重跑被波及的检查</text>
+
+          <rect class="d-box opt" x="10" y="100" width="105" height="56" rx="8"/>
+          <text class="d-t" x="62" y="124" text-anchor="middle">approve</text>
+          <text class="d-s" x="62" y="143" text-anchor="middle">大任务先授权</text>
+          <line class="d-line" x1="115" y1="128" x2="136" y2="128" marker-end="url(#ar)"/>
+          <rect class="d-box" x="140" y="100" width="115" height="56" rx="8"/>
+          <text class="d-t" x="197" y="124" text-anchor="middle">实现并提交</text>
+          <text class="d-s" x="197" y="143" text-anchor="middle">任务分支</text>
+          <line class="d-line" x1="255" y1="128" x2="276" y2="128" marker-end="url(#ar)"/>
+          <rect class="d-box" x="280" y="100" width="105" height="56" rx="8"/>
+          <text class="d-t" x="332" y="124" text-anchor="middle">verify</text>
+          <text class="d-s" x="332" y="143" text-anchor="middle">签名证据</text>
+          <line class="d-line" x1="385" y1="128" x2="401" y2="128" marker-end="url(#ar)"/>
+          <rect class="d-box" x="405" y="100" width="100" height="56" rx="8"/>
+          <text class="d-t" x="455" y="124" text-anchor="middle">review</text>
+          <text class="d-s" x="455" y="143" text-anchor="middle">独立评审</text>
+          <line class="d-line" x1="505" y1="128" x2="521" y2="128" marker-end="url(#ar)"/>
+          <rect class="d-box opt" x="525" y="100" width="110" height="56" rx="8"/>
+          <text class="d-t" x="580" y="124" text-anchor="middle">confirm</text>
+          <text class="d-s" x="580" y="143" text-anchor="middle">仅门禁改动</text>
+          <line class="d-line" x1="635" y1="128" x2="651" y2="128" marker-end="url(#ar)"/>
+          <rect class="d-box accent" x="655" y="100" width="105" height="56" rx="8"/>
+          <text class="d-t" x="707" y="124" text-anchor="middle">merge</text>
+          <text class="d-s" x="707" y="143" text-anchor="middle">核对后合并</text>
+          <line class="d-line accent" x1="760" y1="128" x2="786" y2="128" marker-end="url(#ar-accent)"/>
+          <rect class="d-box allow" x="790" y="100" width="100" height="56" rx="8"/>
+          <text class="d-t" x="840" y="133" text-anchor="middle">main</text>
+
+          <text class="d-tag" x="62" y="180" text-anchor="middle">绑定验收清单</text>
+          <text class="d-tag" x="332" y="180" text-anchor="middle">绑定分支提交</text>
+          <text class="d-tag" x="455" y="180" text-anchor="middle">绑定分支提交</text>
+          <text class="d-tag" x="580" y="180" text-anchor="middle">绑定合并结果 tree</text>
+          <text class="d-tag" x="707" y="180" text-anchor="middle">令牌绑定新旧提交</text>
+          <text class="d-l" x="10" y="216">远程交付：前面的步骤相同，merge 换成 submit</text>
+          <rect class="d-box accent" x="180" y="228" width="130" height="50" rx="8"/>
+          <text class="d-t" x="245" y="250" text-anchor="middle">submit</text>
+          <text class="d-s" x="245" y="268" text-anchor="middle">推送并建 PR/MR</text>
+          <line class="d-line" x1="310" y1="253" x2="356" y2="253" marker-end="url(#ar)"/>
+          <rect class="d-box" x="360" y="228" width="130" height="50" rx="8"/>
+          <text class="d-t" x="425" y="250" text-anchor="middle">平台合并</text>
+          <text class="d-s" x="425" y="268" text-anchor="middle">由平台执行</text>
+          <line class="d-line" x1="490" y1="253" x2="536" y2="253" marker-end="url(#ar)"/>
+          <rect class="d-box accent" x="540" y="228" width="130" height="50" rx="8"/>
+          <text class="d-t" x="605" y="250" text-anchor="middle">sync</text>
+          <text class="d-s" x="605" y="268" text-anchor="middle">快进本地主分支</text>
+          <path class="d-line accent" d="M670,253 L840,253 L840,160" marker-end="url(#ar-accent)"/>
+          <line class="d-line dash" x1="10" y1="296" x2="890" y2="296"/>
+
+          <text class="d-l" x="20" y="322">合并前：外部证据</text>
+          <rect class="d-box opt" x="20" y="340" width="120" height="50" rx="8"/>
+          <text class="d-t" x="80" y="361" text-anchor="middle">外部检查</text>
+          <text class="d-s" x="80" y="379" text-anchor="middle">extended</text>
+          <line class="d-line" x1="140" y1="365" x2="166" y2="365" marker-end="url(#ar)"/>
+          <rect class="d-box accent" x="170" y="340" width="100" height="50" rx="8"/>
+          <text class="d-t" x="220" y="361" text-anchor="middle">attest</text>
+          <text class="d-s" x="220" y="379" text-anchor="middle">登记证据</text>
+          <line class="d-line" x1="270" y1="365" x2="296" y2="365" marker-end="url(#ar)"/>
+          <rect class="d-box" x="300" y="340" width="120" height="50" rx="8"/>
+          <text class="d-t" x="360" y="361" text-anchor="middle">交给 review</text>
+          <text class="d-s" x="360" y="379" text-anchor="middle">参与独立评审</text>
+          <text class="d-tag" x="220" y="414" text-anchor="middle">绑定检查定义与覆盖文件</text>
+
+          <text class="d-l" x="480" y="322">实际进入 main 后：可选验收</text>
+          <rect class="d-box opt" x="480" y="340" width="140" height="50" rx="8"/>
+          <text class="d-t" x="550" y="361" text-anchor="middle">post-merge</text>
+          <text class="d-s" x="550" y="379" text-anchor="middle">合并后检查</text>
+          <line class="d-line" x1="620" y1="365" x2="646" y2="365" marker-end="url(#ar)"/>
+          <rect class="d-box accent" x="650" y="340" width="90" height="50" rx="8"/>
+          <text class="d-t" x="695" y="361" text-anchor="middle">attest</text>
+          <text class="d-s" x="695" y="379" text-anchor="middle">登记结果</text>
+          <line class="d-line allow" x1="740" y1="365" x2="766" y2="365" marker-end="url(#ar-allow)"/>
+          <rect class="d-box allow" x="770" y="340" width="100" height="50" rx="8"/>
+          <text class="d-t" x="820" y="370" text-anchor="middle">完成</text>
+          <text class="d-tag" x="650" y="414" text-anchor="middle">绑定实际集成结果</text>
+
+          <path class="d-line deny" d="M550,390 L550,432 L150,432 L150,156" marker-end="url(#ar-deny)"/>
+          <text class="d-l deny" x="350" y="458" text-anchor="middle">验收失败：保持待完成，新建修复分支，重新走门禁与验收</text>
+          <text class="d-l" x="450" y="492" text-anchor="middle">虚线框表示按条件出现的步骤；每一条记录都用本机密钥签名，存进 .git/harness/</text>
+        </svg>
+      </div>
+      <figcaption>图 3　任务从合并前门禁到实际完成。上方是通用门禁，中间是 PR/MR 的替代交付路径；下方左侧把外部证据交给评审，右侧是仅配置时才出现的合并后验收。红色虚线表示验收失败后的修复回路：新建修复分支，重新走门禁、合入并验收。</figcaption>
+    </figure>
+    <ul>
+      <li><strong>verify</strong> 在固定检出里检出分支提交，只验证已提交的内容；工作区里没提交的改动不算。</li>
+      <li><strong>review</strong> 要求先有通过的验证证据，评审结论同样绑定分支提交。</li>
+      <li><strong>confirm</strong> 只在改动涉及门禁本身（配置、规则、入口、钩子）时需要，绑定的是合并结果的 tree。</li>
+      <li><strong>merge</strong> 发现没有证据、主分支的新改动波及某些检查，或检查配置变了时，会自己重跑需要的检查；评审不会自动重做，主分支在评审之后改了本分支也改过的文件时评审作废。</li>
+    </ul>
+
+    <h2 tabindex="-1" id="signing">签名记录</h2>
+    <p>证据、评审、确认与实施授权都是 JSON 记录，用本机密钥 <code>~/.local/share/harness/evidence.key</code>（权限 600）做 HMAC-SHA256 签名，存在仓库的 <code>.git/harness/</code> 下，所有 Worktree 共用，另有一份追加式账本 <code>ledger.jsonl</code>。</p>
+    <p>记录被改动、密钥轮换或丢失时，签名校验失败，harness 会指出该重跑哪一步（例如 <code>harness verify --branch &lt;分支&gt;</code>），而不只是报“签名不匹配”。</p>
+
+    <h2 tabindex="-1" id="token">主分支只认合并令牌</h2>
+    <p>主分支的保护不靠“约定不要直接提交”，而是由 git 自己的 <code>reference-transaction</code> 钩子执行：每次更新 <code>refs/heads/main</code> 时，钩子都要求环境里带着合并令牌。</p>
+    <figure>
+      <div class="diagram">
+        <svg viewBox="0 0 900 250" role="img" aria-label="合并令牌：harness merge 核对记录后，用密钥对旧提交和新提交签名得到令牌，带着令牌更新主分支（远程交付时由 harness sync 生成同样的令牌），reference-transaction 钩子重算并比对后放行；在主分支上直接 commit、pull、reset 没有令牌，被钩子拒绝。">
+          <rect class="d-box accent" x="20" y="30" width="190" height="60" rx="8"/>
+          <text class="d-t" x="115" y="55" text-anchor="middle">harness merge</text>
+          <text class="d-s" x="115" y="75" text-anchor="middle">先核对证据、评审、确认</text>
+          <line class="d-line accent" x1="210" y1="60" x2="266" y2="60" marker-end="url(#ar-accent)"/>
+          <rect class="d-box" x="270" y="30" width="230" height="60" rx="8"/>
+          <text class="d-t" x="385" y="55" text-anchor="middle">生成令牌</text>
+          <text class="d-m" x="385" y="75" text-anchor="middle">HMAC(密钥, 旧提交, 新提交)</text>
+          <line class="d-line accent" x1="500" y1="60" x2="556" y2="60" marker-end="url(#ar-accent)"/>
+          <text class="d-l accent" x="528" y="52" text-anchor="middle">带令牌</text>
+          <text class="d-l" x="385" y="112" text-anchor="middle">远程交付时由 harness sync 生成同样的令牌</text>
+
+          <rect class="d-box deny" x="20" y="160" width="190" height="60" rx="8"/>
+          <text class="d-t" x="115" y="185" text-anchor="middle">直接写 main</text>
+          <text class="d-s" x="115" y="205" text-anchor="middle">commit、pull、reset 等</text>
+          <line class="d-line deny" x1="210" y1="190" x2="556" y2="190" marker-end="url(#ar-deny)"/>
+          <text class="d-l deny" x="385" y="182" text-anchor="middle">没有令牌</text>
+
+          <rect class="d-box" x="560" y="30" width="170" height="190" rx="8"/>
+          <text class="d-t" x="645" y="112" text-anchor="middle">reference-</text>
+          <text class="d-t" x="645" y="130" text-anchor="middle">transaction 钩子</text>
+          <text class="d-s" x="645" y="152" text-anchor="middle">重算令牌并比对</text>
+
+          <line class="d-line allow" x1="730" y1="60" x2="776" y2="60" marker-end="url(#ar-allow)"/>
+          <rect class="d-box allow" x="780" y="30" width="100" height="60" rx="8"/>
+          <text class="d-t" x="830" y="65" text-anchor="middle">main 更新</text>
+          <line class="d-line deny" x1="730" y1="190" x2="776" y2="190" marker-end="url(#ar-deny)"/>
+          <rect class="d-box deny" x="780" y="160" width="100" height="60" rx="8"/>
+          <text class="d-t" x="830" y="195" text-anchor="middle">拒绝写入</text>
+        </svg>
+      </div>
+      <figcaption>图 4　同一个钩子，两种结果。令牌只能由持有密钥的 <code>harness merge</code> 与 <code>harness sync</code> 生成，而且只对这一次“旧提交到新提交”有效。</figcaption>
+    </figure>
+    <p>所以在主分支上 <code>git commit</code> 或 <code>git pull</code> 被拒绝是预期行为。同步远端主分支的做法见 <a href="team.html">团队与多机</a>。</p>
+
+    <h2 tabindex="-1" id="trust-root">配置只从主分支读取</h2>
+    <p>如果任务分支能改规则并立即生效，Agent 就可以“先关掉检查再提交”。harness 的所有判定（实时拦截、git 钩子、verify 选检查、merge 的合并条件）都<strong>从主分支的 git 对象读取配置</strong>，不读工作区，也不读任务分支。</p>
+    <figure>
+      <div class="diagram">
+        <svg viewBox="0 0 900 260" role="img" aria-label="信任根：门禁判定只读取主分支上已确认的配置；任务分支改了 policy.json 不会影响它自己的判定；改动门禁的分支必须由人确认后合并，合入后新配置才生效。">
+          <rect class="d-box accent" x="30" y="20" width="240" height="80" rx="8"/>
+          <text class="d-t" x="150" y="52" text-anchor="middle">main 分支</text>
+          <text class="d-m" x="150" y="74" text-anchor="middle">.harness/ 已确认的配置</text>
+          <rect class="d-box" x="30" y="170" width="240" height="70" rx="8"/>
+          <text class="d-t" x="150" y="198" text-anchor="middle">任务分支</text>
+          <text class="d-s" x="150" y="220" text-anchor="middle">改了 policy.json，关掉一条规则</text>
+
+          <rect class="d-box" x="360" y="100" width="230" height="64" rx="8"/>
+          <text class="d-t" x="475" y="126" text-anchor="middle">门禁判定</text>
+          <text class="d-s" x="475" y="146" text-anchor="middle">拦截、钩子、选检查、合并条件</text>
+
+          <line class="d-line accent" x1="270" y1="80" x2="356" y2="116" marker-end="url(#ar-accent)"/>
+          <text class="d-l accent" x="300" y="112" text-anchor="middle">读取</text>
+          <line class="d-line deny" x1="270" y1="182" x2="356" y2="152" marker-end="url(#ar-deny)"/>
+          <text class="d-l deny" x="300" y="158" text-anchor="middle">不读取</text>
+
+          <line class="d-line" x1="270" y1="222" x2="636" y2="222" marker-end="url(#ar)"/>
+          <text class="d-l" x="455" y="214" text-anchor="middle">门禁改动：合并前必须由人确认</text>
+          <rect class="d-box" x="640" y="190" width="240" height="64" rx="8"/>
+          <text class="d-t" x="760" y="216" text-anchor="middle">confirm --yes + merge</text>
+          <text class="d-s" x="760" y="236" text-anchor="middle">确认绑定合并结果 tree</text>
+          <path class="d-line accent" d="M760,190 L760,40 L274,40" marker-end="url(#ar-accent)"/>
+          <text class="d-l accent" x="770" y="120">合入后才生效</text>
+        </svg>
+      </div>
+      <figcaption>图 5　信任根在主分支上。任务分支改了规则，只有在人确认并合入之后，新规则才开始约束后面的任务。</figcaption>
+    </figure>
+    <ul>
+      <li>门禁文件包括 <code>.harness/</code> 下的配置、规则、用例与入口，客户端配置和钩子目录，以及 <code>governance.gatePaths</code> 追加的路径。</li>
+      <li>Agent 执行带 <code>--yes</code> 的确认会被拦截，确认必须由人执行；确认后如果分支再提交或主分支前进导致合并结果变化，要重新确认。</li>
+      <li>首次接入时主分支上还没有配置，这时按接入分支提议的配置执行，并且无论改了什么都要人确认；确认后以快进方式合入，这份配置从此成为信任根。</li>
+      <li>改规则之前可以用 <code>harness golden --worktree</code> 按工作区的配置重放黄金任务，确认新规则的判定符合预期。</li>
+    </ul>
+
+    <h2 tabindex="-1" id="selection">按改动选检查</h2>
+    <p><code>verify</code> 不是每次全量跑测试，而是按 <code>.harness/verify.json</code> 的映射，用“分支相对合并基线改了哪些路径”选出要跑的检查：</p>
+    <div class="code"><span class="label">verify.json 片段</span><pre><code>{ "id": "web-typecheck", "tier": "gate",
+  "when": ["web/src/**", "web/package.json"],
+  "cwd": "web", "cmd": ["pnpm", "typecheck"],
+  "requires": ["web/node_modules"] }</code></pre></div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>tier</th><th>含义</th></tr></thead>
+      <tbody>
+        <tr><td><code>gate</code></td><td>必过，失败就不能合并</td></tr>
+        <tr><td><code>extended</code></td><td>在外部环境执行；成功后用 <code>attest</code> 登记为正式证据，未登记时明确列为未执行</td></tr>
+        <tr><td><code>advisory</code></td><td>只提示，不计入未执行</td></tr>
+      </tbody>
+    </table></div>
+    <ul>
+      <li>检查在固定检出 <code>~/.cache/harness/checkouts/&lt;哈希&gt;/work</code> 里执行，它是一个分离头指针的 Linked Worktree，不受你工作区状态影响，增量缓存可以复用。</li>
+      <li><code>requires</code> 里的依赖目录（如 <code>node_modules</code>）从主 Worktree 软链接进检出；缺失时证据记为 <code>incomplete</code>，不能评审与合并。</li>
+      <li>命令不存在时证据里单独标出“未找到命令”，说明是缺工具，不是代码有问题。</li>
+      <li><code>harness verify --plan --branch &lt;分支&gt;</code> 只列出会执行的检查，不执行；配置了 <code>testFirst</code>、<code>coverage</code> 时，这次会复算的也一并列出。</li>
+    </ul>
+
+    <h2 tabindex="-1" id="external-evidence">外部验证与合并后验收</h2>
+    <p>有些检查需要真实浏览器、登录态或已经集成的环境，不适合由 <code>verify</code> 在固定检出里直接运行。harness 把这类情况分成“外部验证”和“合并后验收”，既不把没跑说成通过，也不要求在合并前提供只有合并后才能取得的证据。</p>
+    <div class="cards">
+      <div class="card"><h2 tabindex="-1" id="principles-section-1">自动检查</h2><p><code>gate</code> 仍由 <code>verify</code> 自动运行，失败就不能交付，流程不变。</p></div>
+      <div class="card"><h2 tabindex="-1" id="principles-section-2">外部验证</h2><p>Agent 或你在真实环境执行 <code>extended</code> 检查，成功后用 <code>attest</code> 登记实际命令和报告，不需要把报告提交进仓库。</p></div>
+      <div class="card"><h2 tabindex="-1" id="principles-section-3">合并后验收</h2><p>只有必须等代码进入主分支才能验证的项目才标为 <code>post-merge</code>，例如主 Worktree 集成冒烟测试；能在任务 Worktree 验证的仍在合并前完成。</p></div>
+    </div>
+    <div class="code"><span class="label">外部检查已成功执行后登记</span><pre tabindex="0"><code>harness attest --branch feat/login --check browser \
+  --command "pnpm ui:verify" \
+  --report frontend/output/report.md</code></pre></div>
+    <ul>
+      <li><strong>不是再跑一遍</strong>：<code>attest</code> 只登记已经成功的验证。证据包含实际命令、报告哈希和脱敏摘要，评审可以据此核对，而不是只看 Agent 自述。</li>
+      <li><strong>无关改动不重验</strong>：只改文档时外部证据继续有效；检查定义或覆盖文件变化后，旧证据自动失效。</li>
+      <li><strong>两种交付都一样</strong>：本地项目在 <code>merge</code> 后验收；PR/MR 项目在平台合入并 <code>sync</code> 后验收。没有配置合并后检查的项目不增加任何步骤。</li>
+      <li><strong>发现问题继续修</strong>：验收失败会保持待完成，Agent 新建修复分支并重新走门禁；需要回滚、业务取舍或其他用户决策时，才上报并等待。</li>
+      <li><strong>注意脱敏</strong>：报告摘要会提供给评审者；原始命令不会写进 PR/MR 描述，平台只看到检查名和报告哈希。</li>
+    </ul>
+    <p>从配置、验收清单到合并、登记和失败修复的完整命令与输出，见<a href="https://github.com/windvalley/harness/blob/main/docs/reference.md#合并后验收完整示例">参考手册里的合并后验收示例</a>。</p>
+
+    <h2 tabindex="-1" id="test-evidence">测试证据：先红后绿与改动行覆盖率</h2>
+    <p>“检查通过”证明不了“测试真的约束了这次改动”。<code>verify.json</code> 里两个可选字段补上这一环，由验证自己复算，不靠 Agent 自述：</p>
+    <div class="code"><span class="label">verify.json 片段</span><pre><code>"testFirst": {
+  "mode": "observe",
+  "source": { "match": ["web/src/**"], "exclude": [] },
+  "tests":  { "match": ["**/*.test.ts"], "exclude": [] },
+  "cwd": "web", "cmd": ["pnpm", "exec", "vitest", "run", "{tests}"]
+},
+"coverage": {
+  "mode": "observe",
+  "include": { "match": ["web/src/**"], "exclude": [] },
+  "cwd": "web", "cmd": ["pnpm", "exec", "vitest", "run", "--coverage"],
+  "report": "coverage/lcov.info", "threshold": 80
+}</code></pre></div>
+    <ul>
+      <li><code>testFirst</code>：改了实现就必须有新增或修改的测试；这些测试在当前实现上要通过，把实现还原成基线后要失败，才算测试先于实现红过。行为不变的重构在提交信息里写 <code>Tdd-Waiver: 原因</code>，只留痕，不是人工放行。</li>
+      <li><code>coverage</code>：只统计 <code>git diff</code> 里新增或修改的行，读 lcov 或 Go coverprofile，低于 <code>threshold</code>（默认 80）失败并列出没覆盖的行。</li>
+      <li><code>mode</code> 先写 <code>observe</code>（只记录不拦截），在真实改动上看过误报再改 <code>enforce</code>。</li>
+      <li>两项在证据里记为 <code>harness:tdd-red</code> 与 <code>harness:changed-line-coverage</code>；它们只证明“有测试会红、改动行被执行过”，不证明断言有效。调低阈值或改成 <code>observe</code> 属于门禁改动，确认摘要会列出改前改后。</li>
+      <li><code>init</code> 不会自动生成这两项，接入时由 Agent 按项目真实的测试与覆盖率工具配置。</li>
+    </ul>
+
+    <h2 tabindex="-1" id="review">独立评审</h2>
+    <p>写代码的 Agent 很难客观评价自己的改动。<code>review</code> 启动一个<strong>不了解实现过程</strong>的评审进程，只给它评审材料：验收清单、验证证据摘要、提交说明、改动文件统计和 diff，从“需求符合度”和“工程质量”两个维度给出结论。</p>
+    <ul>
+      <li>评审者在本机配置（<code>harness reviewer</code>，文件是 <code>~/.config/harness/reviewers.json</code>，不进仓库）：每个评审者指定客户端（<code>claude</code>、<code>codex</code> 或任意命令）、模型、推理强度，<code>claude</code> 还可以指定第三方端点和 key。换模型不需要提交，也不触发门禁确认。</li>
+      <li>可以列多个评审者：前一个失败（鉴权、限流、超时）就换下一个，给出结论就停，被拒后不会换人重评。默认优先使用与当前会话模型不同的评审者，评审和实现不共用同一套盲点。</li>
+      <li>没有本机文件时按项目配置里的旧字段运行：本机有 <code>claude</code> 就用它，否则用 <code>codex</code>。</li>
+      <li><code>claude</code> 不开放任何工具、不加载项目设置；<code>codex</code> 与 <code>command</code> 在空的临时目录里运行，读不到项目文件。</li>
+      <li>评审记录写明由谁、用什么模型、什么端点完成，<code>harness status</code> 与 PR/MR 描述里都能看到。</li>
+      <li>有 <code>high</code> 或 <code>critical</code> 级别的发现时拒绝合并，级别可以用 <code>review.blockSeverities</code> 调整。</li>
+      <li>提交说明标明是实现方自述，只用来理解意图；说法与 diff 不符时，评审会作为发现报出来。</li>
+      <li>diff 超过 <code>review.maxDiffChars</code>（默认 300000 字符）时拒绝评审，并按目录给出拆分建议。</li>
+      <li>有验收清单 <code>.harness/acceptance/&lt;分支名&gt;.md</code> 时评审逐条核对，需求符合度为 <code>unknown</code> 或 <code>unmet</code> 都会被拒绝。</li>
+    </ul>
+
+    <h2 tabindex="-1" id="plan-first">任务分级与实施授权</h2>
+    <p>规则写在 <code>.harness/rules/core.md</code>，要点同时写进 <code>AGENTS.md</code> 的托管块，Agent 开始任务前先判断分级：</p>
+    <div class="cards">
+      <div class="card"><h2 tabindex="-1" id="principles-section-4">直接实施</h2><p>小优化、小迭代或缺陷修复：不改库表与迁移，不改接口契约、权限与数据兼容性，代码改动少于 500 行（测试、文档、锁文件不计）。</p></div>
+      <div class="card"><h2 tabindex="-1" id="principles-section-5">先方案后实施</h2><p>其余任务和拿不准的任务：先探索仓库，一次问一个问题，写出验收清单、spec 与 plan，提交后停下等你授权。配置了评审者时，交出方案前先运行 <code>harness review-plan</code> 让另一个模型审一轮，意见与处理记进 spec；它只给建议，不是门禁。</p></div>
+    </div>
+    <p>默认启用的 <code>plan-first</code> 预设把“停下等授权”变成门禁：</p>
+    <ul>
+      <li>任务分支写了实施方案（默认 <code>docs/changes/*/plan.md</code>）、还没有授权记录时，Agent 只能写方案与验收清单，写测试和代码会被拦截。</li>
+      <li>你在对话里说“开始实施”之类的话就是授权，不需要执行命令。Agent 会运行 <code>harness approve --branch &lt;分支&gt; --yes --note "&lt;你的原话&gt;"</code> 照录原话。</li>
+      <li>写了方案、改了库表相关文件或代码改动超过阈值的分支，没有授权记录不能合并（<code>plan_unapproved</code>）。</li>
+      <li>合并输出与 <code>harness status</code> 会显示记录下来的原话，你可以随时核对。</li>
+    </ul>
+    <p>实施默认<strong>先红后绿</strong>：先把每条验收写成测试并确认失败，再实现到全部通过。</p>
+
+    <h2 tabindex="-1" id="pinning">版本锁定的入口</h2>
+    <p>门禁代码如果放在项目里，Agent 就可以改它。所以项目只入库一个入口 <code>.harness/bin/harness</code>，它按 <code>.harness/VERSION</code> 锁定的版本，转发到本机的 <code>~/.local/share/harness/versions/&lt;版本&gt;/</code>。</p>
+    <ul>
+      <li>版本目录带内容哈希清单，<code>harness doctor</code> 会校验它没有被就地改写。</li>
+      <li>入口与钩子 Agent 不能手改，只能在任务分支运行 <code>harness install</code>、<code>init</code> 或 <code>upgrade</code> 重新生成，合并前同样要人确认。</li>
+      <li>入口随仓库分发，每个 Linked Worktree 检出即可用；同一台机器上的多个项目可以锁定不同版本。</li>
+    </ul><nav class="pagination" aria-label="文档分页"><a class="previous" href="architecture.html"><span>上一篇</span><strong>架构总览</strong></a><a class="next" href="customize.html"><span>下一篇</span><strong>按项目定制</strong></a></nav></main>
+  <aside class="page-toc"><nav aria-label="本页内容"><div class="page-toc-title">本页内容</div><ol><li class="toc-level-2"><a href="#lifecycle">一次任务的生命周期</a></li><li class="toc-level-2"><a href="#signing">签名记录</a></li><li class="toc-level-2"><a href="#token">主分支只认合并令牌</a></li><li class="toc-level-2"><a href="#trust-root">配置只从主分支读取</a></li><li class="toc-level-2"><a href="#selection">按改动选检查</a></li><li class="toc-level-2"><a href="#external-evidence">外部验证与合并后验收</a></li><li class="toc-level-2"><a href="#principles-section-1">自动检查</a></li><li class="toc-level-2"><a href="#principles-section-2">外部验证</a></li><li class="toc-level-2"><a href="#principles-section-3">合并后验收</a></li><li class="toc-level-2"><a href="#test-evidence">测试证据：先红后绿与改动行覆盖率</a></li><li class="toc-level-2"><a href="#review">独立评审</a></li><li class="toc-level-2"><a href="#plan-first">任务分级与实施授权</a></li><li class="toc-level-2"><a href="#principles-section-4">直接实施</a></li><li class="toc-level-2"><a href="#principles-section-5">先方案后实施</a></li><li class="toc-level-2"><a href="#pinning">版本锁定的入口</a></li></ol></nav><div class="related-links"><h2>相关链接</h2><a href="https://github.com/windvalley/harness/blob/main/docs/reference.md">参考手册</a><a href="https://github.com/windvalley/harness">GitHub 仓库</a></div></aside>
+</div>
+<footer>harness · MIT 许可 · <a href="https://github.com/windvalley/harness">GitHub</a> · <a href="https://github.com/windvalley/harness/blob/main/docs/reference.md">参考手册</a></footer>
+<dialog class="drawer" id="docs-drawer" aria-label="文档导航">
+  <div class="drawer-scroller">
+    <div class="drawer-sheet">
+      <div class="drawer-header"><strong>文档导航</strong><button id="drawer-close" type="button" aria-label="关闭文档目录" autofocus>关闭</button></div>
+      <nav class="docs-nav" aria-label="移动端文档导航"><section class="nav-group"><h2>开始使用</h2><ul><li><a href="quickstart.html">快速开始</a></li><li><a href="daily.html">日常工作流</a></li><li><a href="blocked.html">被拦截时怎么办</a></li></ul></section><section class="nav-group"><h2>核心概念</h2><ul><li><a href="index.html">使用教程</a></li><li><a href="architecture.html">架构总览</a></li><li><a href="principles.html" aria-current="page">核心原理</a></li></ul></section><section class="nav-group"><h2>配置与维护</h2><ul><li><a href="customize.html">按项目定制</a></li><li><a href="team.html">团队与多机</a></li><li><a href="limits.html">信任模型与限制</a></li></ul></section><section class="nav-group"><h2>参考</h2><ul><li><a href="cheatsheet.html">命令速查</a></li><li><a href="https://github.com/windvalley/harness/blob/main/docs/reference.md">参考手册</a></li></ul></section></nav>
+    </div>
+  </div>
+</dialog>
+<dialog class="search-dialog" id="search-dialog" aria-labelledby="search-title">
+  <div class="search-header"><h2 id="search-title">搜索文档</h2><button id="search-close" type="button" aria-label="关闭搜索">关闭</button></div>
+  <label class="search-field"><span class="visually-hidden">搜索关键词</span><input id="search-input" type="search" placeholder="搜索标题、正文或命令" autocomplete="off"></label>
+  <p class="search-status" id="search-status" role="status">输入关键词开始搜索</p>
+  <ul class="search-results" id="search-results"></ul>
+</dialog>
+</body>
+</html>

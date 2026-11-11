@@ -9,7 +9,9 @@
   },
   "scripts": {
     "test": "node --test 'test/*.test.mjs'",
-    "conformance": "node bin/harness.mjs conformance"
+    "conformance": "node bin/harness.mjs conformance",
+    "docs:build": "node docs/build.mjs",
+    "docs:check": "node docs/build.mjs --check"
   },
   "engines": {
     "node": ">=20"

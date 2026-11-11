@@ -1,0 +1,52 @@
+<h2 id="quickstart">快速开始</h2>
+    <div class="callout">
+      <p><strong>需要</strong>：macOS 或 Linux、Node.js 20 及以上、git 2.38 及以上（合并用到 <code>git merge-tree --write-tree</code>），以及一个用于独立代码评审的 AI 工具。推荐使用本机已登录的 Claude Code CLI（<code>claude</code>）或 Codex（<code>codex</code>）；其他工具或服务需符合<a href="https://github.com/windvalley/harness/blob/main/docs/reference.md#独立评审的后端">评审接口要求</a>。</p>
+    </div>
+
+    <ol class="steps">
+      <li>
+        <h4>在项目里向 Agent 提出接入请求</h4>
+        <p>在 AI 编程客户端中打开待接入项目，说出接入目标并提供仓库地址即可。Agent 会直接从 GitHub 获取最新版本并安装，阅读接入说明并检查当前项目。</p>
+        <div class="code"><span class="label">接入需求示例</span><pre class="prompt"><code>我想给当前项目接入 harness：https://github.com/windvalley/harness
+请直接从 GitHub 获取最新版本并安装到本机，不依赖本机已有的 harness 仓库或安装；然后适配并接入当前项目，保留已有有效规则和配置，完成验证、评审与交付。需要我亲自操作时，请给出具体步骤。</code></pre></div>
+        <p>Agent 会将所需版本安装到本机共享目录；项目通过仓库内的入口锁定版本，多个项目可以共用同一安装版本。</p>
+      </li>
+      <li>
+        <h4>查看接入方案与检查配置</h4>
+        <p>Agent 调查并预览接入改动，按项目规则准备任务分支和工作环境，再写入配置、提交、验证与独立评审。用户不需要先创建 Worktree，也不一律需要新建一个；同目录任务分支、已有隔离工作区或新建 Linked Worktree 都按实际约束选择。</p>
+        <p><code>init</code> 会写入配置、规则、入口、git 钩子、客户端配置和 <code>AGENTS.md</code> 托管块。起始检查需要对照项目真实命令核实，占位与未执行项应明确列出。</p>
+        <p>接入的关键一步，是把项目自己要求通过的检查（lint、build、test 等）配成验证里的必过项（<code>gate</code>）。Agent 会先在接入前的代码上逐条试跑这些检查：能通过的配成 <code>gate</code>，之后任何一项失败都合不进主分支；接入前就已经失败的，Agent 列给你，由你决定先修好、暂时豁免还是改为手工验收。没有配成 <code>gate</code> 的检查拦不住任何交付。例如 <code>init</code> 生成的 <code>lint</code> 只是占位，要换成项目真实的 lint 命令并设为 <code>gate</code> 才会生效。</p>
+        <p>已有 husky、自定义钩子等其他门禁时，Agent 应说明保留或迁移方式，需要舍弃现有规则时先由你决定。详细命令见<a href="https://github.com/windvalley/harness/blob/main/docs/reference.md#首次接入">参考手册</a>。</p>
+      </li>
+      <li>
+        <h4>亲自确认门禁改动，再让 Agent 继续</h4>
+        <p>接入时 Agent 会和你确定交付方式，默认本地交付；主分支在平台上、合并走 PR/MR 时见<a href="#delivery-modes">两种交付方式</a>。首次接入交付前，Agent 展示涉及的门禁文件、将生效的规则与检查项，并给出包含实际路径和分支的确认命令。看过摘要后，由你在自己的终端执行带 <code>--yes</code> 的确认；在 Claude Code 中也可以用 <code>!</code> 前缀亲自执行。</p>
+        <p>对话里的同意不能代替这条人工确认。执行后告诉 Agent“已确认，请继续”：本地交付由它完成已获授权的本地合并；远程交付由它提交 PR/MR，你在平台上合并后再由它同步。它会汇报结果。</p>
+      </li>
+      <li>
+        <h4>让客户端用上实时拦截</h4>
+        <ul>
+          <li><strong>Claude Code</strong>：重启正在运行的会话，钩子在会话启动时读入。</li>
+          <li><strong>Codex</strong>：运行 <code>/hooks</code>，进入 <code>Review hooks</code> 后按 <code>t</code> 信任；每个 Worktree 首次使用时各信任一次。</li>
+          <li><strong>DeepSeek Harness</strong>：每台机器为用到的 profile 注册一次本机插件，所有项目共用，注册后重启。桌面版要用 App 自带的命令行，先打开一次桌面版再完全退出后运行；浏览器版用 <code>dsh</code>：</li>
+        </ul>
+        <div class="code"><pre><code># 桌面版
+"/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh" plugin --profile desktop add ~/.local/share/harness/dsh-plugin
+# 浏览器版
+dsh plugin --profile web add ~/.local/share/harness/dsh-plugin</code></pre></div>
+        <p>完成当前客户端的操作后，告知 Agent 已完成即可，由它接续诊断并解释已验证与仍待验证的部分，下面是输出示意：</p>
+        <div class="code term"><span class="label">输出节选</span><pre><code>  [ok] git:reference-transaction: &lt;项目&gt;/.git/hooks/reference-transaction
+  [ok] client:claude: PreToolUse 已接入（CLI 已验证；桌面版仅静态确认，未端到端实测）
+  [!!] client:codex: 钩子已接入但尚未信任：在 Codex 里运行 /hooks 批准一次，否则命令不会经过门禁
+  [ok] project:main: 配置取自主分支 main
+  [ok] main-worktree: &lt;项目&gt; 停在 main 且洁净，可以接收合并</code></pre></div>
+        <p><code>[!!]</code> 表示需要处理，<code>[?]</code> 表示仍待验证。配置就位、产品曾经实测与当前客户端实际调用已验证分别说明，不能只凭初始化成功宣布全部接入完成。</p>
+      </li>
+      <li>
+        <h4>检查结果，保留任务工作区</h4>
+        <p>确认接入已按约定交付（本地合并，或 PR/MR 合入后已同步），真实检查与验证、评审证据齐全，诊断中的待处理项有明确解释。接入分支和任务 Worktree 保留，需要清理时再按<a href="#cleanup">清理流程</a>发起请求。</p>
+      </li>
+    </ol>
+    <div class="callout warn">
+      <p>项目规则允许、没有其他门禁且你明确选择不走受控评审的小项目，可采用主分支直接接入的简化方式。由 Agent 先说明区别，再由你决定，见<a href="https://github.com/windvalley/harness/blob/main/docs/reference.md#小项目直接在主分支接入">参考手册</a>。</p>
+    </div>

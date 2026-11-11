@@ -1,0 +1,81 @@
+<!doctype html>
+<!-- 本文件由 node docs/build.mjs 生成，请勿直接编辑。 -->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>被拦截时怎么办 | harness 文档</title>
+<meta name="description" content="理解常见拦截与拒绝原因，按提示恢复任务。">
+<meta name="color-scheme" content="light dark">
+<script>try{const theme=localStorage.getItem("harness-theme");if(theme==="light"||theme==="dark")document.querySelector('meta[name="color-scheme"]').content=theme;}catch{}</script>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%230f766e' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6z'/%3E%3Cpath d='M8.5 12l2.5 2.5 4.5-5'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="assets/docs.css">
+
+<script src="assets/docs.js" defer></script>
+</head>
+<body data-page="blocked">
+<a class="skip-link" href="#main-content">跳到主要内容</a>
+<header class="topbar">
+  <div class="topbar-inner">
+    <a class="brand" href="index.html" aria-label="harness 文档首页"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6z"/><path d="M8.5 12l2.5 2.5 4.5-5"/></svg><span>harness</span></a>
+    <span class="brand-divider" aria-hidden="true"></span><span class="product-area">文档</span>
+    <nav class="topnav" aria-label="主导航">
+      <a class="wide" href="https://github.com/windvalley/harness/blob/main/docs/reference.md">参考手册</a>
+      <a class="wide" href="https://github.com/windvalley/harness">GitHub</a>
+      <button class="search-open" id="search-open" type="button" aria-label="搜索文档" aria-keyshortcuts="Meta+K Control+K"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><span class="wide">搜索文档</span><kbd class="wide">⌘K</kbd></button>
+      <label class="theme-control"><span class="visually-hidden">颜色主题</span><select id="theme-select" aria-label="颜色主题"><option value="auto">自动</option><option value="light">浅色</option><option value="dark">深色</option></select></label>
+      <button class="drawer-open" id="drawer-open" type="button" aria-label="打开文档目录" aria-expanded="false" aria-controls="docs-drawer"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg><span>目录</span></button>
+    </nav>
+  </div>
+</header>
+<div class="layout">
+  <aside class="sidebar"><nav class="docs-nav" aria-label="文档导航"><section class="nav-group"><h2>开始使用</h2><ul><li><a href="quickstart.html">快速开始</a></li><li><a href="daily.html">日常工作流</a></li><li><a href="blocked.html" aria-current="page">被拦截时怎么办</a></li></ul></section><section class="nav-group"><h2>核心概念</h2><ul><li><a href="index.html">使用教程</a></li><li><a href="architecture.html">架构总览</a></li><li><a href="principles.html">核心原理</a></li></ul></section><section class="nav-group"><h2>配置与维护</h2><ul><li><a href="customize.html">按项目定制</a></li><li><a href="team.html">团队与多机</a></li><li><a href="limits.html">信任模型与限制</a></li></ul></section><section class="nav-group"><h2>参考</h2><ul><li><a href="cheatsheet.html">命令速查</a></li><li><a href="https://github.com/windvalley/harness/blob/main/docs/reference.md">参考手册</a></li></ul></section></nav></aside>
+  <main id="main-content"><header class="page-header"><p class="eyebrow">开始使用</p><h1 tabindex="-1" id="blocked">被拦截时怎么办</h1><p class="lead">理解常见拦截与拒绝原因，按提示恢复任务。</p></header>
+    <p>在已授权的任务中，Agent 应主动解释拦截原因并按规则处理常规改道和重跑，不需要用户另发调度指令。需要业务判断、授权或亲自执行时，由它说明具体事项；如果想了解原因，直接问“刚才为什么被拦住了？”即可。</p>
+    <p>拦截信息包含原因、对象、正确做法和规则 id，Agent 照着“正确做法”改道即可：</p>
+    <div class="code term"><pre><code>[harness] 已拦截: 强制推送会覆盖远端历史
+对象: git push --force origin main
+正确做法: 普通推送到任务分支；确需强推请用户明确授权具体分支
+规则: git-force-push</code></pre></div>
+    <div class="code term"><pre><code>拒绝直接更新 refs/heads/main(5685e8a474 -> 5d3ce6d65d)
+本地主分支只允许由 harness merge 更新，它会先核对证据与评审；从远程主分支快进用 harness sync。
+正确做法: 在任务分支提交后运行 harness merge --branch &lt;任务分支&gt;。</code></pre></div>
+    <p>远程交付的项目，提示改为运行 <code>harness submit --branch &lt;任务分支&gt;</code> 创建或更新 PR/MR，平台合入后运行 <code>harness sync</code>。</p>
+    <p>常见的合并拒绝原因：</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>提示</th><th>处理</th></tr></thead>
+      <tbody>
+        <tr><td><code>bad_commit_message</code></td><td>分支上有提交不符合提交信息规范；<code>harness status</code> 会列出具体提交与条目，在任务分支改写后再重新 verify、review</td></tr>
+        <tr><td><code>review_missing</code> / <code>review_blocked</code></td><td>运行 <code>harness review</code>；被拒时按发现修复，提交后重新 verify、review</td></tr>
+        <tr><td><code>gate_change_unconfirmed</code></td><td>Agent 展示确认摘要；由人在自己的终端执行它给出的带 <code>--yes</code> 的确认命令，再告诉 Agent 继续</td></tr>
+        <tr><td><code>plan_unapproved</code></td><td>大改动没有实施授权记录；补齐方案，你同意后由 Agent 照录原话运行 <code>harness approve</code></td></tr>
+        <tr><td><code>conflict</code></td><td>在任务分支上 <code>git merge main</code> 解决冲突，再重新验证与评审</td></tr>
+        <tr><td><code>main_moved</code></td><td>合并或同步过程中主分支前进了，重新运行同一条命令，已有证据会复用</td></tr>
+        <tr><td><code>delivery_remote</code>、<code>delivery_local</code></td><td>交付方式和当前命令不匹配：远程模式下用 <code>harness submit</code>，本地模式下用 <code>harness merge</code></td></tr>
+        <tr><td><code>base_stale</code>、<code>not_fast_forward</code></td><td>本地主分支与远程不一致：先 <code>harness sync</code>；本地有远程没有的提交时 <code>sync</code> 拒绝，不改写历史</td></tr>
+        <tr><td><code>platform_missing</code>、<code>platform_failed</code></td><td>平台命令没装或调用失败，由人安装并运行 <code>gh auth login</code> 或 <code>glab auth login</code></td></tr>
+        <tr><td><code>review_stale</code></td><td>主分支在评审之后改了本分支也改过的文件；在任务分支上 <code>git merge main</code> 并提交，再重新验证与评审</td></tr>
+        <tr><td>验证结果 <code>incomplete</code></td><td><code>requires</code> 里的依赖目录在主 Worktree 不存在，装好依赖后重跑</td></tr>
+        <tr><td>主 Worktree 不在 main 或不洁净</td><td>Agent 先核对状态并保留已有改动，按项目规则准备主 Worktree；需要处置用户改动时先说明具体对象并取得授权</td></tr>
+      </tbody>
+    </table></div>
+    <p>更多见参考手册的<a href="https://github.com/windvalley/harness/blob/main/docs/reference.md#常见问题">常见问题</a>。手工判定一条命令会不会被拦：<code>harness check --kind shell --command "&lt;命令&gt;"</code>；列出所有生效规则：<code>harness rules</code>。</p><nav class="pagination" aria-label="文档分页"><a class="previous" href="daily.html"><span>上一篇</span><strong>日常工作流</strong></a><a class="next" href="architecture.html"><span>下一篇</span><strong>架构总览</strong></a></nav></main>
+  <aside class="page-toc"><nav aria-label="本页内容"></nav><div class="related-links"><h2>相关链接</h2><a href="https://github.com/windvalley/harness/blob/main/docs/reference.md">参考手册</a><a href="https://github.com/windvalley/harness">GitHub 仓库</a></div></aside>
+</div>
+<footer>harness · MIT 许可 · <a href="https://github.com/windvalley/harness">GitHub</a> · <a href="https://github.com/windvalley/harness/blob/main/docs/reference.md">参考手册</a></footer>
+<dialog class="drawer" id="docs-drawer" aria-label="文档导航">
+  <div class="drawer-scroller">
+    <div class="drawer-sheet">
+      <div class="drawer-header"><strong>文档导航</strong><button id="drawer-close" type="button" aria-label="关闭文档目录" autofocus>关闭</button></div>
+      <nav class="docs-nav" aria-label="移动端文档导航"><section class="nav-group"><h2>开始使用</h2><ul><li><a href="quickstart.html">快速开始</a></li><li><a href="daily.html">日常工作流</a></li><li><a href="blocked.html" aria-current="page">被拦截时怎么办</a></li></ul></section><section class="nav-group"><h2>核心概念</h2><ul><li><a href="index.html">使用教程</a></li><li><a href="architecture.html">架构总览</a></li><li><a href="principles.html">核心原理</a></li></ul></section><section class="nav-group"><h2>配置与维护</h2><ul><li><a href="customize.html">按项目定制</a></li><li><a href="team.html">团队与多机</a></li><li><a href="limits.html">信任模型与限制</a></li></ul></section><section class="nav-group"><h2>参考</h2><ul><li><a href="cheatsheet.html">命令速查</a></li><li><a href="https://github.com/windvalley/harness/blob/main/docs/reference.md">参考手册</a></li></ul></section></nav>
+    </div>
+  </div>
+</dialog>
+<dialog class="search-dialog" id="search-dialog" aria-labelledby="search-title">
+  <div class="search-header"><h2 id="search-title">搜索文档</h2><button id="search-close" type="button" aria-label="关闭搜索">关闭</button></div>
+  <label class="search-field"><span class="visually-hidden">搜索关键词</span><input id="search-input" type="search" placeholder="搜索标题、正文或命令" autocomplete="off"></label>
+  <p class="search-status" id="search-status" role="status">输入关键词开始搜索</p>
+  <ul class="search-results" id="search-results"></ul>
+</dialog>
+</body>
+</html>
