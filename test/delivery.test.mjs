@@ -259,6 +259,8 @@ describe("配置与默认行为", () => {
     assert.match(rules, /### 交付授权/, "规则给出交付授权的定义");
     assert.match(rules, /不由实施授权推导，也不被实施授权替代/);
     assert.match(rules, /不逐次请示/);
+    assert.match(rules, /用户在当前对话里明确要求暂不合并/, "交付授权写明用户要求暂不合并时的边界");
+    assert.match(rules, /这条优先于上面各项/, "边界优先于交付设置给出的授权");
     for (const code of ["push_rejected", "not_fast_forward", "push_failed", "push_skipped"]) {
       assert.match(rules, new RegExp(code), `规则列出推送相关的停下码 ${code}`);
     }
