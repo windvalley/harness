@@ -4,6 +4,23 @@
 
 ## [Unreleased]
 
+## [0.18.4] - 2026-11-12
+
+修复启用 `main-worktree` 的项目里，`harness pitfall add` 可以在主 Worktree 写入 `.harness/pitfalls.md`，弄脏主 Worktree 并挡住所有任务的 `harness merge`。
+
+### 修复
+
+- `pitfall add` 在主 Worktree 里拒绝执行，退出码 1，报错写明到任务 Worktree 里重跑、记录随任务一起提交，没有任务 Worktree 时先建一个或在汇报里写明，不要手改文件。
+  原先 `main-worktree-edit` 只能静态识别 Shell 写入和编辑工具，认不出 harness 自己子命令的写入目标，所以这条命令不被拦。
+  现在检查在命令内部，对所有客户端和人都生效，不依赖钩子是否被信任。
+- 只在项目的生效规则里仍有 `main-worktree-edit` 时拦截；没有启用 `main-worktree`、在 `disabled` 里关掉了该规则、仓库没有 harness 配置，都保持原行为，写当前所在的工作区。
+  在 Linked Worktree 里不读配置，直接写。
+- `pitfall list` 只读，不受影响。
+
+### 升级说明
+
+- 启用 `main-worktree` 的项目，此后在主 Worktree 里运行 `pitfall add` 会失败；Agent 应在任务 Worktree 里运行并随任务提交。其他项目不受影响。
+
 ## [0.18.3] - 2026-11-11
 
 修复 `upgrade` 静默忽略未知参数、`--help` 会直接执行升级的缺陷；配套让每个命令都能用 `--help` 查看用法，并给 `upgrade` 增加 `--dry-run` 预览。
