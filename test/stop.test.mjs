@@ -234,6 +234,71 @@ describe("收尾检查", () => {
     assert.equal(stop(repo, { active: true })?.decision, "block", "上报之后又提交了，旧上报不再算数");
   });
 
+  test("验证环境阻塞沿用 status 下一步，不要求环境修复必须提交", () => {
+    const repo = setup({ project: { ".harness/verify.json": { version: 1, checks: [
+      { id: "missing", tier: "gate", when: ["src/**"], cmd: ["harness-missing-stop-command-xyz"] },
+    ], docOnly: { match: [], exclude: [] } } } });
+    const dir = linkedTask(repo);
+    agentCommit(repo, dir, { "src/a.js": "a\n" });
+    assert.equal(repo.cli("verify", "--branch", BRANCH).status, 1);
+    const pending = stop(repo);
+    assert.equal(pending?.decision, "block");
+    assert.match(pending.reason, /下一步 安装缺少的工具并核对 PATH/);
+    assert.doesNotMatch(pending.reason, /修好失败的检查并提交/);
+  });
+
+  test("上报绑定 SHA，回填相同提交时间的新提交也会使旧上报过期", () => {
+    const repo = setup();
+    const dir = linkedTask(repo);
+    const earlier = "2020-01-01T00:00:00Z";
+    toolCall(repo, writeCall(join(dir, "src/a.js")));
+    commitWith(dir, { ...repo.env, GIT_AUTHOR_DATE: earlier, GIT_COMMITTER_DATE: earlier }, "feat(demo): 初次提交\n\n- 增加示例\n- 固定时间", { "src/a.js": "a\n" });
+    const opened = sh(repo.root, join(repo.root, ".harness/bin/harness"), ["escalate", "open"], repo.env, JSON.stringify({
+      situation: "评审工具不可用", attempted: "检查安装", blocker: "无法启动",
+      options: [{ id: "a", summary: "等恢复" }, { id: "b", summary: "修复工具" }], defaultAction: "a", context: { branch: BRANCH },
+    }));
+    assert.equal(opened.status, 0, opened.stderr);
+    assert.equal(stop(repo), null, "对应原 SHA 的上报允许等待");
+    commitWith(dir, { ...repo.env, GIT_AUTHOR_DATE: earlier, GIT_COMMITTER_DATE: earlier }, "feat(demo): 后续提交\n\n- 增加另一文件\n- 保持旧时间", { "src/b.js": "b\n" });
+    assert.equal(stop(repo)?.decision, "block", "新 SHA 必须重新核对，不比较 Git 时间");
+  });
+
+  test("旧上报没有 head 时保守视为过期，不按时间放行", () => {
+    const repo = setup();
+    const dir = linkedTask(repo);
+    agentCommit(repo, dir, { "src/a.js": "a\n" });
+    const opened = sh(repo.root, join(repo.root, ".harness/bin/harness"), ["escalate", "open"], repo.env, JSON.stringify({
+      situation: "验证工具不可用", attempted: "检查安装", blocker: "无法启动",
+      options: [{ id: "a", summary: "等恢复" }, { id: "b", summary: "修复工具" }], defaultAction: "a", context: { branch: BRANCH },
+    }));
+    assert.equal(opened.status, 0, opened.stderr);
+    const record = JSON.parse(opened.stdout);
+    delete record.context.head;
+    writeFileSync(join(repo.env.HARNESS_DATA_DIR, "escalations", `${record.id}.json`), JSON.stringify(record));
+    assert.equal(stop(repo)?.decision, "block");
+  });
+
+  test("技术消除上报不会填补验证和评审门禁，也不会继续放行收尾", () => {
+    const repo = setup();
+    const dir = linkedTask(repo);
+    agentCommit(repo, dir, { "src/a.js": "a\n" });
+    const result = sh(repo.root, process.execPath, ["--input-type=module", "-e", `
+      import * as escalation from ${JSON.stringify(join(new URL("..", import.meta.url).pathname, "src/escalate/escalate.mjs"))};
+      const record = escalation.openEscalation(process.cwd(), {
+        situation: "工具缺失", attempted: "检查安装", blocker: "无法启动",
+        options: [{ id: "a", summary: "等恢复" }, { id: "b", summary: "修复工具" }], defaultAction: "a", context: { branch: "${BRANCH}" },
+      });
+      escalation.resolveEscalation(process.cwd(), record.id, { reason: "工具已恢复", evidence: "tool-probe:passed" });
+    `], repo.env);
+    assert.equal(result.status, 0, result.stderr);
+    const pending = stop(repo);
+    assert.equal(pending?.decision, "block");
+    assert.match(pending.reason, /缺验证证据、缺独立评审/);
+    const merge = repo.cli("merge", "--branch", BRANCH);
+    assert.notEqual(merge.status, 0);
+    assert.match(merge.stderr, /review_missing/);
+  });
+
   test("先方案后实施：只交了方案、等用户同意时放行；记录授权后开始实施就要推进到交付", () => {
     const config = { ...CONFIG, intent: { ...CONFIG.intent, plan: { maxLines: 5 } } };
     const policy = { version: 1, presets: ["secrets", "git-safety", "gate-self", "plan-first"], disabled: [], rules: [] };
@@ -305,6 +370,84 @@ describe("收尾检查", () => {
     const attested = repo.cli("attest", "--branch", BRANCH, "--check", "integrated", "--command", "run integrated", "--report", report);
     assert.equal(attested.status, 0, attested.stderr);
     assert.equal(stop(repo, { active: true }), null);
+  });
+
+  test("删除分支并轮换密钥后，仍可为验签失败的合并后义务上报并放行收尾", () => {
+    const verify = {
+      version: 1,
+      docOnly: { match: ["docs/**", "**/*.md"], exclude: [] },
+      checks: [
+        { id: "unit", tier: "gate", when: ["src/**"], cmd: ["node", "-e", "process.exit(0)"] },
+        { id: "integrated", tier: "extended", phase: "post-merge", when: ["src/**"], reason: "需要集成状态", howToVerify: "运行集成验收" },
+      ],
+      fullSuiteTriggers: { paths: [] },
+    };
+    const repo = setup({ project: { ".harness/verify.json": verify } });
+    const dir = linkedTask(repo);
+    agentCommit(repo, dir, { "src/a.js": "a\n" });
+    assert.equal(repo.cli("verify", "--branch", BRANCH).status, 0);
+    writeReview(repo, git(repo.root, "rev-parse", BRANCH), "approve");
+    assert.equal(repo.cli("merge", "--branch", BRANCH).status, 0);
+    commit(repo.root, "docs(demo): 补充主分支说明\n\n- 推进主分支版本", { "docs/main.md": "主分支说明\n" });
+    const mainCommit = git(repo.root, "rev-parse", "main");
+    git(repo.root, "worktree", "remove", "--force", dir);
+    git(repo.root, "branch", "-D", BRANCH);
+
+    const before = repo.cli("status", "--post-merge");
+    assert.equal(before.status, 1, before.stdout);
+    assert.match(before.stdout, /integrated/);
+
+    assert.equal(repo.cli("key", "rotate", "--yes").status, 0);
+    const rotated = repo.cli("status", "--post-merge");
+    assert.equal(rotated.status, 1, rotated.stdout);
+    assert.match(rotated.stdout, /integrated/);
+    assert.match(rotated.stdout, /密钥/);
+
+    const opened = sh(repo.root, join(repo.root, ".harness/bin/harness"), ["escalate", "open"], repo.env, JSON.stringify({
+      situation: "集成验收受密钥轮换影响", attempted: "检查集成环境", blocker: "原验收证据失效",
+      options: [{ id: "a", summary: "等恢复后重跑" }, { id: "b", summary: "重新登记验收" }], defaultAction: "a",
+      context: { branch: BRANCH, head: "伪造值" },
+    }));
+    assert.equal(opened.status, 0, opened.stderr);
+    const record = JSON.parse(opened.stdout);
+    assert.equal(record.context.branch, BRANCH);
+    assert.equal(record.context.head, mainCommit);
+    assert.ok(record.context.obligations.length > 0, JSON.stringify(record.context));
+    assert.equal(stop(repo, { active: true }), null, "可信主分支 SHA 与义务快照相同即可放行");
+    assert.equal(repo.cli("status", "--post-merge").status, 1, "上报没有关闭原验收义务");
+  });
+
+  test("删除分支后上报绑定验收义务，新增同 SHA 义务会使旧上报过期", () => {
+    const verify = {
+      version: 1,
+      docOnly: { match: ["docs/**", "**/*.md"], exclude: [] },
+      checks: [
+        { id: "unit", tier: "gate", when: ["src/**"], cmd: ["node", "-e", "process.exit(0)"] },
+        { id: "integrated", tier: "extended", phase: "post-merge", when: ["src/**"], reason: "需要集成状态", howToVerify: "运行集成验收" },
+      ],
+      fullSuiteTriggers: { paths: [] },
+    };
+    const repo = setup({ project: { ".harness/verify.json": verify } });
+    const dir = linkedTask(repo);
+    const head = agentCommit(repo, dir, { "src/a.js": "a\n" });
+    assert.equal(repo.cli("verify", "--branch", BRANCH).status, 0);
+    writeReview(repo, head, "approve");
+    assert.equal(repo.cli("merge", "--branch", BRANCH).status, 0);
+    git(repo.root, "worktree", "remove", "--force", dir);
+    git(repo.root, "branch", "-D", BRANCH);
+    const opened = sh(repo.root, join(repo.root, ".harness/bin/harness"), ["escalate", "open"], repo.env, JSON.stringify({
+      situation: "集成验收受外部环境阻塞", attempted: "检查集成环境", blocker: "环境不可用",
+      options: [{ id: "a", summary: "等恢复" }, { id: "b", summary: "修复环境" }], defaultAction: "a", context: { branch: BRANCH, head: "伪造值" },
+    }));
+    assert.equal(opened.status, 0, opened.stderr);
+    assert.equal(JSON.parse(opened.stdout).context.head, head);
+    assert.equal(stop(repo), null);
+    const added = sh(repo.root, process.execPath, ["--input-type=module", "-e", `
+      import { writeObligations } from ${JSON.stringify(join(new URL("..", import.meta.url).pathname, "src/verify/obligation.mjs"))};
+      writeObligations({ root: process.cwd(), branch: "${BRANCH}", tip: "${head}", items: [{ id: "another", howToVerify: "运行另一项验收", when: ["src/**"] }] });
+    `], repo.env);
+    assert.equal(added.status, 0, added.stderr);
+    assert.equal(stop(repo)?.decision, "block", "义务集变化必须重新上报，不能沿用旧放行");
   });
 
   test("远程交付下门禁齐备后提示 submit", () => {

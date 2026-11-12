@@ -27,7 +27,7 @@ import { approvePlan, formatPlanSummary, planSummary, riskHints } from "./plan/p
 import { DEFAULT_PLAN_ATTEMPT_TIMEOUT_SECONDS, DEFAULT_PLAN_MAX_QUERIES, DEFAULT_PLAN_TIMEOUT_SECONDS, reviewPlan } from "./plan/planreview.mjs";
 import { checkCommitMessage, checkStaged, guardReference } from "./githook.mjs";
 import { branchMessageProblems, commitRuleErrorAt } from "./policy/commit-message.mjs";
-import { answerEscalation, listEscalations, openEscalation, readEscalation, resumePlan } from "./escalate/escalate.mjs";
+import { answerEscalation, listEscalations, openEscalation, readEscalation, resolveEscalation, resumePlan } from "./escalate/escalate.mjs";
 import { addPitfall, FLAG_HITS, formatPitfalls, listPitfalls, MAX_HITS } from "./pitfall/pitfall.mjs";
 import { runGolden } from "./golden/golden.mjs";
 import { computeMetrics, formatMetrics } from "./golden/metrics.mjs";
@@ -90,7 +90,8 @@ const USAGE = `harness <命令> [参数]    任一命令加 --help 查看该命�
   check    --kind <shell|write|read|search|commit> [--command <命令>] [--path <路径>] [--content <内容>] [--glob <模式>] [--on-main] [--linked-worktree] [--ignored]   手工判定一次调用；shell 用 --command，其余用 --path
 
 人用
-  escalate <open|list|show|answer|resume>             例外上报
+  escalate <open|list|show|answer|resolve|resume>     例外上报
+           resolve --id <编号> --reason <技术解决说明> --evidence <证据引用>
   pitfall  add --signature <特征> --symptom <现象> --fix <做法>   记录本项目反复踩的坑；同一特征再次记录会累加命中次数
   pitfall  list [--flagged]                           列出坑位；--flagged 只列命中满 3 次、建议固化的
 `;
@@ -163,7 +164,8 @@ async function cmdVerify(argv) {
   if (values.json) print(JSON.stringify(outcome.record, null, 2));
   const lines = [`验证结果: ${outcome.status}`];
   for (const item of outcome.results) {
-    lines.push(`  ${item.skipped ? "SKIP" : item.exit === 0 ? "PASS" : "FAIL"} ${item.id}${item.reused ? " (复用)" : ""}`);
+    const label = item.outcome === "not_run" ? "NOT_RUN" : item.outcome === "blocked" ? "BLOCKED" : item.skipped ? "SKIP" : item.exit === 0 ? "PASS" : "FAIL";
+    lines.push(`  ${label} ${item.id}${item.reasonCode && item.reasonCode !== "passed" ? ` [${item.reasonCode}]` : ""}${item.reused ? " (复用)" : ""}${item.observed ? "（观察模式，不拦截）" : ""}`);
   }
   for (const item of outcome.attested ?? []) lines.push(`  ATTESTED ${item.id}: ${redact(item.command)}（报告 ${item.report.sha256.slice(0, 12)}）`);
   for (const item of outcome.notExecuted) lines.push(`  NOT_EXECUTED ${item.id}: ${item.reason}`);
@@ -704,7 +706,7 @@ function cmdEscalate(argv) {
   const [action, ...rest] = argv;
   const { values } = parseArgs({
     args: rest,
-    options: { file: { type: "string" }, id: { type: "string" }, status: { type: "string" }, choice: { type: "string" }, note: { type: "string" } },
+    options: { file: { type: "string" }, id: { type: "string" }, status: { type: "string" }, choice: { type: "string" }, note: { type: "string" }, reason: { type: "string" }, evidence: { type: "string" } },
   });
   const root = repoRoot(process.cwd());
   try {
@@ -725,13 +727,16 @@ function cmdEscalate(argv) {
       case "answer":
         print(JSON.stringify(answerEscalation(root, values.id, { choice: values.choice, note: values.note }), null, 2));
         return 0;
+      case "resolve":
+        print(JSON.stringify(resolveEscalation(root, values.id, { reason: values.reason, evidence: values.evidence }), null, 2));
+        return 0;
       case "resume": {
         const plan = resumePlan(root, values.id);
         print(JSON.stringify(plan, null, 2));
         return plan.ready ? 0 : 1;
       }
       default:
-        process.stderr.write("用法: harness escalate <open|list|show|answer|resume>\n");
+        process.stderr.write("用法: harness escalate <open|list|show|answer|resolve|resume>\n");
         return 2;
     }
   } catch (error) {

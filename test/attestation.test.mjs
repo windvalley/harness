@@ -38,8 +38,8 @@ const ACCEPTANCE = `# 验收清单
 - 主 Worktree 集成后的冒烟测试通过。
 `;
 
-function setup() {
-  const repo = makeRepo({ project: { ".harness/verify.json": VERIFY } });
+function setup(verify = VERIFY) {
+  const repo = makeRepo({ project: { ".harness/verify.json": verify } });
   repos.push(repo);
   return repo;
 }
@@ -108,6 +108,55 @@ describe("外部证据登记", () => {
     assert.equal(repo.cli("verify", "--branch", "task/a").status, 0);
     assert.equal(evidence(repo, sourceHead).attested.length, 0);
     assert.match(evidence(repo, sourceHead).notExecuted[0].reason, /证据已过期/);
+  });
+
+  test("主分支只改外部检查范围时，合并重算并把过期登记降为未执行", () => {
+    const repo = setup({
+      ...VERIFY,
+      checks: [{ ...VERIFY.checks[0], when: ["src/task.js"] }, VERIFY.checks[1]],
+    });
+    const head = repo.branch("task/a", { "src/task.js": "task\n" });
+    assert.equal(attest(repo).status, 0);
+    assert.equal(repo.cli("verify", "--branch", "task/a").status, 0);
+    assert.equal(evidence(repo, head).attested[0].id, "browser");
+    fakeReviewer(repo, APPROVE);
+    assert.equal(repo.cli("review", "--branch", "task/a").status, 0);
+
+    commit(repo.root, "feat(main): 更新共享实现\n\n- 只影响外部检查范围\n- 保持任务单元检查范围不变", { "src/shared.js": "shared\n" });
+    const status = repo.cli("status", "--branch", "task/a");
+    assert.match(status.stdout, /外部证据需重新核对.*browser/);
+    assert.doesNotMatch(status.stdout, /已登记 1 项外部证据/);
+    const merged = repo.cli("merge", "--branch", "task/a");
+    assert.equal(merged.status, 0, merged.stderr);
+    const record = evidence(repo, head);
+    assert.equal(record.status, "passed", "外部证据过期不阻断 gate");
+    assert.equal(record.attested.length, 0, "不能沿用未覆盖当前集成结果的外部证据");
+    assert.equal(record.notExecuted[0].id, "browser");
+    assert.match(record.notExecuted[0].reason, /证据已过期/);
+    assert.equal(record.checks[0].reused, true, "未受影响的 gate 继续复用");
+    assert.match(merged.stderr, /外部证据 browser 已过期.*未执行/);
+  });
+
+  test("主分支无关变化时，合并保留可复用的外部证据", () => {
+    const repo = setup({
+      ...VERIFY,
+      checks: [{ ...VERIFY.checks[0], when: ["src/task.js"] }, VERIFY.checks[1]],
+    });
+    const head = repo.branch("task/a", { "src/task.js": "task\n" });
+    assert.equal(attest(repo).status, 0);
+    assert.equal(repo.cli("verify", "--branch", "task/a").status, 0);
+    const original = evidence(repo, head);
+    fakeReviewer(repo, APPROVE);
+    assert.equal(repo.cli("review", "--branch", "task/a").status, 0);
+
+    commit(repo.root, "docs(main): 补充无关文档\n\n- 不修改检查覆盖文件\n- 保留已有验证证据", { "docs/main.md": "note\n" });
+    const merged = repo.cli("merge", "--branch", "task/a");
+    assert.equal(merged.status, 0, merged.stderr);
+    const record = evidence(repo, head);
+    assert.equal(record.attested[0].id, "browser");
+    assert.equal(record.signature, original.signature, "无需重算未受影响的证据");
+    assert.match(merged.stderr, /复用已验证证据/);
+    assert.doesNotMatch(merged.stderr, /外部证据 browser 已过期/);
   });
 
   test("只接受已配置 extended 检查的真实报告", () => {

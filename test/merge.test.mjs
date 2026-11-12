@@ -387,7 +387,10 @@ describe("验证与证据", () => {
     assert.deepEqual(record.checks.map((check) => [check.id, check.exit, Boolean(check.configError)]), [
       ["no-cmd", null, true],
       ["string-cmd", null, true],
+      ["ok", null, false],
     ]);
+    assert.equal(record.checks[2].outcome, "not_run");
+    assert.deepEqual(record.checks[2].blockedBy, ["no-cmd", "string-cmd"]);
 
     // verify --plan 同样列出，并以非零退出提示这份计划验证不会通过
     const plan = repo.cli("verify", "--plan", "--branch", "task/a");

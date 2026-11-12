@@ -631,6 +631,8 @@ harness merge  --branch feat/login   # 本地交付：核对证据与评审，�
   自审不是门禁，不留记录，结论也不交给独立评审。
   自审改出的新提交会让证据与评审作废，所以它放在 `verify` 之前，不放在 `verify` 与 `review` 之间。
 - 分支上有新提交或改写过提交后，自动证据与评审随之失效，重新 verify、review；外部证据按检查覆盖文件判断，无关文档变化不会使其失效。
+  合并复用外部证据时也校验当前检查定义与实际合并结果的覆盖文件，不能只看上次 `verify` 曾列为 `ATTESTED`。
+  测试、夹具、配置或被测实现发生变化并命中 `when` 时，须补验并重新登记。
 - `merge` 发现没有证据、主分支的新改动波及了某些检查，或检查配置变了时，会自己重跑需要的检查；评审不会自动重做，没有通过的评审直接拒绝合并。
 - 主分支在评审之后改了本分支也改过的文件时，`merge` 以 `review_stale` 拒绝，`status` 也会报出来；在任务分支上 `git merge main` 并提交，再重新 verify、review。
 - `merge --dry-run` 只做核对，不更新主分支。
@@ -649,6 +651,8 @@ harness merge  --branch feat/login   # 本地交付：核对证据与评审，�
 
 门禁拒绝时：
 
+- 验证入口失败先按下面的“验证入口受阻时”做最小诊断，区分缺失证据与目标行为失败。
+  找到符合项目规则且覆盖同一验收行为的定向入口时，继续完成验证；必需 `gate` 仍须通过，不能用外部证据跳过它。
 - 验证失败、评审拒绝、`review_stale`、合并冲突、`bad_commit_message`、`branch_commit_rule_invalid`、`branch_moved`、`main_moved` 这类拒绝，由 Agent 按原因修改后重新 verify、review，再交付，不需要你安排。
 - 修复只能改实现、测试或提交本身：任务分支放宽不了门禁，删测试、弱化断言、跳过检查也被项目规范禁止。
 - 常见的需要人的情况只有两种：改动涉及门禁本身（`merge` 与 `sync` 的拒绝码是 `gate_change_unconfirmed`，`status` 里同一件事显示为 `gate_unconfirmed`），由人看过摘要后亲自确认；同一个问题连续三轮没有解决，Agent 说明情况后由人决定。
@@ -664,6 +668,27 @@ harness merge  --branch feat/login   # 本地交付：核对证据与评审，�
 - 从约定入口观察到需求中的结果，正常路径与约定边界都有验收证据。
 - 验证与独立评审结果明确，缺少验收清单时不能把工程质量评审当作需求已经验收通过。
 - 交付状态明确，并列出分支、提交、任务工作区与未完成项：本地交付是已合并、待用户同意合并或阻塞；远程交付是已提交 PR/MR 等平台合并、平台已合入并已同步或阻塞。
+
+### 验证入口受阻时
+
+验证命令失败只证明这条入口没有提供所需证据，不等于目标验收已经失败，也不等于真实 UI 或后端行为无法验证。
+例如全局 UI 台账在浏览器启动前失败时，应核对项目是否允许定向浏览器测试，并用真实页面验证本次受影响交互。
+只加载页面、只跑静态检查或单元测试，不能代替未覆盖的真实交互、权限或持久化证据。
+
+Agent 先做最小诊断：
+
+1. 对照验收清单与项目规则，列明必要验收、已有证据和仍缺的证据，区分 `gate`、可选的合并前 `extended` 与合并后义务。
+2. 阅读每项检查的 `outcome`、`reasonCode`、日志与最终执行计划，确认失败发生在执行前还是已进入目标行为。
+   `not_run` 的 `blockedBy` 列出上游阻断项，不能把它们逐个称为测试失败。
+3. 声称存量问题时给出已有报告、同条件的定向基线复现或可比日志，不能只凭报错文件未修改或普通非零退出判断。
+4. 核对等价合法的定向入口或隔离环境，在现有授权内补齐必要证据并写明覆盖范围与局限。
+   不弱化断言、不替换被测实现、不绕过必需 `gate`，也不默认全量基线排查或扩修无关问题。
+5. 必要验收仍无法完成且需要权限、业务判断或超出授权的改动时，再用上报交给人决定。
+   同一个问题连续三轮没有解决时按规则停下，不要求穷尽所有可能入口。
+
+合并前 `extended` 仍为可选检查，未登记时如实列入未执行项，不因某条入口失败自动升级为硬门禁。
+这不免除项目明确要求的验收；需要的外部验证成功后，仍用 `attest` 登记实际命令与报告。
+已经上报的技术阻塞消除后用 `escalate resolve` 记录原因和证据，继续验证、评审与交付，不把技术恢复冒充用户豁免。
 
 ### 清理任务 Worktree
 
@@ -1200,18 +1225,32 @@ HARNESS_MAIN_BYPASS=1 git merge --ff-only origin/main
 
 ### 例外上报
 
-遇到需要人拍板的情况（需求有歧义、必要验证被既有问题阻塞、在交付设置授权范围之外推送、创建或更新远程 MR、部署或生产操作、同一个问题连续三轮没有解决），Agent 用上报把决定交给人：
+遇到需要人拍板的情况（需求有歧义、必要验证经最小诊断仍不可行、在交付设置授权范围之外推送、创建或更新远程 MR、部署或生产操作、同一个问题连续三轮没有解决），Agent 用上报把决定交给人。
+入口失败与可选检查未执行不自动触发上报；先按“验证入口受阻时”确认仍缺的必要证据：
 
 ```bash
 harness escalate open --file esc.json      # 不带 --file 时从标准输入读
 harness escalate list --status open
-harness escalate answer --id esc-1a2b3c4d --choice b --note "先跳过"
+harness escalate answer --id esc-1a2b3c4d --choice b --note "按方案 b 处理"
 harness escalate resume --id esc-1a2b3c4d  # 续跑前读取人的决定
+# 技术阻塞已经消除时，保留原始上报并记录解除证据
+harness escalate resolve --id esc-1a2b3c4d --reason "定向浏览器验收已通过" --evidence "output/ui/report.md"
 ```
 
 `esc.json` 必须包含 `situation`、`attempted`、`blocker`、`defaultAction` 和至少两个 `options`（每个有 `id` 与 `summary`），可选 `trigger`、`resumeHint`、`context`。
 `defaultAction` 必须是某个选项的 `id`。
-阻塞的是某个任务分支时，`context.branch` 填这个分支名，收尾检查据此放行。
+阻塞的是某个任务分支时，`context.branch` 填这个分支名。
+在任务分支运行而未填写时，`open` 自动使用当前分支，并绑定该分支的实际 HEAD；提供的 HEAD 不能替代命令读取的提交。
+收尾检查只接受分支与当前 HEAD 完全一致、尚未技术解除的上报，有新提交后旧上报不再适用。
+没有 HEAD 的旧记录不再凭创建时间与提交时间推测放行；必要时按当前阻塞重新上报，原记录保留。
+
+`answer` 用于记录人的决定，不是技术恢复命令。
+没有用户决定时，不得把找到定向入口、安装依赖或验证通过写成“用户同意跳过验证”。
+`resolve --id <编号> --reason <解除原因> --evidence <证据引用>` 用于记录技术阻塞已经消除，Agent 可执行；两个参数均须为非空字符串，`evidence` 接受单个可复核的命令结果、报告或记录引用。
+命令只接受 `open` 状态的上报，保留原始现象、尝试与选项，记录另加解除原因、证据和时间，状态改为 `resolved`，不生成答复。
+它不是人工答复，不替人选方案，不授予新权限，也不改变 gate、人工确认、验证、评审与交付要求。
+命令只记录证据引用，不解析它或把相应验收标为通过；需要外部证据的检查仍须用 `attest` 登记。
+解除后 `resume` 告知技术阻塞已消除，继续剩余义务，不把它解释为用户作出了某个 choice。
 
 ### 坑位记录
 
@@ -1256,7 +1295,7 @@ Agent 做到一半、门禁没有拒绝也没有遇到阻塞，自己结束了�
 | 已合入主分支（远程交付已提交 PR/MR 且记录对应分支顶端） | 放行 |
 | 只写了方案与验收清单、还没有实施授权；或报 `plan_unapproved` | 放行：等用户同意实施 |
 | 只差人工确认门禁改动、首次接入确认，或主 Worktree 未就绪 | 放行：要人来做，汇报里说明 |
-| 对这个分支开了上报，之后分支没有新提交 | 放行：已经把决定交给人；之后又提交了，旧上报不再算数 |
+| 未解除的上报绑定该分支及当前 HEAD | 放行：已经把决定交给人；有新提交、已 `resolved` 或旧记录缺少 HEAD 时不适用 |
 | 缺验证证据、验证未通过、缺评审、评审被拒、`review_stale`、`required` 下缺清单 | 拦下，提示下一条命令 |
 | 门禁齐备但还没有 `merge` 或 `submit` | 拦下，提示交付命令；用户明确要求暂不合并时 Agent 上报后结束 |
 | 分支没有新提交，但任务 Worktree 里有未提交的改动 | 拦下，提示提交后验证、评审 |
@@ -1416,7 +1455,7 @@ node ~/github/harness/bin/harness.mjs install --local   # 按新锁定的版本�
 | `id` | 检查名，证据、复用与黄金任务都按它引用 |
 | `tier` | `gate` 必过，失败就不能合并；`extended` 在外部执行后用 `attest` 登记，未登记时列入未执行清单；`advisory` 只提示，不计入未执行 |
 | `phase` | 可选，默认 `pre-merge`；只有 `extended` 能标为 `post-merge`，表示实际合入主分支后执行并登记，其他取值或档位组合按配置错误处理 |
-| `when` | 触发路径的 glob，支持 `*`、`**` 与 `{a,b}`；外部证据同时绑定这些文件在提交中的内容 |
+| `when` | 触发路径的 glob，支持 `*`、`**` 与 `{a,b}`；必须包含实现、测试、夹具、配置等会改变验证结论的依赖，外部证据同时绑定这些文件在提交中的内容 |
 | `cmd` | 参数数组，直接执行而不经过 shell；需要管道等写法时用 `["sh", "-c", "..."]`；`gate` 检查必须写，没写或写成字符串时按配置错误处理 |
 | `cwd` | 相对仓库根的执行目录 |
 | `requires` | 依赖目录（例如 `node_modules`），从主 Worktree 软链接进检出；主 Worktree 里也没有时记为未执行，证据状态为 `incomplete`，不能评审与合并 |
@@ -1433,7 +1472,32 @@ node ~/github/harness/bin/harness.mjs install --local   # 按新锁定的版本�
 验证结果的复用同时看运行环境：每项检查的证据记录环境指纹，由命令用到的工具链版本（`node`、`npm`、`pnpm`、`yarn`、`bun`、`go`、`python`、`cargo`）和 `requires` 依赖目录的安装状态（安装清单文件内容与顶层条目的修改时间，点开头的缓存目录不算）组成。
 代码没变而依赖被重装、升降级，或工具链版本变了，普通验证与合并前的证据复用判定都会重跑这项检查，不再沿用旧的通过结果。
 没有环境指纹的旧证据按不一致处理，升级后第一次验证会重跑一遍。
-命令不存在时证据里单独标出“未找到命令”，说明要装工具，不是代码有问题。
+`when` 同时决定选测与证据复用范围，须包含测试文件、共享夹具、运行配置和相应依赖清单，不能只覆盖生产源码。
+这份依赖关系由项目维护，harness 不自动发现所有间接依赖；遗漏范围会导致不完整选测，应修正配置并走门禁人工确认。
+外部证据合并复用同样校验当前定义与合并结果的范围内容，过期时不能沿用旧通过结论。
+
+每项 `checks` 结果包含 `outcome` 与 `reasonCode`，`record.plan` 保留本次最终执行计划的 `id`、`cmd`、`cwd`。
+总体证据仍使用 `passed`、`failed`、`incomplete`，新增分类不降低任何 `gate` 要求。
+`outcome` 的取值为 `passed`、`failed`、`blocked`、`not_run`，已知启动、依赖或进程阻塞用 `blocked`，因其他检查而未运行用 `not_run`。
+不适用的检查不进入最终执行计划或 `checks`，不产生未执行义务，也不冒充已执行通过。
+
+| `reasonCode` | 含义与处理 |
+| --- | --- |
+| `passed` | 检查通过，可按现有指纹规则复用 |
+| `missing_command` | 找不到可执行命令，先核对工具安装与 PATH |
+| `spawn_error` | 进程未能启动，按实际系统错误核对执行目录、权限等条件 |
+| `timeout` | 命令超过时限被终止，读日志确认原因，不能直接归为行为断言失败 |
+| `signal` | 进程被信号结束，核对记录的信号与运行环境 |
+| `missing_dependency` | 声明的依赖目录缺失，补齐后重跑受影响检查 |
+| `required_uncovered` | 必验路径没有自动检查覆盖，修正检查映射并按门禁确认流程交付 |
+| `invalid_config` | 检查配置无效，按错误与改法修正，门禁配置改动仍须人工确认 |
+| `command_failed` | 已启动命令普通非零退出，只说明命令失败，须读日志才能判断断言、环境或其他原因 |
+| `check_failed` | Harness 内建的 TDD 或 coverage 条件未满足，例如没有新测试、低于阈值或未生成报告；不表示外部命令普通非零退出 |
+| `fail_fast` | 前项失败后按 fail-fast 未执行，`blockedBy` 列出上游检查 ID |
+| `prerequisite_failed` | 前置检查未通过，测试证据等后续检查未执行，`blockedBy` 列出前置检查 ID |
+
+`not_run` 同时出现在 `checks` 与 `notExecuted`，附 `blockedBy` 检查 ID 数组，状态提示按已知原因给出恢复方式。
+分类只记录可观察事实，不从任意命令输出猜测断言失败或外部阻塞，也不把已知阻塞改成验收通过。
 
 写错的 `gate` 检查（没有可执行的 `cmd`、`selector` 不认识）被选中时按配置错误处理：证据里记为失败并附改法，其余检查不再执行。
 以前这样的检查会被直接跳过，既不执行也不进未执行清单，证据却显示通过。
@@ -1444,7 +1508,10 @@ node ~/github/harness/bin/harness.mjs install --local   # 按新锁定的版本�
 
 门禁只能证明“检查跑过并通过”，证明不了“测试真的约束了这次改动”。
 `verify.json` 的 `testFirst` 与 `coverage` 补上这两项，由 harness 在验证里自己复算，不靠 Agent 自述。
-它们在普通检查都通过之后才运行；证据里记为 `harness:tdd-red` 与 `harness:changed-line-coverage` 两个检查，失败就是 `failed`，不能评审与合并。
+它们在普通检查都通过之后才运行；证据里记为 `harness:tdd-red` 与 `harness:changed-line-coverage` 两个检查，失败或已知执行阻塞都不能冒充通过。
+TDD 当前实现与还原实现的测试、coverage 子命令同样保留已知执行原因；缺命令、启动失败、超时或信号终止不能充当有效红灯。
+普通非零仍须结合测试日志确认红灯来自目标行为，不能只凭退出码宣称测试约束了需求。
+`observe` 模式下的失败仍记录实际 `outcome` 与 `reasonCode`，并标记 `observed: true`，但不阻断验证、评审或交付。
 
 `testFirst`：改了实现就必须有会先失败的测试。
 
@@ -1899,7 +1966,7 @@ harness reviewer set mine --client command --command-json '["my-reviewer","--jso
 | `metrics [--days <n>]` | 按周统计本地合并、PR/MR 提交与同步次数、验证首过率、复用检查数、评审拒绝率、策略拦截、门禁确认与黄金任务通过率 |
 | `conformance` | 按“配置就位、行为已验证、运行稳定”三层逐项判定 L3 判据，缺证据的项标 `PEND`，不计为完成：行为层看自动检查能否执行、策略判定、黄金任务最近一次结果与客户端链路是否实测；稳定层要求受控合并至少 20 次、合并后验证失败率不超过 5%，且黄金任务最近一次全部通过 |
 | `key status`、`key rotate [--yes]` | 查看证据密钥；轮换由人执行 |
-| `escalate <open\|list\|show\|answer\|resume>` | 例外上报 |
+| `escalate <open\|list\|show\|answer\|resume\|resolve>` | 例外上报；`resolve --id <编号> --reason <原因> --evidence <引用>` 记录技术解除，保留历史且不改变门禁 |
 | `pitfall add --signature <特征> --symptom <现象> --fix <做法>`、`pitfall list [--flagged]` | 记录与查看本项目反复踩的坑，见“坑位记录” |
 | `init [--dry-run] [--take-over] [--force]` | 接入当前项目，`--dry-run` 只预览 |
 | `install [--take-over]`、`install --local`、`install --version <版本>` | 重新生成入口、钩子与客户端配置；`--local` 只刷新本机，不改入库文件；`--version` 只把指定版本装进版本目录 |
@@ -1970,7 +2037,7 @@ harness 防的是 Agent 的误操作，以及被提示注入后常见的绕过�
 | `review_missing` 或 `review_blocked` | 运行 `harness review`；被拒时按发现修复，提交后重新 verify、review |
 | `没有评审者给出结论` | 本机评审者都不可用或都失败了，错误里逐条列出原因；`harness reviewer list` 查看，`harness reviewer set` 补全，`harness reviewer test <名称>` 确认能用 |
 | 想换评审用的模型或接第三方网关 | 在本机用 `harness reviewer set`，不需要提交，见“独立评审的后端” |
-| 验证结果是 `incomplete` | `requires` 里的依赖目录在主 Worktree 里不存在，安装依赖后重跑 |
+| 验证结果是 `incomplete` | 先看各检查的 `reasonCode` 与 `blockedBy`；缺依赖时补齐依赖，必验路径缺覆盖时修正检查映射，再重跑受影响检查 |
 | 验证提示“未找到命令” | 本机没装检查用到的工具，装好后重跑 |
 | 评审报 diff 超过上限 | 按输出的目录分组，把改动拆成几个分支分别合并；确实需要一次评审时调高 `review.maxDiffChars`，属于门禁改动，合入主分支后才生效 |
 | `conflict` | 在任务分支上 `git merge main` 解决冲突，再重新验证与评审 |

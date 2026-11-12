@@ -27,14 +27,14 @@ const AGENT_STEPS = [
   "acceptance_missing",
 ];
 
-function nextStep(code, { branch, mainRef }) {
+function nextStep(code, { branch, mainRef, evidenceNextStep }) {
   switch (code) {
     case "branch_commit_rule_invalid":
       return `修正 .harness/policy.json 的 commit-message 规则（与 config.json 的旧字段只留一处）并提交，再重新 harness verify、harness review --branch ${branch}`;
     case "bad_commit_message":
       return `在任务分支改写不符合规范的提交信息（git commit --amend 或变基），再重新 harness verify、harness review --branch ${branch}`;
     case "evidence_failed":
-      return `修好失败的检查并提交，再运行 harness verify --branch ${branch}`;
+      return evidenceNextStep || `修好失败的检查后运行 harness verify --branch ${branch}`;
     case "evidence_missing":
       return `harness verify --branch ${branch}`;
     case "review_rejected":
@@ -50,11 +50,13 @@ function nextStep(code, { branch, mainRef }) {
   }
 }
 
-/** 上报之后分支没有新提交时，认为 Agent 已经把决定交给了人；之后接着干又提交了，旧的上报就不再算数。 */
-function escalatedAfterHead(root, branch, escalations) {
-  const committed = git(root, ["log", "-1", "--format=%cI", branch]).stdout.trim();
-  if (!committed) return false;
-  return escalations.some((item) => item.context?.branch === branch && Date.parse(item.openedAt) >= Date.parse(committed));
+/** 只认当前 SHA 与待验收义务快照，旧的无 head 上报保守视为过期。 */
+function escalatedAtHead(branch, head, escalations, pending = []) {
+  const keys = pending.map((item) => item.key).sort();
+  return escalations.some((item) =>
+    item.context?.branch === branch && item.context.head === head &&
+    JSON.stringify(item.context.obligations ?? []) === JSON.stringify(keys),
+  );
 }
 
 /** 任务 Worktree 里没有提交的改动（含未跟踪文件），按仓库相对路径列出。 */
@@ -97,15 +99,18 @@ function awaitingApproval({ root, branch, status, worktree, dirty }) {
 /** 分支已被删除（例如合并后清理了 Worktree）时，只要还有到期而未登记的合并后验收义务，就仍然要接着做。 */
 function missingBranchOwed({ root, branch, status, escalations }) {
   let open;
+  let mainCommit;
   try {
-    const mainCommit = gitOk(root, ["rev-parse", "--verify", `${status.mainRef}^{commit}`]);
+    mainCommit = gitOk(root, ["rev-parse", "--verify", `${status.mainRef}^{commit}`]);
     open = collectObligations({ root, mainCommit, branch }).filter((item) => item.due && !item.closed);
   } catch {
     return null;
   }
   if (open.length === 0) return null;
-  const newest = open.map((item) => item.createdAt).sort().at(-1);
-  if (escalations.some((item) => item.context?.branch === branch && Date.parse(item.openedAt) >= Date.parse(newest))) return null;
+  const newest = [...open].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.key.localeCompare(b.key)).at(-1);
+  // 验签失败的义务不能提供可信 branchTip；与 openEscalation 一样退回当前主分支 SHA。
+  const boundHead = open.some((item) => item.problem) ? mainCommit : newest.branchTip;
+  if (escalatedAtHead(branch, boundHead, escalations, open)) return null;
   const item = open[0];
   return {
     branch,
@@ -130,7 +135,8 @@ function owedBy({ root, branch, escalations, worktrees }) {
   const dirty = dirtyPaths(worktree);
   // 方案交出后停下等用户同意实施，正是规则要求的；已经动了代码却没有授权，同样要等用户。
   if (status.codes.includes("plan_unapproved") || awaitingApproval({ root, branch, status, worktree, dirty })) return null;
-  if (escalatedAfterHead(root, branch, escalations)) return null;
+  const pendingObligations = collectObligations({ root, mainCommit: status.mainCommit, branch }).filter((item) => item.due && !item.closed);
+  if (escalatedAtHead(branch, status.branchCommit, escalations, pendingObligations)) return null;
   const owed = (missing, next) => ({ branch, status, dirty, missing, next });
   // 分支已经在主分支里，但 Worktree 里还有没提交的改动：典型情况是新分支上改了文件就结束了。
   if (status.merged) {

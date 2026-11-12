@@ -22,7 +22,7 @@ import {
 import { appendLedger, canonical, dataDir, readRecord, writeRecord } from "../lib/store.mjs";
 import { environmentDigests } from "./environment.mjs";
 import { selectGoPackages } from "./selectors/go-packages.mjs";
-import { evaluateCoverage, evaluateTdd, testEvidenceChecks, testEvidenceProblems, TDD_ID } from "./testevidence.mjs";
+import { evaluateCoverage, evaluateTdd, testEvidenceChecks, testEvidenceProblems, testEvidenceScope, TDD_ID } from "./testevidence.mjs";
 import { checkFingerprint, checkPhase, checkScopeDigest, POST_MERGE } from "./checks.mjs";
 import { readAttestation } from "./attestation.mjs";
 import { hasObligation } from "./obligation.mjs";
@@ -40,6 +40,7 @@ function execute(cmd, args, { cwd, env, timeoutMs }) {
       stdio: ["ignore", "pipe", "pipe"],
     });
     let output = "";
+    let timedOut = false;
     const keep = (chunk) => {
       output += chunk.toString();
       if (output.length > 200_000) output = output.slice(-200_000);
@@ -47,18 +48,23 @@ function execute(cmd, args, { cwd, env, timeoutMs }) {
     child.stdout.on("data", keep);
     child.stderr.on("data", keep);
     const timer = setTimeout(() => {
+      timedOut = true;
       output += `\n[harness] 超时(${timeoutMs}ms),已终止\n`;
       child.kill("SIGKILL");
     }, timeoutMs);
     child.on("error", (error) => {
       clearTimeout(timer);
       // 命令本身不存在（例如没装 cargo）与检查失败要分开：前者是环境问题，给出安装提示更有用。
-      resolvePromise({ exit: 127, durationMs: Math.round(performance.now() - started), tail: String(error.message), spawnError: error.code ?? "unknown" });
+      resolvePromise({ exit: 127, outcome: "blocked", reasonCode: error.code === "ENOENT" && existsSync(cwd) ? "missing_command" : "spawn_error", durationMs: Math.round(performance.now() - started), tail: String(error.message), spawnError: error.code ?? "unknown" });
     });
-    child.on("close", (code) => {
+    child.on("close", (code, signal) => {
       clearTimeout(timer);
+      const reasonCode = timedOut ? "timeout" : signal ? "signal" : code === 0 ? "passed" : "command_failed";
       resolvePromise({
-        exit: code ?? 1,
+        exit: timedOut || signal ? 1 : code ?? 1,
+        outcome: timedOut || signal ? "blocked" : code === 0 ? "passed" : "failed",
+        reasonCode,
+        ...(signal ? { signal } : {}),
         durationMs: Math.round(performance.now() - started),
         tail: output.split("\n").slice(-40).join("\n"),
       });
@@ -294,7 +300,7 @@ export function reusableChecks({ previous, plan, mainDelta, environment }) {
       prior.def === item.def &&
       cmdText(prior.cmd) === cmdText(item.cmd) &&
       (!environment || prior.envDigest === environment.get(item.id));
-    if (same && prior.exit === 0 && !touched) reuse.set(item.id, prior);
+    if (same && prior.exit === 0 && !prior.observed && !touched) reuse.set(item.id, prior);
     else rerun.push(item.id);
   }
   return { reuse, rerun };
@@ -453,7 +459,9 @@ export async function verify({
     const acceptanceProblem = postMergeAcceptanceProblem({ root, project, branch: gateBranch, head: headCommit, base: baseCommit, postMerge: postMergeRequirements });
     if (acceptanceProblem) invalid.push(acceptanceProblem);
     for (const problem of testEvidenceProblems(project.verify)) invalid.push({ ...problem, def: digest(problem.id === TDD_ID ? project.verify.testFirst : project.verify.coverage) });
-    const testEvidence = testEvidenceChecks(project.verify).map((item) => ({ ...item, def: checkFingerprint(item.config, env) }));
+    const testEvidence = testEvidenceChecks(project.verify)
+      .filter((item) => testEvidenceScope(item, changed, (path) => existsSync(join(checkout, path))).length > 0)
+      .map((item) => ({ ...item, def: checkFingerprint(item.config, env) }));
     const environment = environmentDigests({
       items: [...plan, ...testEvidence].map((item) => ({ id: item.id, tool: item.cmd[0], requires: item.requires })),
       mainRoot,
@@ -475,7 +483,7 @@ export async function verify({
 
     // 写错的检查记为失败，证据不能显示通过；配置要先改，其余检查按 failFast 不再执行。
     for (const item of invalid) {
-      results.push({ id: item.id, cmd: "", def: item.def, exit: null, configError: item.reason, tail: `${item.reason}\n改法: ${item.fix}` });
+      results.push({ id: item.id, cmd: "", def: item.def, exit: null, outcome: "failed", reasonCode: "invalid_config", configError: item.reason, tail: `${item.reason}\n改法: ${item.fix}` });
       log(`[verify] 配置错误 ${item.id}: ${item.reason}`);
     }
 
@@ -484,6 +492,8 @@ export async function verify({
       const shown = requiredUncovered.slice(0, 10).join(", ");
       notExecuted.push({
         id: "required-paths",
+        outcome: "blocked",
+        reasonCode: "required_uncovered",
         reason: `${requiredUncovered.length} 个必验路径没有自动检查覆盖: ${shown}${requiredUncovered.length > 10 ? " 等" : ""}`,
         impact: "这些改动没有被任何会自动执行的检查验证，不能证明通过",
         howToVerify: "在 .harness/verify.json 为这些路径增加 gate 检查；确实无需验证的路径写进 requiredPaths.exclude",
@@ -493,24 +503,35 @@ export async function verify({
     } else if (uncovered.length > 0) {
       log(`[verify] 注意: ${uncovered.length} 个改动路径没有任何检查覆盖，证据只记录不阻断（配置 verify.requiredPaths 可强制）`);
     }
-    for (const item of invalid.length > 0 && config.failFast !== false ? [] : plan) {
+    const notRun = (item, reasonCode, blockedBy) => {
+      const reason = `前置检查 ${blockedBy.join(", ")} 未通过，本项未执行`;
+      const detail = { outcome: "not_run", reasonCode, blockedBy, reason };
+      results.push({ id: item.id, cmd: cmdText(item.cmd), cwd: item.cwd, def: item.def, exit: null, skipped: true, ...detail });
+      notExecuted.push({ id: item.id, ...detail, impact: "本项没有执行，不能证明通过", howToVerify: "解决前置失败或阻塞后重跑 harness verify" });
+    };
+    const missingDependency = (item, missing) => {
+      const reason = `缺少依赖目录 ${missing.join(", ")}`;
+      const detail = { outcome: "blocked", reasonCode: "missing_dependency", reason };
+      results.push({ id: item.id, cmd: cmdText(item.cmd), def: item.def, exit: null, skipped: true, ...detail });
+      notExecuted.push({ id: item.id, ...detail, impact: "该检查未能执行，不能证明对应范围通过", howToVerify: "在主 Worktree 安装依赖后重跑 harness verify" });
+      blocked = true;
+    };
+    let haltedBy = invalid.length > 0 && config.failFast !== false ? invalid.map((item) => item.id) : [];
+    for (const item of plan) {
+      if (haltedBy.length > 0) {
+        notRun(item, "fail_fast", haltedBy);
+        continue;
+      }
       if (reusable.has(item.id)) {
         const prior = reusable.get(item.id);
-        results.push({ ...prior, reused: true });
+        results.push({ outcome: "passed", reasonCode: "passed", ...prior, reused: true });
         log(`[verify] = ${item.id} 复用上次结果`);
         continue;
       }
 
       const missing = (item.requires ?? []).filter((rel) => !existsSync(join(mainRoot, rel)) && !existsSync(join(checkout, rel)));
       if (missing.length > 0) {
-        results.push({ id: item.id, cmd: item.cmd.join(" "), def: item.def, exit: null, skipped: true, reason: `缺少依赖目录 ${missing.join(", ")}` });
-        notExecuted.push({
-          id: item.id,
-          reason: `缺少依赖目录 ${missing.join(", ")}`,
-          impact: "该检查未能执行，不能证明对应范围通过",
-          howToVerify: "在主 Worktree 安装依赖后重跑 harness verify",
-        });
-        blocked = true;
+        missingDependency(item, missing);
         continue;
       }
 
@@ -528,17 +549,21 @@ export async function verify({
         def: item.def,
         envDigest: environment.get(item.id),
         exit: outcome.exit,
+        outcome: outcome.outcome,
+        reasonCode: outcome.reasonCode,
+        signal: outcome.signal,
         spawnError: outcome.spawnError,
         durationMs: outcome.durationMs,
         note: item.note,
         tail: outcome.exit === 0 ? undefined : outcome.tail,
       });
       log(`[verify]    exit=${outcome.exit} ${outcome.durationMs}ms`);
-      if (outcome.spawnError) {
-        // 命令不存在时不要报成“检查失败”：该装工具，不是改代码。
+      if (outcome.reasonCode === "missing_command") {
         log(`[verify] 注意: 未找到命令 ${item.cmd[0]}，这项检查没有真正执行`);
+      } else if (outcome.spawnError) {
+        log(`[verify] 注意: 检查启动失败 (${outcome.spawnError})，请核对工作目录、工具和执行权限`);
       }
-      if (outcome.exit !== 0 && config.failFast !== false) break;
+      if (outcome.exit !== 0 && config.failFast !== false) haltedBy = [item.id];
     }
 
     // 测试证据在普通检查都通过之后再算：前面已经失败或缺依赖时，这两项没有意义，也省下重复跑测试的时间。
@@ -546,15 +571,13 @@ export async function verify({
       const evaluators = { tdd: evaluateTdd, coverage: evaluateCoverage };
       for (const item of testEvidence) {
         if (reusableEvidence.has(item.id)) {
-          results.push({ ...reusableEvidence.get(item.id), reused: true });
+          results.push({ outcome: "passed", reasonCode: "passed", ...reusableEvidence.get(item.id), reused: true });
           log(`[verify] = ${item.id} 复用上次结果`);
           continue;
         }
         const missing = (item.requires ?? []).filter((rel) => !existsSync(join(mainRoot, rel)) && !existsSync(join(checkout, rel)));
         if (missing.length > 0) {
-          results.push({ id: item.id, cmd: item.cmd.join(" "), def: item.def, exit: null, skipped: true, reason: `缺少依赖目录 ${missing.join(", ")}` });
-          notExecuted.push({ id: item.id, reason: `缺少依赖目录 ${missing.join(", ")}`, impact: "该检查未能执行，不能证明对应范围通过", howToVerify: "在主 Worktree 安装依赖后重跑 harness verify" });
-          blocked = true;
+          missingDependency(item, missing);
           continue;
         }
         const started = performance.now();
@@ -584,6 +607,8 @@ export async function verify({
           def: item.def,
           envDigest: environment.get(item.id),
           exit,
+          outcome: outcome.pass ? "passed" : outcome.blocked ? "blocked" : "failed",
+          reasonCode: outcome.pass ? "passed" : outcome.reasonCode ?? "check_failed",
           durationMs: Math.round(performance.now() - started),
           note: observing ? `观察模式，未拦截: ${outcome.note}` : outcome.note,
           ...(observing ? { observed: true } : {}),
@@ -593,6 +618,10 @@ export async function verify({
         });
         log(`[verify]    ${outcome.pass ? "通过" : observing ? "未通过（观察模式，不拦截）" : "未通过"}: ${outcome.note}`);
       }
+    } else {
+      const blockedBy = results.filter((item) => item.exit !== 0 && item.outcome !== "not_run").map((item) => item.id);
+      if (requiredUncovered.length > 0) blockedBy.push("required-paths");
+      for (const item of testEvidence) notRun(item, "prerequisite_failed", blockedBy);
     }
 
     const failed = results.filter((item) => item.exit !== 0 && !item.skipped);
@@ -610,6 +639,7 @@ export async function verify({
       changed: changed.slice(0, 500),
       docOnly,
       uncovered: uncovered.slice(0, 200),
+      plan: [...invalid, ...plan, ...testEvidence].map((item) => ({ id: item.id, cmd: item.cmd ?? [], cwd: item.cwd ?? "." })),
       checks: results,
       attested,
       notExecuted,

@@ -228,7 +228,13 @@ export function reuseDecision({ project, root, evidence, mainCommit }) {
   const touched = plan.filter(
     (check) => mainDelta.some((path) => matchAny(path, check.when ?? [])) || envChanged.includes(check),
   );
-  return { evidenceReusable: touched.length === 0, rerunChecks: touched.map((check) => check.id), configChanged: false, mainDelta };
+  // 外部登记同样只代表当时的覆盖文件：主分支改到它的范围时，让 verify 对模拟合并结果重新核对。
+  // 不重跑未受影响的 gate，也不让过期的 extended 阻断交付；verify 会把它还原成未执行项。
+  const externalTouched = (project.verify.checks ?? []).filter(
+    (check) => check.tier === "extended" && evidence.attested?.some((item) => item.id === check.id) && mainDelta.some((path) => matchAny(path, check.when ?? [])),
+  );
+  const rerunChecks = [...new Set([...touched, ...externalTouched].map((check) => check.id))];
+  return { evidenceReusable: rerunChecks.length === 0, rerunChecks, configChanged: false, mainDelta };
 }
 
 /**
@@ -407,6 +413,11 @@ export async function checkGates({ project, root, branch, log = console.error, d
       else if (evidence.ok) log(`[${label}] 主分支改动波及 ${reuse.rerunChecks.join(", ") || "多项检查"}，重新验证`);
       else log(`[${label}] 没有针对该分支的验证证据(${evidence.reason})，先验证`);
       const outcome = await verify({ cwd: root, head: newHead, recordKey: branchCommit, base: mainRef, gateBranch: branch, log });
+      for (const item of outcome.notExecuted) {
+        if (evidence.record?.attested?.some((previous) => previous.id === item.id)) {
+          log(`[${label}] 外部证据 ${item.id} 已过期，已记为未执行：${item.reason}`);
+        }
+      }
       if (outcome.status !== "passed") {
         throw new MergeError(`验证未通过(${outcome.status})，已拒绝`, "verify_failed");
       }

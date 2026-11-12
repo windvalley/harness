@@ -20,7 +20,7 @@
 
 <script src="assets/docs.js?v=acdbbf2b96" defer></script>
 </head>
-<body data-page="daily" data-index="fda7aac818">
+<body data-page="daily" data-index="f0f145f803">
 <a class="skip-link" href="#main-content">跳到主要内容</a>
 <header class="topbar">
   <div class="topbar-inner">
@@ -37,7 +37,7 @@
 </header>
 <div class="layout">
   <aside class="sidebar"><nav class="docs-nav" aria-label="文档导航"><section class="nav-group"><h2>开始使用</h2><ul><li><a href="index.html">概览</a></li><li><a href="quickstart.html">快速开始</a></li><li><a href="daily.html" aria-current="page">日常工作流</a></li><li><a href="blocked.html">被拦截时怎么办</a></li></ul></section><section class="nav-group"><h2>核心概念</h2><ul><li><a href="architecture.html">架构总览</a></li><li><a href="principles.html">核心原理</a></li><li><a href="limits.html">信任模型与限制</a></li></ul></section><section class="nav-group"><h2>配置与维护</h2><ul><li><a href="customize.html">按项目定制</a></li><li><a href="team.html">团队与多机</a></li></ul></section><section class="nav-group"><h2>参考</h2><ul><li><a href="cheatsheet.html">命令速查</a></li><li><a href="https://github.com/windvalley/harness/blob/main/docs/reference.md">参考手册<svg class="external" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6"/><path d="M20 4 10 14"/><path d="M18 13v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h6"/></svg></a></li></ul></section></nav></aside>
-  <main id="main-content"><header class="page-header"><p class="eyebrow">开始使用</p><h1 tabindex="-1" id="daily">日常工作流</h1><p class="lead">用自然语言提出需求，了解 Agent 如何实施、验证、评审并交付。</p></header><details class="mobile-page-toc"><summary>本页内容</summary><div class="page-toc-title">本页内容</div><ol><li class="toc-level-2"><a href="#prompts">如何表达需求与后续协作</a></li><li class="toc-level-2"><a href="#one-task">一次任务</a></li><li class="toc-level-2"><a href="#acceptance">验收清单</a></li><li class="toc-level-2"><a href="#commit-msg">提交信息</a></li><li class="toc-level-2"><a href="#cleanup">清理任务 Worktree</a></li></ol></details>
+  <main id="main-content"><header class="page-header"><p class="eyebrow">开始使用</p><h1 tabindex="-1" id="daily">日常工作流</h1><p class="lead">用自然语言提出需求，了解 Agent 如何实施、验证、评审并交付。</p></header><details class="mobile-page-toc"><summary>本页内容</summary><div class="page-toc-title">本页内容</div><ol><li class="toc-level-2"><a href="#prompts">如何表达需求与后续协作</a></li><li class="toc-level-2"><a href="#one-task">一次任务</a></li><li class="toc-level-2"><a href="#validation-path">验证入口受阻时</a></li><li class="toc-level-2"><a href="#acceptance">验收清单</a></li><li class="toc-level-2"><a href="#commit-msg">提交信息</a></li><li class="toc-level-2"><a href="#cleanup">清理任务 Worktree</a></li></ol></details>
     <p>规则已经写进项目（<code>AGENTS.md</code> 托管块与 <code>.harness/rules/</code>），用平常的话描述想法、问题或希望的变化即可。理解需求、澄清关键问题、整理验收标准和交付结果由 Agent 主动负责。下文的 <code>harness</code> 都指项目里的入口 <code>.harness/bin/harness</code>。</p>
 
     <h2 tabindex="-1" id="prompts">如何表达需求与后续协作</h2>
@@ -80,6 +80,15 @@
     </ul>
     <p>执行命令与合并条件见<a href="https://github.com/windvalley/harness/blob/main/docs/reference.md#一次任务">一次任务参考</a>。</p>
 
+    <h2 tabindex="-1" id="validation-path">验证入口受阻时</h2>
+    <p>遇到台账、依赖或命令启动问题时，Agent 先确认必要验收、失败阶段和存量证据，再核对是否有项目允许的等价定向入口。
+    入口失败不等于目标行为失败；真实页面的定向浏览器验收可以证明受影响交互，但页面加载、静态检查或单元测试不能代替未覆盖的交互。</p>
+    <p>有合规恢复路径就继续执行，必需 <code>gate</code> 仍须通过，合并前 <code>extended</code> 仍为可选项并如实披露。
+    不默认跑全量基线、不扩修无关问题；必要验收仍不可行且需要人决定时才上报。
+    每项结果的 <code>reasonCode</code> 与 <code>blockedBy</code> 帮助区分本项失败和前置失败导致的未执行，普通非零退出不能自动归为环境或断言问题。</p>
+    <p>已经上报的技术阻塞消除后，用 <code>escalate resolve --id &lt;编号&gt; --reason &lt;原因&gt; --evidence &lt;引用&gt;</code> 留下原因与证据并继续交付。
+    这不冒充用户答复，也不免除验证、评审与人工确认；详细诊断与命令见<a href="blocked.html#validation-blockers">被拦截时怎么办</a>。</p>
+
     <h2 tabindex="-1" id="acceptance">验收清单</h2>
     <p>清单放在 <code>.harness/acceptance/&lt;分支名&gt;.md</code>，分支名里的 <code>/</code> 等字符换成 <code>-</code>，例如 <code>feat/login</code> 对应 <code>feat-login.md</code>。每条写成能用测试或命令验证的结果。没有清单时评审只评工程质量；<code>intent.mode</code> 设为 <code>required</code> 时没有清单不能合并。</p>
     <p>默认都是合并前验收。确实需要目标分支集成状态时，把条目写进“合并后验收”章节，并配置对应的 <code>post-merge</code> 检查；只写章节却没有对应检查时，验证会明确失败，不会让这条义务悄悄漏掉。</p>
@@ -95,7 +104,7 @@
     <div class="code"><span class="label">清理需求示例</span><pre class="prompt"><code>我想清理已经完成的任务工作区。</code></pre></div>
     <p>Agent 应先给出预览，列出具体目录、分支、会连带删除的本机文件和跳过原因，不立即删除。看过预览并明确确认具体对象后再清理；含本机文件的目录需要单独明确同意，主 Worktree、命令所在 Worktree 和验证检出会保留。</p>
     <p>预览还会检查提交是否已合并、新任务保护、未提交文件、进程和锁定情况。详细条件和命令见<a href="https://github.com/windvalley/harness/blob/main/docs/reference.md#清理任务-worktree">清理参考</a>。</p><nav class="pagination" aria-label="文档分页"><a class="previous" href="quickstart.html"><span>上一篇</span><strong>快速开始</strong></a><a class="next" href="blocked.html"><span>下一篇</span><strong>被拦截时怎么办</strong></a></nav></main>
-  <aside class="page-toc"><nav aria-label="本页内容"><div class="page-toc-title">本页内容</div><ol><li class="toc-level-2"><a href="#prompts">如何表达需求与后续协作</a></li><li class="toc-level-2"><a href="#one-task">一次任务</a></li><li class="toc-level-2"><a href="#acceptance">验收清单</a></li><li class="toc-level-2"><a href="#commit-msg">提交信息</a></li><li class="toc-level-2"><a href="#cleanup">清理任务 Worktree</a></li></ol></nav><div class="related-links"><h2>相关链接</h2><a href="https://github.com/windvalley/harness/blob/main/docs/reference.md">参考手册</a><a href="https://github.com/windvalley/harness">GitHub 仓库</a></div></aside>
+  <aside class="page-toc"><nav aria-label="本页内容"><div class="page-toc-title">本页内容</div><ol><li class="toc-level-2"><a href="#prompts">如何表达需求与后续协作</a></li><li class="toc-level-2"><a href="#one-task">一次任务</a></li><li class="toc-level-2"><a href="#validation-path">验证入口受阻时</a></li><li class="toc-level-2"><a href="#acceptance">验收清单</a></li><li class="toc-level-2"><a href="#commit-msg">提交信息</a></li><li class="toc-level-2"><a href="#cleanup">清理任务 Worktree</a></li></ol></nav><div class="related-links"><h2>相关链接</h2><a href="https://github.com/windvalley/harness/blob/main/docs/reference.md">参考手册</a><a href="https://github.com/windvalley/harness">GitHub 仓库</a></div></aside>
 </div>
 <footer>harness · MIT 许可 · <a href="https://github.com/windvalley/harness">GitHub</a> · <a href="https://github.com/windvalley/harness/blob/main/docs/reference.md">参考手册</a></footer>
 <dialog class="drawer" id="docs-drawer" aria-label="文档导航">

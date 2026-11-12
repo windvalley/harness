@@ -250,7 +250,7 @@ export async function evaluateTdd({ item, changed, root, checkout, baseCommit, h
 
   const green = await execute(args[0], args.slice(1), { cwd, env, timeoutMs });
   if (green.exit !== 0) {
-    return { pass: false, note: "新增或修改的测试在当前实现上就不通过，无法判断红灯是否有效", tail: green.tail };
+    return { pass: false, note: "新增或修改的测试在当前实现上就不通过，无法判断红灯是否有效", tail: green.tail, reasonCode: green.reasonCode, blocked: green.outcome === "blocked" };
   }
 
   try {
@@ -259,6 +259,9 @@ export async function evaluateTdd({ item, changed, root, checkout, baseCommit, h
       else rmSync(join(checkout, path), { force: true });
     }
     const red = await execute(args[0], args.slice(1), { cwd, env, timeoutMs });
+    if (red.outcome === "blocked") {
+      return { pass: false, note: `还原实现后的测试执行被阻塞（${red.reasonCode}），不能证明有效红灯`, tail: red.tail, reasonCode: red.reasonCode, blocked: true };
+    }
     if (red.exit === 0) {
       return { pass: false, note: `新增或修改的测试（${firstFive(local.map(({ path }) => path))}）在还原实现后仍然通过，不能证明测试先于实现失败过` };
     }
@@ -279,7 +282,7 @@ export async function evaluateCoverage({ item, changed, root, checkout, baseComm
   const cwdAbs = join(checkout, item.cwd);
   link();
   const outcome = await execute(item.cmd[0], item.cmd.slice(1), { cwd: cwdAbs, env, timeoutMs });
-  if (outcome.exit !== 0) return { pass: false, note: `覆盖率命令失败(exit=${outcome.exit})`, tail: outcome.tail };
+  if (outcome.exit !== 0) return { pass: false, note: `覆盖率命令失败(exit=${outcome.exit})`, tail: outcome.tail, reasonCode: outcome.reasonCode, blocked: outcome.outcome === "blocked" };
   const reportFile = join(cwdAbs, cfg.report);
   if (!existsSync(reportFile)) return { pass: false, note: `没有生成覆盖率报告 ${cfg.report}（相对 ${item.cwd}）` };
 

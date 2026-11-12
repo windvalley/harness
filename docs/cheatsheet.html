@@ -20,7 +20,7 @@
 
 <script src="assets/docs.js?v=acdbbf2b96" defer></script>
 </head>
-<body data-page="cheatsheet" data-index="fda7aac818">
+<body data-page="cheatsheet" data-index="f0f145f803">
 <a class="skip-link" href="#main-content">跳到主要内容</a>
 <header class="topbar">
   <div class="topbar-inner">
@@ -65,7 +65,7 @@
         <tr><td><code><span class="arg">reviewer</span> <span class="arg">list</span></code>、<code><span class="arg">set</span></code>、<code><span class="arg">remove</span></code>、<code><span class="arg">prefer</span></code>、<code><span class="arg">test</span></code></td><td>管理本机评审者：客户端、模型、推理强度、端点与 key</td></tr>
         <tr><td><code><span class="arg">key</span> <span class="arg">status</span></code>、<code><span class="arg">key</span> <span class="arg">rotate</span> <span class="arg">[--yes]</span></code></td><td>查看证据密钥；轮换由人执行</td></tr>
         <tr><td><code><span class="arg">pitfall</span> <span class="arg">add</span> <span class="arg">--signature</span> <span class="arg">&lt;特征&gt;</span> <span class="arg">--symptom</span> <span class="arg">&lt;现象&gt;</span> <span class="arg">--fix</span> <span class="arg">&lt;做法&gt;</span></code>、<code><span class="arg">pitfall</span> <span class="arg">list</span> <span class="arg">[--flagged]</span></code></td><td>记录本项目反复踩的坑，同一特征再次记录只累加命中次数；<code>--flagged</code> 只列命中满 3 次、建议固化的条目</td></tr>
-        <tr><td><code><span class="arg">escalate</span> <span class="arg">&lt;open|list|show|answer|resume&gt;</span></code></td><td>例外上报</td></tr>
+        <tr><td><code><span class="arg">escalate</span> <span class="arg">&lt;open|list|show|answer|resume|resolve&gt;</span></code></td><td>例外上报；<code>resolve --id &lt;编号&gt; --reason &lt;原因&gt; --evidence &lt;引用&gt;</code> 记录技术解除，保留历史且不改变门禁</td></tr>
         <tr><td><code><span class="arg">versions</span></code>、<code><span class="arg">prune</span> <span class="arg">[--keep</span> <span class="arg">&lt;v,...&gt;]</span> <span class="arg">[--dry-run]</span></code></td><td>列出、清理本机安装的版本</td></tr>
         <tr><td><code><span class="arg">publish</span> <span class="arg">[--version</span> <span class="arg">&lt;v&gt;]</span></code>、<code><span class="arg">version</span></code></td><td>把当前代码装进版本目录；打印版本号</td></tr>
         <tr><td><code><span class="arg">uninstall</span> <span class="arg">[--dry-run]</span> <span class="arg">[--purge]</span></code></td><td>解除接入</td></tr>

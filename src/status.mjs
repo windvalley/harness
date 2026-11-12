@@ -158,7 +158,21 @@ export function branchStatus({ cwd, branch }) {
     add("evidence", "fail", `缺少验证证据：${evidence.reason}。运行 harness verify --branch ${branch}`);
     block("evidence_missing", "缺验证证据");
   } else if (evidence.record.status !== "passed") {
-    add("evidence", "fail", `证据状态是 ${evidence.record.status}，需要修好后重跑 verify`);
+    const actions = {
+      invalid_config: "修正检查配置并提交",
+      required_uncovered: "补齐必验路径的检查配置并提交",
+      missing_command: "安装缺少的工具并核对 PATH",
+      missing_dependency: "补齐主 Worktree 的依赖",
+      spawn_error: "核对检查工作目录、工具和执行权限",
+      timeout: "诊断检查超时的原因",
+      signal: "诊断检查进程被信号终止的原因",
+      command_failed: "定位命令失败原因，修复本次改动造成的问题；环境问题按最小诊断处理",
+      check_failed: "核对测试证据未满足的验收条件，修复后提交",
+    };
+    const items = [...(evidence.record.checks ?? []), ...(evidence.record.notExecuted ?? [])];
+    const next = [...new Set(items.filter((item) => item.exit !== 0).map((item) => actions[item.reasonCode]).filter(Boolean))];
+    result.evidenceNextStep = `${next.length ? next.join("；") : "定位验证失败或阻塞的原因"}，处理后运行 harness verify --branch ${branch}`;
+    add("evidence", "fail", `证据状态是 ${evidence.record.status}；${result.evidenceNextStep}`);
     block("evidence_failed", "验证未通过");
   } else {
     const reuse = reuseDecision({ project, root, evidence: evidence.record, mainCommit });
@@ -169,9 +183,13 @@ export function branchStatus({ cwd, branch }) {
     } else if (reuse.evidenceReusable) {
       add("evidence", "ok", `验证通过，主分支自验证以来新增 ${reuse.mainDelta.length} 个文件，未波及已执行的检查，可直接复用`);
     } else {
-      add("evidence", "warn", `验证通过，但主分支新增改动波及 ${reuse.rerunChecks.join(", ")}，合并时会重跑`);
+      add("evidence", "warn", `验证通过，但主分支新增改动波及 ${reuse.rerunChecks.join(", ")}，合并时会重新核对`);
     }
-    if ((evidence.record.attested?.length ?? 0) > 0) add("evidence:attested", "ok", `已登记 ${evidence.record.attested.length} 项外部证据`);
+    const external = evidence.record.attested ?? [];
+    const recheck = external.filter((item) => reuse.configChanged || reuse.rerunChecks.includes(item.id));
+    const current = external.filter((item) => !recheck.includes(item));
+    if (current.length > 0) add("evidence:attested", "ok", `已登记 ${current.length} 项外部证据`);
+    if (recheck.length > 0) add("evidence:attested", "warn", `外部证据需重新核对：${recheck.map((item) => item.id).join("、")}，不能作为当前集成结果的有效证据`);
     if ((evidence.record.postMerge?.length ?? 0) > 0) add("evidence:postMerge", "info", `${evidence.record.postMerge.length} 项合并后验收不阻塞本次交付：${evidence.record.postMerge.map((item) => item.id).join("、")}`);
     if (pending > 0) add("evidence:notExecuted", "warn", `${pending} 项检查未执行，交付汇报里必须说明`);
     if (advisory > 0) add("evidence:advisory", "info", `${advisory} 项咨询项，仅提示`);

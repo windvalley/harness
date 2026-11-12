@@ -41,6 +41,15 @@
     </ul>
     <p>执行命令与合并条件见<a href="https://github.com/windvalley/harness/blob/main/docs/reference.md#一次任务">一次任务参考</a>。</p>
 
+    <h3 id="validation-path">验证入口受阻时</h3>
+    <p>遇到台账、依赖或命令启动问题时，Agent 先确认必要验收、失败阶段和存量证据，再核对是否有项目允许的等价定向入口。
+    入口失败不等于目标行为失败；真实页面的定向浏览器验收可以证明受影响交互，但页面加载、静态检查或单元测试不能代替未覆盖的交互。</p>
+    <p>有合规恢复路径就继续执行，必需 <code>gate</code> 仍须通过，合并前 <code>extended</code> 仍为可选项并如实披露。
+    不默认跑全量基线、不扩修无关问题；必要验收仍不可行且需要人决定时才上报。
+    每项结果的 <code>reasonCode</code> 与 <code>blockedBy</code> 帮助区分本项失败和前置失败导致的未执行，普通非零退出不能自动归为环境或断言问题。</p>
+    <p>已经上报的技术阻塞消除后，用 <code>escalate resolve --id &lt;编号&gt; --reason &lt;原因&gt; --evidence &lt;引用&gt;</code> 留下原因与证据并继续交付。
+    这不冒充用户答复，也不免除验证、评审与人工确认；详细诊断与命令见<a href="blocked.html#validation-blockers">被拦截时怎么办</a>。</p>
+
     <h3 id="acceptance">验收清单</h3>
     <p>清单放在 <code>.harness/acceptance/&lt;分支名&gt;.md</code>，分支名里的 <code>/</code> 等字符换成 <code>-</code>，例如 <code>feat/login</code> 对应 <code>feat-login.md</code>。每条写成能用测试或命令验证的结果。没有清单时评审只评工程质量；<code>intent.mode</code> 设为 <code>required</code> 时没有清单不能合并。</p>
     <p>默认都是合并前验收。确实需要目标分支集成状态时，把条目写进“合并后验收”章节，并配置对应的 <code>post-merge</code> 检查；只写章节却没有对应检查时，验证会明确失败，不会让这条义务悄悄漏掉。</p>
