@@ -282,3 +282,67 @@ describe("接入与门禁", () => {
     assert.match(repo.cli("conformance").stdout, /FAIL context: .*half.*做法/);
   });
 });
+
+describe("主 Worktree 里的 pitfall add", () => {
+  const policy = (extra = {}) => ({ version: 1, presets: ["secrets", "git-safety", "gate-self", "main-worktree"], disabled: [], rules: [], ...extra });
+
+  function mainWorktreeRepo(extra) {
+    const repo = makeRepo({ project: { ".harness/policy.json": policy(extra) } });
+    repos.push(repo);
+    return repo;
+  }
+
+  const linkedAt = (repo) => {
+    const dir = join(realpathSync(repo.root), "..", "task");
+    git(repo.root, "worktree", "add", "-q", "-b", "feat/pit", dir, "main");
+    return dir;
+  };
+
+  test("启用 main-worktree 时在主 Worktree 里拒绝，文件不变，报错说明在任务 Worktree 里随任务提交", () => {
+    const repo = mainWorktreeRepo();
+    const result = add(repo, "flaky");
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /主 Worktree/);
+    assert.match(result.stderr, /git worktree add/);
+    assert.match(result.stderr, /随任务/);
+    assert.equal(existsSync(join(repo.root, FILE)), false);
+    assert.equal(git(repo.root, "status", "--porcelain").trim(), "");
+  });
+
+  test("启用 main-worktree 时在任务 Worktree 里照常记录，主 Worktree 保持洁净", () => {
+    const repo = mainWorktreeRepo();
+    const linked = linkedAt(repo);
+    const run = sh(linked, join(repo.root, ".harness/bin/harness"), ["pitfall", "add", "--signature", "flaky", "--symptom", "偶发失败", "--fix", "重跑前先清缓存"], repo.env);
+    assert.equal(run.status, 0, run.stderr);
+    assert.ok(existsSync(join(linked, FILE)));
+    assert.equal(git(repo.root, "status", "--porcelain").trim(), "");
+  });
+
+  test("没启用 main-worktree 时在主 Worktree 里照常记录", () => {
+    const repo = makeRepo();
+    repos.push(repo);
+    const result = add(repo, "flaky");
+    assert.equal(result.status, 0, result.stderr);
+    assert.ok(existsSync(join(repo.root, FILE)));
+  });
+
+  test("项目关掉 main-worktree-edit 后放行", () => {
+    const repo = mainWorktreeRepo({ disabled: ["main-worktree-edit"] });
+    const result = add(repo, "flaky");
+    assert.equal(result.status, 0, result.stderr);
+    assert.ok(existsSync(join(repo.root, FILE)));
+  });
+
+  test("仓库没有 harness 配置时在主 Worktree 里放行", () => {
+    const repo = makeRepo({ install: false, project: { ".harness/config.json": null, ".harness/policy.json": null, ".harness/verify.json": null } });
+    repos.push(repo);
+    mkdirSync(join(repo.root, ".harness"), { recursive: true });
+    const result = repo.rawCli("pitfall", "add", "--signature", "flaky", "--symptom", "s", "--fix", "f");
+    assert.equal(result.status, 0, result.stderr);
+  });
+
+  test("pitfall list 只读，主 Worktree 里不受影响", () => {
+    const repo = mainWorktreeRepo();
+    assert.equal(repo.cli("pitfall", "list").status, 0);
+  });
+});
