@@ -186,6 +186,9 @@ describe("安装与自检", () => {
     const rules = readFileSync(join(repo.root, ".harness/rules/harness.md"), "utf8");
     assert.match(rules, /## 收尾：任务 Worktree 由用户发起清理/);
     assert.match(rules, /harness worktree clean/);
+    assert.match(rules, /汇报里写一行代码评审的评审者，照抄 `harness status`/, "交付汇报要求写评审者摘要");
+    assert.match(rules, /摘要里的端点域名只写在对用户的汇报里/, "端点域名不进外发内容");
+    assert.match(rules, /交出方案时，把命令首行“方案评审完成:”之后的评审者摘要/, "方案评审在交出方案时汇报评审者");
     // 自审放在提交之后、verify 之前：自审改出的新提交会让已有证据与评审作废。
     assert.match(rules, /提交后、`harness verify` 之前按 `method-review\.md` 自审/, "一次任务写明自审的时机");
     const review = readFileSync(join(repo.root, ".harness/rules/method-review.md"), "utf8");

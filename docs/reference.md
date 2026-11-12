@@ -521,8 +521,11 @@ harness review-plan --branch feat/login --max-queries 25  # 调整读仓库的�
 下面是格式演示，内容为虚构。
 每条发现带级别、类别、出处、概括、具体场景和建议；low 与 medium 默认只给数量。
 
+完成行的评审者摘要写明评审者名称、客户端、模型和 effort，由备选完成时也会注明；没配 effort 的写“effort 客户端默认”。
+Agent 交出方案时把这一行转告你，这样方案评审用了什么配置不必再去翻命令输出。
+
 ```text
-方案评审完成: claude-main(claude, opus)，可读仓库
+方案评审完成: claude-main / claude / opus / effort max，可读仓库
   [high] failure-path plan.md#步骤 3 导入失败时没有回滚
       场景: 第 2 批写入失败后，前 1 批已落库，重试会产生重复数据
       建议: 补充事务边界或幂等键，并在验收清单里加一条失败回滚条目
@@ -1945,7 +1948,13 @@ harness reviewer set mine --client command --command-json '["my-reviewer","--jso
 `harness review` 的输出、`harness status`、合并输出和 PR/MR 描述都会显示由谁完成；由备选完成时会点出前面的评审者为什么没有完成。
 `status` 和 PR/MR 描述里的一行摘要包含名称、客户端、模型和推理强度：平台上的评审人看不到本机记录，名称和模型相同而客户端不同的两次评审，靠这一行区分。
 端点域名可能是内部网关，只在本机输出里显示（`harness status`、`harness review`、合并输出）；PR/MR 描述里只写“自定义端点”或“端点来自环境变量”，不含域名。
-升级前的旧记录没有这些信息，显示为“未记录”。
+升级前的旧记录没有这些信息，显示为“未记录”；早于 effort 字段的旧记录只是不显示 effort，不会写成“客户端默认”。
+评审时没配 effort 的新记录显示“effort 客户端默认”，以便区分没配和漏报。
+显示的 effort 是评审时的配置值，不是客户端回报的实际运行强度；claude 的实际模型能从回报里读到，effort 读不到。
+
+`harness merge` 和 `harness submit` 复用已通过的评审时，日志里写出“评审者: …”一行。
+Agent 完成任务后的汇报里要带一行代码评审的评审者，方案评审跑过的再带一行，内容照抄上述摘要。
+这样你能直接看到评审用了哪个客户端、模型和 effort，需要时用 `harness reviewer set` 调整。
 客户端报的实际模型是它自己回报的名字，网关是否如实路由要看网关，所以端点主机也一并记录。
 
 ## 命令速查

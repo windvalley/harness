@@ -3,7 +3,7 @@ import { gitOk, resolveCommit } from "../lib/git.mjs";
 import { appendLedger } from "../lib/store.mjs";
 import { planSummary } from "./plan.mjs";
 import { prefetchRefs } from "./refs.mjs";
-import { runPlanReviewer } from "../review/review.mjs";
+import { reviewerSummary, runPlanReviewer } from "../review/review.mjs";
 
 export const DEFAULT_PLAN_TIMEOUT_SECONDS = 1200;
 export const DEFAULT_PLAN_ATTEMPT_TIMEOUT_SECONDS = 600;
@@ -148,18 +148,12 @@ export function buildPlanPrompt({ branch, acceptance, acceptancePath, planFiles,
   return parts.join("\n\n");
 }
 
-function describeReviewer(result) {
-  const reviewer = result.reviewer;
-  const model = reviewer.requestedModel ?? (reviewer.actualModels ?? []).join("、") ?? "未知";
-  return `${reviewer.name}(${reviewer.client}, ${model})`;
-}
-
 export function formatPlanReview(result, { all = false } = {}) {
   const findings = [...result.findings].sort((a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity]);
   const shown = all ? findings : findings.filter((item) => SEVERITY_ORDER[item.severity] <= SEVERITY_ORDER.high);
   const hidden = findings.filter((item) => !shown.includes(item));
   const lines = [
-    `方案评审完成: ${describeReviewer(result)}${result.queryLimited ? "，仓库查询超限，改为只看方案文件与预取片段" : result.readsRepo ? "，可读仓库" : "，没有读仓库，只看了方案文件"}`,
+    `方案评审完成: ${reviewerSummary(result)}${result.queryLimited ? "，仓库查询超限，改为只看方案文件与预取片段" : result.readsRepo ? "，可读仓库" : "，没有读仓库，只看了方案文件"}`,
   ];
   for (const item of shown) {
     lines.push(`  [${item.severity}] ${item.category} ${item.ref} ${item.summary}`);
@@ -233,6 +227,7 @@ export async function reviewPlan({
     queryLimited,
     findings: result.structured.findings,
     reviewer: result.reviewer,
+    attempts: result.attempts,
     costUsd: result.costUsd ?? null,
     at: new Date().toISOString(),
   };

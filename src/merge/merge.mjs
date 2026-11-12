@@ -38,7 +38,7 @@ import { EVIDENCE_KIND, verify, verifyConfigDigest } from "../verify/verify.mjs"
 import { unresolvedStop } from "../stop/session.mjs";
 import { entryTouched, followUps } from "../install/followups.mjs";
 import { ensureHooksPath } from "../install/install.mjs";
-import { REVIEW_KIND } from "../review/review.mjs";
+import { REVIEW_KIND, reviewerSummary } from "../review/review.mjs";
 import { approvalState, assessRisk, planEnforced } from "../plan/plan.mjs";
 import { MERGE_TOKEN_ENV, mainUpdateToken } from "../githook.mjs";
 import { divergedGuidance, fetchRemoteMain, pushMain } from "../delivery/remote.mjs";
@@ -450,7 +450,7 @@ export async function checkGates({ project, root, branch, log = console.error, d
             "review_stale",
           );
         }
-        log(`[${label}] 复用该分支已通过的独立评审`);
+        log(`[${label}] 复用该分支已通过的独立评审，评审者: ${reviewerSummary(review.record)}`);
       } else {
         throw new MergeError(
           review.ok

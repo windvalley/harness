@@ -696,6 +696,14 @@ describe("评审者的显示", () => {
     assert.deepEqual(reviewerLines({ verdict: "approve" }), ["  评审者: 未记录"]);
   });
 
+  test("没配 effort 的新记录写客户端默认，早于该字段的旧记录不猜", () => {
+    const base = { name: "x", client: "claude", requestedModel: "m", actualModels: ["m"] };
+    assert.equal(reviewerSummary({ reviewer: { ...base, effort: null } }), "x / claude / m / effort 客户端默认");
+    assert.equal(reviewerSummary({ reviewer: base }), "x / claude / m", "没有 effort 字段的是旧记录，不写成客户端默认");
+    assert.match(reviewerLines({ reviewer: { ...base, effort: null } }).join("\n"), /effort 客户端默认/);
+    assert.doesNotMatch(reviewerLines({ reviewer: base }).join("\n"), /effort/);
+  });
+
   test("摘要与明细标出备选完成、实际模型与请求模型不同、端点来自环境变量", () => {
     const record = {
       reviewer: { name: "sonnet", client: "claude", requestedModel: "sonnet", actualModels: ["anthropic/claude-sonnet-5.5"], effort: "high", endpointHost: "gw.test", endpointFrom: "environment", durationMs: 12_345 },
@@ -834,6 +842,17 @@ describe("codex review 发现的问题", () => {
     const text = reviewerSummary({ reviewer: { ...reviewer, endpointHost: "gw.internal.test", endpointFrom: "reviewer" }, attempts: [{ name: "y", outcome: "failed", reason: "ENOTFOUND gw.internal.test" }, { name: "x", outcome: "done" }] }, platform);
     assert.doesNotMatch(text, /gw\.internal\.test/);
     assert.match(text, /由备选完成/);
+  });
+
+  test("merge 复用评审时在日志里写出评审者摘要", () => {
+    const repo = setup();
+    const { name } = readyBranch(repo);
+    fakeClaudes(repo);
+    writeReviewers(repo, { reviewers: [{ ...SONNET, effort: "high" }] });
+    assert.equal(repo.cli("review", "--branch", name).status, 0);
+    const merged = repo.cli("merge", "--dry-run", "--branch", name);
+    assert.equal(merged.status, 0, merged.stderr);
+    assert.match(merged.stderr, /复用该分支已通过的独立评审，评审者: sonnet \/ claude \/ sonnet \/ effort high/);
   });
 
   test("status 是本机输出，继续显示端点域名", () => {

@@ -168,6 +168,41 @@ describe("方案评审", () => {
     assert.equal(ledger(repo).find((item) => item.event === "plan.review").reviewer, "backup");
   });
 
+  test("完成行写明客户端、模型、effort 和是否由备选完成，没配 effort 写客户端默认", () => {
+    const repo = setup();
+    repo.env.ANTHROPIC_BASE_URL = "";
+    writeReviewers(repo, {
+      preferDifferentModel: false,
+      reviewers: [
+        { name: "first", client: "claude", model: "bad-model", effort: "max" },
+        { name: "second", client: "claude", model: "good-model" },
+      ],
+    });
+    fakeClaudes(repo, {
+      "bad-model": { mode: "ok", structured: { verdict: "approve" } },
+      "good-model": { mode: "ok", structured: { findings: [] } },
+    });
+    const result = repo.cli("review-plan", "--branch", "task/a");
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stderr, /方案评审完成: second \/ claude \/ good-model \/ effort 客户端默认，由备选完成，可读仓库/);
+
+    writeReviewers(repo, { reviewers: [{ name: "only", client: "claude", model: "good-model", effort: "max" }] });
+    const single = repo.cli("review-plan", "--branch", "task/a");
+    assert.match(single.stderr, /方案评审完成: only \/ claude \/ good-model \/ effort max，可读仓库/);
+    assert.doesNotMatch(single.stderr, /由备选完成/);
+  });
+
+  test("codex 没配模型时完成行不留空模型位", () => {
+    const repo = setup();
+    repo.env.ANTHROPIC_BASE_URL = "";
+    fakeCodex(repo, { findings: [] });
+    writeReviewers(repo, { reviewers: [{ name: "codex", client: "codex" }] });
+    const result = repo.cli("review-plan", "--branch", "task/a");
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stderr, /方案评审完成: codex \/ effort 客户端默认，可读仓库/);
+    assert.doesNotMatch(result.stderr, /codex\(codex, \)/);
+  });
+
   test("明确失败时立即切换到备选，不等待单次时限", () => {
     const repo = setup();
     writeReviewers(repo, { reviewers: [

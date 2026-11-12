@@ -431,6 +431,14 @@ function inheritedSecrets(env = process.env) {
   return [env.ANTHROPIC_AUTH_TOKEN, env.ANTHROPIC_API_KEY, env[KEY_ENV]].filter((value) => typeof value === "string" && value.length >= 8);
 }
 
+function endpointOf(entry) {
+  const inherited = entry.client === "claude" && !entry.baseUrl ? process.env.ANTHROPIC_BASE_URL : null;
+  return {
+    endpointHost: entry.baseUrl ? endpointHost(entry.baseUrl) : inherited ? endpointHost(inherited) : null,
+    endpointFrom: entry.baseUrl ? "reviewer" : inherited ? "environment" : null,
+  };
+}
+
 export function runReviewer({ cwd, prompt, config = {}, log = () => {}, plan = planReviewers(config), profile = CODE_PROFILE }) {
   log(`[review] 评审者（${plan.source === "local" ? `本机文件 ${plan.file}` : "项目配置"}）: ${describePlan(plan)}`);
   const attempts = [];
@@ -446,7 +454,6 @@ export function runReviewer({ cwd, prompt, config = {}, log = () => {}, plan = p
       // 给出结论（通过或拒绝）就停；输出不符合结构按失败处理，换下一个。
       const structured = profile.parse(outcome.structured);
       attempts.push({ name: entry.name, outcome: "done" });
-      const inherited = entry.client === "claude" && !entry.baseUrl ? process.env.ANTHROPIC_BASE_URL : null;
       return {
         structured,
         costUsd: outcome.costUsd,
@@ -458,8 +465,7 @@ export function runReviewer({ cwd, prompt, config = {}, log = () => {}, plan = p
           requestedModel: entry.model ?? null,
           actualModels: outcome.models,
           effort: entry.effort ?? null,
-          endpointHost: entry.baseUrl ? endpointHost(entry.baseUrl) : inherited ? endpointHost(inherited) : null,
-          endpointFrom: entry.baseUrl ? "reviewer" : inherited ? "environment" : null,
+          ...endpointOf(entry),
           timeoutMinutes: entry.timeoutMinutes ?? DEFAULT_TIMEOUT_MINUTES,
           durationMs: Date.now() - started,
         },
@@ -510,6 +516,7 @@ export async function runPlanReviewer({
   const plan = planReviewers(config);
   log(`[review] 评审者（${plan.source === "local" ? "本机文件 " + plan.file : "项目配置"}）: ${describePlan(plan)}`);
   const failures = [];
+  const attempts = [];
   let remaining = plan.candidates.filter((entry) => !entry.skip).length;
   let fallbackReserved = false;
   const totalTimeout = () => new Error(["方案评审总时限耗尽", ...failures].join("\n"));
@@ -517,6 +524,7 @@ export async function runPlanReviewer({
   for (const entry of plan.candidates) {
     if (entry.skip) {
       failures.push(`- ${entry.name}: 跳过，${entry.skip}`);
+      attempts.push({ name: entry.name, outcome: "skipped" });
       log(`[review] 跳过 ${entry.name}: ${entry.skip}`);
       continue;
     }
@@ -557,16 +565,26 @@ export async function runPlanReviewer({
       }
       signal?.throwIfAborted();
       const structured = profile.parse(outcome.structured);
+      attempts.push({ name: entry.name, outcome: "done" });
       return {
         structured,
         costUsd: outcome.costUsd,
         queryLimited,
-        reviewer: { name: entry.name, client: entry.client, requestedModel: entry.model ?? null, actualModels: outcome.models },
+        attempts,
+        reviewer: {
+          name: entry.name,
+          client: entry.client,
+          requestedModel: entry.model ?? null,
+          actualModels: outcome.models,
+          effort: entry.effort ?? null,
+          ...endpointOf(entry),
+        },
       };
     } catch (error) {
       signal?.throwIfAborted();
       const reason = error.code === "ETIMEDOUT" ? "单次评审超时，已终止" : scrub(error.message, secrets);
       failures.push(`- ${entry.name}: ${reason.slice(0, 600)}`);
+      attempts.push({ name: entry.name, outcome: "failed" });
       if (performance.now() >= deadline) throw totalTimeout();
       log(`[review] ${entry.name} 失败${remaining ? "，换下一个" : ""}: ${reason.split("\n")[0].slice(0, 200)}`);
     } finally {
@@ -897,6 +915,12 @@ function modelLabel(reviewer) {
   return requested ?? (reviewer.actualModels ?? []).join("、");
 }
 
+// effort 为 null 表示评审时没配，由客户端用自己的默认值；没有这个字段的是早于该字段的旧记录，不猜。
+function effortLabel(reviewer) {
+  if (reviewer.effort) return `effort ${reviewer.effort}`;
+  return reviewer.effort === null ? "effort 客户端默认" : null;
+}
+
 /** 一行说清评审由谁完成，给 status、PR 描述这类只有一行位置的地方用。旧记录没有这项，写“未记录”。 */
 export function reviewerSummary(record, { forPlatform = false } = {}) {
   const reviewer = record?.reviewer;
@@ -912,7 +936,7 @@ export function reviewerSummary(record, { forPlatform = false } = {}) {
     reviewer.name,
     reviewer.client !== reviewer.name && reviewer.client,
     modelLabel(reviewer),
-    reviewer.effort && `effort ${reviewer.effort}`,
+    effortLabel(reviewer),
     endpoint,
   ].filter(Boolean);
   return `${parts.join(" / ")}${fallback}`;
@@ -955,7 +979,7 @@ export function reviewerLines(record) {
   const detail = [
     reviewer.client,
     modelLabel(reviewer) && `模型 ${modelLabel(reviewer)}`,
-    reviewer.effort && `effort ${reviewer.effort}`,
+    effortLabel(reviewer),
     reviewer.endpointHost && `端点 ${reviewer.endpointHost}${reviewer.endpointFrom === "environment" ? "（来自环境变量）" : ""}`,
   ].filter(Boolean);
   const seconds = typeof reviewer.durationMs === "number" ? `，耗时 ${(reviewer.durationMs / 1000).toFixed(1)} 秒` : "";
