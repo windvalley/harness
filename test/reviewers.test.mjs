@@ -855,6 +855,18 @@ describe("codex review 发现的问题", () => {
     assert.match(merged.stderr, /复用该分支已通过的独立评审，评审者: sonnet \/ claude \/ sonnet \/ effort high/);
   });
 
+  test("merge 完成后在日志末尾再写一次评审者摘要，避免被 tail 截掉", () => {
+    const repo = setup();
+    const { name } = readyBranch(repo);
+    fakeClaudes(repo);
+    writeReviewers(repo, { reviewers: [{ ...SONNET, effort: "high" }] });
+    assert.equal(repo.cli("review", "--branch", name).status, 0);
+    const merged = repo.cli("merge", "--branch", name);
+    assert.equal(merged.status, 0, merged.stderr);
+    const lines = merged.stderr.split("\n").filter((line) => line.startsWith("[merge]"));
+    assert.match(lines.at(-1), /^\[merge\] 汇报时写一行代码评审的评审者: sonnet \/ claude \/ sonnet \/ effort high/);
+  });
+
   test("status 是本机输出，继续显示端点域名", () => {
     const repo = setup();
     const { name } = readyBranch(repo);

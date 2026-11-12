@@ -198,6 +198,9 @@ describe("安装与自检", () => {
     const core = readFileSync(join(repo.root, ".harness/rules/core.md"), "utf8");
     assert.match(core, /提交后、验证前按\[需求与工程双维评审\]\(method-review\.md\)自审/, "core.md 写明自审的时机");
     assert.doesNotMatch(core, /交付前自审，按验收清单/, "自审与交付时给出验收证据分成两条");
+    // 评审者汇报要求写进每次任务都读的 core.md：只放在 harness.md 时，升级发生在会话中途或会话没重读 harness.md 就会漏。
+    assert.match(core, /交付汇报必须带一行代码评审的评审者，照抄 `harness merge`、`harness submit` 日志或 `harness status` 里“评审者”之后的摘要/, "core.md 直接写明汇报评审者的要求");
+    assert.match(core, /格式与端点域名限制见 `harness\.md` 的交付流程/, "core.md 指向 harness.md 的格式细则");
     // 二次执行不覆盖已有配置
     writeFileSync(join(repo.root, ".harness/config.json"), JSON.stringify({ version: 1, mainBranch: "main", marker: "保留" }, null, 2));
     const second = repo.rawCli("init");

@@ -285,6 +285,8 @@ export async function submitTask({ cwd, branch, log = console.error }) {
   });
   appendLedger(root, { event: "submit.ready", branch, head: branchCommit, url: request.url, pushed, riskObserved: gates.risk.observed });
   if (openedByBranch) log(`[submit] 本分支开启了远程交付（${describeDelivery(settings)}），确认记录已存在`);
+  // 放在日志末尾：Agent 常用 tail 截取输出，开头那行评审者摘要会被截掉。
+  if (gates.review) log(`[submit] 汇报时写一行代码评审的评审者: ${reviewerSummary(gates.review)}`);
 
   return {
     branch,

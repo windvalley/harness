@@ -369,6 +369,9 @@ describe("harness submit", () => {
     assert.equal(body.includes(HOST), false, "描述里不能有端点域名");
     assert.equal(JSON.stringify(platform.calls()).includes(HOST), false, "发给平台的所有调用里都不能有端点域名");
     assert.equal(sh(remote, "git", ["--git-dir", remote, "log", "--all", "--format=%B"]).stdout.includes(HOST), false, "推送上去的提交里不能有端点域名");
+    // 本机日志末尾再写一次评审者摘要，写给用户的汇报照抄这一行，域名只出现在本机输出里。
+    const lines = result.stderr.split("\n").filter((line) => line.startsWith("[submit]"));
+    assert.match(lines.at(-1), /^\[submit\] 汇报时写一行代码评审的评审者: flash \/ claude \/ m \/ effort high \/ 端点 gw\.internal\.test，由备选完成$/);
   });
 
   test("R5 已有 MR 时只替换 harness 管理的区块，保留团队写的说明，不新建", () => {

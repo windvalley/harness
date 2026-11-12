@@ -736,6 +736,8 @@ export async function mergeTask({ cwd, branch, dryRun = false, log = console.err
     } catch {
       // 只是提示，读不到 Worktree 列表不影响合并结果。
     }
+    // 放在日志末尾：Agent 常用 tail 截取输出，开头那行评审者摘要会被截掉。
+    if (gates.review) log(`[merge] 汇报时写一行代码评审的评审者: ${reviewerSummary(gates.review)}`);
 
     return { dryRun: false, bootstrap, fastForward, newHead, resultTree, gateTouched, postMerge, postMergeChecks: gates.postMergeChecks, refresh, push, followUps: notes };
   } finally {

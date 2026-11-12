@@ -1953,7 +1953,9 @@ harness reviewer set mine --client command --command-json '["my-reviewer","--jso
 显示的 effort 是评审时的配置值，不是客户端回报的实际运行强度；claude 的实际模型能从回报里读到，effort 读不到。
 
 `harness merge` 和 `harness submit` 复用已通过的评审时，日志里写出“评审者: …”一行。
+两条命令在日志最后还会再写一行“汇报时写一行代码评审的评审者: …”，用 `tail` 截取输出时也不会丢。
 Agent 完成任务后的汇报里要带一行代码评审的评审者，方案评审跑过的再带一行，内容照抄上述摘要。
+这条要求同时写在 `core.md` 和 `harness.md`：`core.md` 每次任务开始都会读，`harness.md` 有格式细则。
 这样你能直接看到评审用了哪个客户端、模型和 effort，需要时用 `harness reviewer set` 调整。
 客户端报的实际模型是它自己回报的名字，网关是否如实路由要看网关，所以端点主机也一并记录。
 
