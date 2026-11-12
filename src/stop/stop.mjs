@@ -8,7 +8,7 @@ import { appendLedger } from "../lib/store.mjs";
 import { listEscalations } from "../escalate/escalate.mjs";
 import { approvalState, planSettings } from "../plan/plan.mjs";
 import { branchStatus } from "../status.mjs";
-import { collectObligations } from "../verify/obligation.mjs";
+import { bindingProblem, escalationBinding } from "../escalate/binding.mjs";
 import { readSession, saveSession } from "./session.mjs";
 
 // 收尾检查：Agent 要结束一轮回复时，核对本会话推进过的任务是否已经交付，没有交付又没有上报阻塞就让它接着做。
@@ -51,10 +51,11 @@ function nextStep(code, { branch, mainRef, evidenceNextStep }) {
 }
 
 /** 只认当前 SHA 与待验收义务快照，旧的无 head 上报保守视为过期。 */
-function escalatedAtHead(branch, head, escalations, pending = []) {
-  const keys = pending.map((item) => item.key).sort();
+function escalatedAtBinding(branch, binding, escalations) {
+  if (!binding.head) return false;
+  const keys = binding.obligations;
   return escalations.some((item) =>
-    item.context?.branch === branch && item.context.head === head &&
+    item.context?.bindingStatus !== "unbound" && item.context?.branch === branch && item.context.head === binding.head &&
     JSON.stringify(item.context.obligations ?? []) === JSON.stringify(keys),
   );
 }
@@ -98,19 +99,10 @@ function awaitingApproval({ root, branch, status, worktree, dirty }) {
 
 /** 分支已被删除（例如合并后清理了 Worktree）时，只要还有到期而未登记的合并后验收义务，就仍然要接着做。 */
 function missingBranchOwed({ root, branch, status, escalations }) {
-  let open;
-  let mainCommit;
-  try {
-    mainCommit = gitOk(root, ["rev-parse", "--verify", `${status.mainRef}^{commit}`]);
-    open = collectObligations({ root, mainCommit, branch }).filter((item) => item.due && !item.closed);
-  } catch {
-    return null;
-  }
-  if (open.length === 0) return null;
-  const newest = [...open].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.key.localeCompare(b.key)).at(-1);
-  // 验签失败的义务不能提供可信 branchTip；与 openEscalation 一样退回当前主分支 SHA。
-  const boundHead = open.some((item) => item.problem) ? mainCommit : newest.branchTip;
-  if (escalatedAtHead(branch, boundHead, escalations, open)) return null;
+  const mainCommit = gitOk(root, ["rev-parse", "--verify", `${status.mainRef}^{commit}`]);
+  const binding = escalationBinding(root, branch, mainCommit);
+  const open = binding.pending;
+  if (open.length === 0 || escalatedAtBinding(branch, binding, escalations)) return null;
   const item = open[0];
   return {
     branch,
@@ -123,20 +115,17 @@ function missingBranchOwed({ root, branch, status, escalations }) {
 
 /** 判断一个分支还欠什么。返回 null 表示不需要 Agent 接着做：已交付、要等人，或者已经上报。 */
 function owedBy({ root, branch, escalations, worktrees }) {
-  let status;
-  try {
-    status = branchStatus({ cwd: root, branch });
-  } catch {
-    // 判断不了的分支不拦，不能因为门禁自己出错把会话困住。
-    return null;
-  }
+  const status = branchStatus({ cwd: root, branch });
   if (status.codes.includes("branch_missing")) return missingBranchOwed({ root, branch, status, escalations });
   const worktree = worktrees.get(branch) ?? null;
   const dirty = dirtyPaths(worktree);
   // 方案交出后停下等用户同意实施，正是规则要求的；已经动了代码却没有授权，同样要等用户。
   if (status.codes.includes("plan_unapproved") || awaitingApproval({ root, branch, status, worktree, dirty })) return null;
-  const pendingObligations = collectObligations({ root, mainCommit: status.mainCommit, branch }).filter((item) => item.due && !item.closed);
-  if (escalatedAtHead(branch, status.branchCommit, escalations, pendingObligations)) return null;
+  const candidates = escalations.filter((item) => item.context?.branch === branch && item.context?.bindingStatus !== "unbound" && typeof item.context?.head === "string");
+  if (candidates.length > 0) {
+    const binding = escalationBinding(root, branch, status.mainCommit);
+    if (binding.head === status.branchCommit && escalatedAtBinding(branch, binding, candidates)) return null;
+  }
   const owed = (missing, next) => ({ branch, status, dirty, missing, next });
   // 分支已经在主分支里，但 Worktree 里还有没提交的改动：典型情况是新分支上改了文件就结束了。
   if (status.merged) {
@@ -208,7 +197,15 @@ export function stopCheck({ cwd, client, session }) {
   const escalations = listEscalations(root, "open");
   const worktrees = new Map(worktreeEntries(root).map((entry) => [entry.branch, entry.path]));
   const owed = Object.keys(state.branches)
-    .map((branch) => owedBy({ root, branch, escalations, worktrees }))
+    .map((branch) => {
+      try {
+        return owedBy({ root, branch, escalations, worktrees });
+      } catch (error) {
+        // 判断不了的分支不困住会话，同时保留诊断并继续核对其他任务。
+        appendLedger(root, { event: "stop.error", branch, error: bindingProblem(root, error), client });
+        return null;
+      }
+    })
     .filter(Boolean);
   if (owed.length === 0) {
     if (state.lastBlock) {

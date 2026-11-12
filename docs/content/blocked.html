@@ -36,8 +36,15 @@
     <p><code>resolve</code> 只接受 <code>open</code> 状态的上报，保留原始上报，不生成答复。
     它不是人工 <code>answer</code>，不替用户选择方案，也不改变门禁、授权或人工确认要求。
     命令只保存非空证据引用，不解析引用或证明验收通过，外部检查仍用 <code>attest</code> 登记。</p>
-    <p><code>open</code> 自动绑定任务分支实际 HEAD，未填写分支时在任务分支使用当前分支。
-    收尾检查只接受分支与当前 HEAD 一致、未解除的上报；旧记录没有 HEAD 时不再凭时间推测放行，技术解除后继续检查剩余交付义务。</p>
+    <p><code>open</code> 使用可信的本地提交 SHA 和成功读取的待验收义务 key 快照绑定上报，未填写分支时使用当前分支。
+    收尾检查只接受分支、提交和义务快照一致、未解除的上报；新提交、义务集合变化或技术解除后，继续核对剩余交付义务。
+    输入的 <code>head</code>、<code>obligations</code>、<code>bindingStatus</code> 和 <code>bindingProblem</code> 不能替代命令读取的结果。</p>
+    <p>合法的计划中、仅有远端引用或已删除分支无法取得可信绑定时，仍可保存通用上报。
+    义务读取失败也可留档，但记录标为 <code>context.bindingStatus=unbound</code>，并在 <code>bindingProblem</code> 保留脱敏诊断，不填可信提交或义务快照。
+    <code>unbound</code> 不能作为 Stop 放行依据；读取或本地分支恢复后，重新 <code>escalate open</code>，原记录保留。
+    旧记录没有 HEAD 时同样不凭时间推测放行。</p>
+    <p>Stop 遇到分支状态或义务读取异常时，按分支隔离，并在账本记录带脱敏诊断的 <code>stop.error</code>，继续检查其他任务。
+    上报留档或异常提示都不代表已交付，不豁免验证、独立评审、人工确认和其他门禁。</p>
     <p>常见的合并拒绝原因：</p>
     <div class="table-wrap"><table>
       <thead><tr><th>提示</th><th>处理</th></tr></thead>

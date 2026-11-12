@@ -518,14 +518,14 @@ export async function verify({
     };
     let haltedBy = invalid.length > 0 && config.failFast !== false ? invalid.map((item) => item.id) : [];
     for (const item of plan) {
-      if (haltedBy.length > 0) {
-        notRun(item, "fail_fast", haltedBy);
-        continue;
-      }
       if (reusable.has(item.id)) {
         const prior = reusable.get(item.id);
         results.push({ outcome: "passed", reasonCode: "passed", ...prior, reused: true });
         log(`[verify] = ${item.id} 复用上次结果`);
+        continue;
+      }
+      if (haltedBy.length > 0) {
+        notRun(item, "fail_fast", haltedBy);
         continue;
       }
 
@@ -566,64 +566,66 @@ export async function verify({
       if (outcome.exit !== 0 && config.failFast !== false) haltedBy = [item.id];
     }
 
-    // 测试证据在普通检查都通过之后再算：前面已经失败或缺依赖时，这两项没有意义，也省下重复跑测试的时间。
-    if (!blocked && !results.some((item) => item.exit !== 0 && !item.skipped)) {
-      const evaluators = { tdd: evaluateTdd, coverage: evaluateCoverage };
-      for (const item of testEvidence) {
-        if (reusableEvidence.has(item.id)) {
-          results.push({ outcome: "passed", reasonCode: "passed", ...reusableEvidence.get(item.id), reused: true });
-          log(`[verify] = ${item.id} 复用上次结果`);
-          continue;
-        }
-        const missing = (item.requires ?? []).filter((rel) => !existsSync(join(mainRoot, rel)) && !existsSync(join(checkout, rel)));
-        if (missing.length > 0) {
-          missingDependency(item, missing);
-          continue;
-        }
-        const started = performance.now();
-        log(`[verify] -> ${item.id}: ${item.cmd.join(" ")}`);
-        const outcome = await evaluators[item.kind]({
-          item,
-          changed,
-          root,
-          checkout,
-          baseCommit: baseOfHead,
-          headCommit,
-          env,
-          timeoutMs: (config.timeoutSeconds ?? 1800) * 1000,
-          execute,
-          link: () => linkDependencies(mainRoot, checkout, item.requires ?? []),
-        });
-        if (!outcome) {
-          log(`[verify]    ${item.id} 不适用（这次改动没有涉及它管的文件）`);
-          continue;
-        }
-        const observing = item.config.mode === "observe" && !outcome.pass;
-        const exit = outcome.pass || observing ? 0 : 1;
-        results.push({
-          id: item.id,
-          cmd: item.cmd.join(" "),
-          cwd: item.cwd,
-          def: item.def,
-          envDigest: environment.get(item.id),
-          exit,
-          outcome: outcome.pass ? "passed" : outcome.blocked ? "blocked" : "failed",
-          reasonCode: outcome.pass ? "passed" : outcome.reasonCode ?? "check_failed",
-          durationMs: Math.round(performance.now() - started),
-          note: observing ? `观察模式，未拦截: ${outcome.note}` : outcome.note,
-          ...(observing ? { observed: true } : {}),
-          ...(outcome.waived ? { waived: true } : {}),
-          ...(outcome.coverage ? { coverage: outcome.coverage } : {}),
-          tail: outcome.pass ? undefined : [outcome.note, outcome.tail].filter(Boolean).join("\n"),
-        });
-        log(`[verify]    ${outcome.pass ? "通过" : observing ? "未通过（观察模式，不拦截）" : "未通过"}: ${outcome.note}`);
+    // 有效证据无需重跑；需要新执行的测试证据仍要等普通检查全部通过。
+    const blockedBy = results.filter((item) => item.exit !== 0 && item.outcome !== "not_run").map((item) => item.id);
+    if (requiredUncovered.length > 0) blockedBy.push("required-paths");
+    const prerequisitesPassed = !blocked && blockedBy.length === 0;
+    const evaluators = { tdd: evaluateTdd, coverage: evaluateCoverage };
+    for (const item of testEvidence) {
+      if (reusableEvidence.has(item.id)) {
+        results.push({ outcome: "passed", reasonCode: "passed", ...reusableEvidence.get(item.id), reused: true });
+        log(`[verify] = ${item.id} 复用上次结果`);
+        continue;
       }
-    } else {
-      const blockedBy = results.filter((item) => item.exit !== 0 && item.outcome !== "not_run").map((item) => item.id);
-      if (requiredUncovered.length > 0) blockedBy.push("required-paths");
-      for (const item of testEvidence) notRun(item, "prerequisite_failed", blockedBy);
+      if (!prerequisitesPassed) {
+        notRun(item, "prerequisite_failed", blockedBy);
+        continue;
+      }
+      const missing = (item.requires ?? []).filter((rel) => !existsSync(join(mainRoot, rel)) && !existsSync(join(checkout, rel)));
+      if (missing.length > 0) {
+        missingDependency(item, missing);
+        continue;
+      }
+      const started = performance.now();
+      log(`[verify] -> ${item.id}: ${item.cmd.join(" ")}`);
+      const outcome = await evaluators[item.kind]({
+        item,
+        changed,
+        root,
+        checkout,
+        baseCommit: baseOfHead,
+        headCommit,
+        env,
+        timeoutMs: (config.timeoutSeconds ?? 1800) * 1000,
+        execute,
+        link: () => linkDependencies(mainRoot, checkout, item.requires ?? []),
+      });
+      if (!outcome) {
+        log(`[verify]    ${item.id} 不适用（这次改动没有涉及它管的文件）`);
+        continue;
+      }
+      const observing = item.config.mode === "observe" && !outcome.pass;
+      const exit = outcome.pass || observing ? 0 : 1;
+      results.push({
+        id: item.id,
+        cmd: item.cmd.join(" "),
+        cwd: item.cwd,
+        def: item.def,
+        envDigest: environment.get(item.id),
+        exit,
+        outcome: outcome.pass ? "passed" : outcome.blocked ? "blocked" : "failed",
+        reasonCode: outcome.pass ? "passed" : outcome.reasonCode ?? "check_failed",
+        durationMs: Math.round(performance.now() - started),
+        note: observing ? `观察模式，未拦截: ${outcome.note}` : outcome.note,
+        ...(observing ? { observed: true } : {}),
+        ...(outcome.waived ? { waived: true } : {}),
+        ...(outcome.coverage ? { coverage: outcome.coverage } : {}),
+        tail: outcome.pass ? undefined : [outcome.note, outcome.tail].filter(Boolean).join("\n"),
+      });
+      log(`[verify]    ${outcome.pass ? "通过" : observing ? "未通过（观察模式，不拦截）" : "未通过"}: ${outcome.note}`);
     }
 
+    const reusedChecks = results.filter((item) => item.reused).map((item) => item.id);
     const failed = results.filter((item) => item.exit !== 0 && !item.skipped);
     const status = failed.length > 0 ? "failed" : blocked ? "incomplete" : "passed";
     const record = writeRecord(root, EVIDENCE_KIND, key, {
@@ -645,7 +647,7 @@ export async function verify({
       notExecuted,
       postMerge: postMergeRequirements,
       advisory,
-      reusedChecks: [...reusable.keys()],
+      reusedChecks,
       mainDeltaAtVerify: priorMainDelta.length,
       startedAt: started,
       finishedAt: new Date().toISOString(),
@@ -656,7 +658,7 @@ export async function verify({
       tree,
       head: headCommit,
       checks: results.length,
-      reused: reusable.size,
+      reused: reusedChecks.length,
       failed: failed.map((item) => item.id),
     });
     return { status, record, results, attested, notExecuted, postMerge: postMergeRequirements, advisory, changed };

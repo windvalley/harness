@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
 import { CONFIG, commit, git, makeRepo } from "./helpers.mjs";
@@ -156,4 +156,40 @@ test("观察模式保留实际阻塞原因，单独声明不阻断且不复用�
   assert.equal(item.reasonCode, "missing_command");
   const again = run(repo);
   assert.equal(again.record.checks[0].reused, undefined, "观察到的阻塞不能当已通过的结果复用");
+});
+
+
+test("fail-fast 保留未受影响的普通检查与测试证据复用，统计只计实际复用", () => {
+  const repo = setup([
+    check("first", "process.exit(require('node:fs').existsSync(process.env.HARNESS_TEST_REUSE_FAILURE) ? 7 : 0)", { when: ["src/example.js"] }),
+    check("second", "process.exit(0)", { when: ["src/second.js"] }),
+  ], { verify: { coverage: {
+    include: { match: ["src/second.js"], exclude: [] },
+    cmd: [process.execPath, "-e", "require('node:fs').mkdirSync('coverage', {recursive:true}); require('node:fs').writeFileSync('coverage/lcov.info', 'SF:src/second.js\\nDA:1,1\\nend_of_record\\n')"],
+    report: "coverage/lcov.info",
+  } } });
+  git(repo.root, "checkout", "task/outcomes");
+  commit(repo.root, "feat: 增加另一验收范围\n\n- 独立验证第二个文件", { "src/second.js": "export const second = 2;\n" });
+  git(repo.root, "checkout", "main");
+  const failure = join(repo.root, "..", "fail-first");
+  repo.env.HARNESS_TEST_REUSE_FAILURE = failure;
+  assert.equal(run(repo).status, 0, "首次验证建立可复用证据");
+
+  commit(repo.root, "feat: 推进首项检查的主分支范围\n\n- 只使首项检查的证据过期", { "src/example.js": "export const value = 'fail';\n" });
+  writeFileSync(failure, "fail first\n");
+  const result = run(repo);
+  assert.equal(result.status, 1, "首项失败仍阻断整体验证");
+  assert.equal(result.record.status, "failed");
+  assert.deepEqual(result.record.checks.map(({ id, outcome, reused }) => [id, outcome, Boolean(reused)]), [
+    ["first", "failed", false],
+    ["second", "passed", true],
+    ["harness:changed-line-coverage", "passed", true],
+  ]);
+  assert.deepEqual(result.record.notExecuted, []);
+  assert.deepEqual(result.record.reusedChecks, ["second", "harness:changed-line-coverage"]);
+  assert.match(result.stderr, /PASS second \(复用\)/);
+  assert.doesNotMatch(result.stderr, /NOT_RUN second|NOT_RUN harness:changed-line-coverage/);
+  const events = readFileSync(join(repo.env.HARNESS_DATA_DIR, "ledger.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
+  assert.equal(events.filter((event) => event.event === "verify").at(-1).reused, 2);
+  assert.equal(repo.cli("merge", "--branch", "task/outcomes").status, 1, "有效复用不会消除失败 gate");
 });

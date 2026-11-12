@@ -3,8 +3,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 
 import { join } from "node:path";
 import { appendLedger, dataDir } from "../lib/store.mjs";
 import { currentBranch, git, gitOk } from "../lib/git.mjs";
-import { loadGateProject, mainBranch } from "../lib/config.mjs";
-import { collectObligations } from "../verify/obligation.mjs";
+import { bindingProblem, escalationBinding } from "./binding.mjs";
 
 const REQUIRED = ["situation", "attempted", "blocker", "options", "defaultAction"];
 const ID_RE = /^esc-[0-9a-f]{8}$/;
@@ -37,33 +36,22 @@ export function validateEscalation(input) {
   return input;
 }
 
-/** 上报只绑定本地实际版本，不采信调用方提供的 head 或义务快照。 */
+/** 上报绑定实际版本；无法可信绑定时仍保留通用阻塞记录，但不能用来放行 Stop。 */
 function boundContext(root, input = {}) {
   if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("context 必须是对象");
-  const { branch: requestedBranch, head: ignoredHead, obligations: ignoredObligations, ...rest } = input;
+  const { branch: requestedBranch, head: ignoredHead, obligations: ignoredObligations, bindingStatus: ignoredStatus, bindingProblem: ignoredProblem, ...rest } = input;
   const branch = requestedBranch ?? currentBranch(root);
-  if (typeof branch !== "string") throw new Error("context.branch 必须是本地分支名");
+  if (typeof branch !== "string") throw new Error("context.branch 必须是分支名");
   if (!branch) return { ...rest, head: gitOk(root, ["rev-parse", "--verify", "HEAD^{commit}"]) };
-  let pending = [];
-  let mainCommit = null;
+  const valid = git(root, ["check-ref-format", "--branch", branch]);
+  if (valid.status !== 0 || valid.stdout.trim() !== branch) throw new Error(`找不到合法的分支名: ${branch}`);
   try {
-    const project = loadGateProject(root, {});
-    mainCommit = gitOk(root, ["rev-parse", "--verify", `${mainBranch(project)}^{commit}`]);
-    // 验签失败的义务仍需留在待办快照里，但其 branchTip 不可信，不能拿来绑定上报版本。
-    pending = collectObligations({ root, mainCommit, branch }).filter((item) => item.due && !item.closed);
-  } catch {
-    // 尚未接入门禁的仓库没有合并后义务，仍可为本地分支上报普通阻塞。
+    const binding = escalationBinding(root, branch);
+    if (binding.head) return { ...rest, branch, head: binding.head, ...(binding.obligations.length ? { obligations: binding.obligations } : {}) };
+    return { ...rest, branch, bindingStatus: "unbound", bindingProblem: "没有可绑定的本地分支或待验收义务" };
+  } catch (error) {
+    return { ...rest, branch, bindingStatus: "unbound", bindingProblem: bindingProblem(root, error) };
   }
-  const local = git(root, ["show-ref", "--verify", "--hash", `refs/heads/${branch}`]);
-  const newest = [...pending].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.key.localeCompare(b.key)).at(-1);
-  const unsafePending = pending.some((item) => item.problem);
-  const head = local.status === 0
-    ? local.stdout.trim()
-    : unsafePending && mainCommit
-      ? mainCommit
-      : newest?.branchTip;
-  if (!head) throw new Error(`找不到可绑定的本地分支或待验收义务: ${branch}`);
-  return { ...rest, branch, head, ...(pending.length ? { obligations: pending.map((item) => item.key).sort() } : {}) };
 }
 
 export function openEscalation(root, input) {
