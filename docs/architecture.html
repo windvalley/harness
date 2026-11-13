@@ -20,7 +20,7 @@
 
 <script src="assets/docs.js?v=acdbbf2b96" defer></script>
 </head>
-<body data-page="architecture" data-index="4a0f6e48ac">
+<body data-page="architecture" data-index="943e7309e3">
 <a class="skip-link" href="#main-content">跳到主要内容</a>
 <header class="topbar">
   <div class="topbar-inner">
@@ -165,12 +165,14 @@
           <text class="d-t" x="805" y="204" text-anchor="middle">拒绝</text>
           <text class="d-s" x="805" y="223" text-anchor="middle">退出码 2，写 stderr</text>
 
-          <line class="d-line" x1="334" y1="96" x2="334" y2="171" marker-end="url(#ar)"/>
+          <line class="d-line deny" x1="334" y1="96" x2="334" y2="171" marker-end="url(#ar)"/>
           <text class="d-l" x="342" y="140">输入或配置有问题</text>
           <rect class="d-box deny opt" x="200" y="175" width="300" height="80" rx="8"/>
           <text class="d-t" x="350" y="198" text-anchor="middle">判定本身出错</text>
           <text class="d-s" x="350" y="217" text-anchor="middle">载荷不是有效 JSON，或不合约定</text>
           <text class="d-s" x="350" y="235" text-anchor="middle">无法加载项目配置：同样退出码 2</text>
+          <path class="d-line deny" d="M470,255 V268 H805"/>
+          <text class="d-l deny" x="636" y="261" text-anchor="middle">同样不执行</text>
 
           <line class="d-line deny" x1="805" y1="236" x2="805" y2="286" marker-end="url(#ar-deny)"/>
           <rect class="d-box" x="730" y="290" width="150" height="56" rx="8"/>
@@ -184,7 +186,7 @@
           <text class="d-l" x="285" y="310" text-anchor="middle">重新发起调用</text>
         </svg>
       </div>
-      <figcaption>图 2　一次工具调用的实时拦截。判定只看这一次调用，不记录状态；拒绝的原因、正确做法和规则 id 经标准错误交给模型，输入或配置有问题时一律按拒绝处理。</figcaption>
+      <figcaption>图 2　一次工具调用的实时拦截。判定只看这一次调用，不记录状态；拒绝的原因、正确做法和规则 id 经标准错误交给模型，输入或配置有问题时这次调用同样不执行，但消息只是一句诊断，没有规则和替代做法，能否接着做由模型判断，门禁不中止会话。</figcaption>
     </figure>
     <p>判定依据是这次调用的路径、命令和写入内容，对照主分支上 <code>policy.json</code> 的规则。命令写文件时，引擎会解析重定向、<code>sed -i</code>、<code>tee</code> 等写入目标，目标无法静态确定时，在受保护的目录里按最严格处理。实时拦截是安全边界，宁可误拦，也不放过无法判定的调用。</p>
 
