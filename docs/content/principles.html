@@ -5,7 +5,7 @@
     <p>以 Claude Code 为例，客户端配置里的 <code>PreToolUse</code> 钩子在每次读、写、执行命令之前运行入口脚本。其他客户端的判定相同，只是载荷格式与拒绝的返回方式由各自的适配器处理。</p>
     <figure>
       <div class="diagram">
-        <svg viewBox="0 0 900 380" role="img" aria-label="实时拦截的判定过程：Claude Code 调用工具前触发钩子，工具名命中 matcher 时把调用的 JSON 经标准输入交给入口脚本；入口按锁定的版本转发到门禁代码，适配器把调用转成统一类型，再对照主分支 policy.json 的规则求值。放行时退出码为 0，工具照常执行；拒绝时退出码为 2，原因和正确做法写入标准错误，Claude Code 不执行调用并把反馈交给模型，模型改道后重新发起调用。载荷无效、不合约定或无法加载项目配置时同样按拒绝处理。">
+        <svg viewBox="0 0 900 380" role="img" aria-label="实时拦截的判定过程：Claude Code 调用工具前触发钩子，工具名命中 matcher 时把调用的 JSON 经标准输入交给入口脚本；入口按锁定的版本转发到门禁代码，适配器把调用转成统一类型，再对照主分支 policy.json 的规则求值。放行时退出码为 0，工具照常执行；拒绝时退出码为 2，原因和正确做法写入标准错误，Claude Code 不执行调用并把反馈交给模型，模型改道后重新发起调用。载荷不是有效 JSON、通用入口的载荷校验失败或无法加载项目配置时，同样按拒绝处理；适配器认不出的工具调用直接放行。">
           <rect class="d-box" x="20" y="40" width="140" height="56" rx="8"/>
           <text class="d-t" x="90" y="64" text-anchor="middle">Claude Code</text>
           <text class="d-s" x="90" y="83" text-anchor="middle">调用工具前触发</text>
@@ -44,7 +44,7 @@
           <text class="d-l" x="342" y="140">输入或配置有问题</text>
           <rect class="d-box deny opt" x="200" y="175" width="300" height="80" rx="8"/>
           <text class="d-t" x="350" y="198" text-anchor="middle">判定本身出错</text>
-          <text class="d-s" x="350" y="217" text-anchor="middle">载荷不是有效 JSON，或不合约定</text>
+          <text class="d-s" x="350" y="217" text-anchor="middle">载荷不是有效 JSON，或通用入口校验失败</text>
           <text class="d-s" x="350" y="235" text-anchor="middle">无法加载项目配置：同样退出码 2</text>
           <path class="d-line deny" d="M470,255 V268 H805"/>
           <text class="d-l deny" x="636" y="261" text-anchor="middle">同样不执行</text>
@@ -61,9 +61,10 @@
           <text class="d-l" x="285" y="310" text-anchor="middle">重新发起调用</text>
         </svg>
       </div>
-      <figcaption>图 5　一次工具调用的实时拦截。判定只看这一次调用，不记录状态；拒绝的原因、正确做法和规则 id 经标准错误交给模型，输入或配置有问题时这次调用同样不执行，但消息只是一句诊断，没有规则和替代做法，能否接着做由模型判断，门禁不中止会话。</figcaption>
+      <figcaption>图 5　一次工具调用的实时拦截。拒绝的原因、正确做法和规则 id 经标准错误交给模型；输入或配置有问题时这次调用同样不执行，但消息只是一句诊断，没有规则和替代做法，能否接着做由模型判断，门禁不中止会话。</figcaption>
     </figure>
-    <p>判定依据是这次调用的路径、命令和写入内容，对照主分支上 <code>policy.json</code> 的规则。命令写文件时，引擎会解析重定向、<code>sed -i</code>、<code>tee</code> 等写入目标，目标无法静态确定时，在受保护的目录里按最严格处理。实时拦截是安全边界，宁可误拦，也不放过无法判定的调用。</p>
+    <p>判定依据是这次调用的路径、命令和写入内容，加上它所在的上下文：落在哪个 Worktree、哪个分支，写入时方案是否还在等授权。这些一起对照主分支上 <code>policy.json</code> 的规则求值。命令写文件时，引擎会解析重定向、<code>sed -i</code>、<code>tee</code> 等写入目标；目标无法静态确定、又在可能落进受保护位置的目录里执行时，按最严格处理。</p>
+    <p>并非每个调用都会被判定：适配器认不出的工具，或缺少工具名的载荷，直接放行。通用入口例外，它先校验载荷，不合约定按拒绝处理。钩子还会顺带记下本会话涉及的任务分支，供下面的收尾检查使用，拒绝时在账本记一条 <code>policy.deny</code>；这些记录不影响本次判定。</p>
 
     <h3 id="stop-check">收尾检查：Agent 想结束时</h3>
     <p>拦截只管 Agent 不做错事，管不了它没做完就停下。为此支持的客户端钩子还挂了一道<strong>收尾检查</strong>：Agent 每次结束回复前，核对本会话推进过的任务是否已经交付；没有交付又没有上报阻塞时，告诉它还差哪几步，让它接着做。只差你确认门禁改动或同意方案时放行，两次结束之间没有任何进展时也放行，但会记下来，在 <code>harness status</code> 里给你看。</p>
@@ -190,7 +191,7 @@
     <p><code>reference-transaction</code> 在每次更新引用时触发，只对 <code>main</code> 与 <code>master</code> 求值。令牌怎么生成、怎么比对，以及 <code>update-ref</code> 不带旧值时的处理，见<a href="#token">主分支只认合并令牌</a>。</p>
 
     <h3 id="lifecycle">一次任务的生命周期</h3>
-    <p>上面三种钩子在过程中当场纠正，一个任务能不能进入主分支，则由交付前的一串步骤决定。这些步骤都由 harness 命令完成，每一步都会留下一条<a href="#signing">签名记录</a>，并且<strong>绑定到具体的内容</strong>上。自动检查与独立评审绑定分支提交；外部证据绑定检查定义和它覆盖的文件；合并后证据绑定实际集成结果。相关内容变化后旧证据失效，无关文档变化则不必重验。这样核对的永远是“这一份代码”的证据，而不是“某个时候跑过一次”。</p>
+    <p>上面三种钩子在过程中当场纠正，一个任务能不能进入主分支，则由交付前的一串步骤决定。其中实施授权、验证、外部证据登记、评审和门禁确认由 harness 命令执行，每一步都会留下一条<a href="#signing">签名记录</a>，并且<strong>绑定到具体的内容</strong>上；实现与提交由编辑工具和 git 完成，远程交付时的合并由平台执行。自动检查与独立评审绑定分支提交；外部证据绑定检查定义和它覆盖的文件；合并后证据绑定实际集成结果。相关内容变化后旧证据失效，无关文档变化则不必重验。这样核对的永远是“这一份代码”的证据，而不是“某个时候跑过一次”。</p>
     <figure>
       <div class="diagram">
         <svg viewBox="0 18 900 500" role="img" aria-label="任务生命周期：合并前依次经过授权、实现提交、verify、review、按需 confirm 和交付；外部 extended 检查成功后由 attest 登记并交给 review；本地 merge 或远程平台合入并 sync 后进入 main；配置合并后检查时，再执行 post-merge，成功后用 attest 登记并完成。验收失败则保持待完成，新建修复分支，重新实现、验证、评审、合入并验收，形成修复闭环。相关记录分别绑定验收清单、分支提交、检查覆盖文件、合并结果或实际集成结果。">

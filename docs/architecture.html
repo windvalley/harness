@@ -20,7 +20,7 @@
 
 <script src="assets/docs.js?v=acdbbf2b96" defer></script>
 </head>
-<body data-page="architecture" data-index="a4bf2fc135">
+<body data-page="architecture" data-index="752bebbcb5">
 <a class="skip-link" href="#main-content">跳到主要内容</a>
 <header class="topbar">
   <div class="topbar-inner">
@@ -196,7 +196,7 @@
         <tr><td><code>~/.cache/harness/checkouts/</code></td><td>verify 的固定检出</td><td>否</td></tr>
       </tbody>
     </table></div>
-    <p>图 2 里的几条线各自对应一道信任边界：入口只转发、不含判定代码；判定只读主分支的配置；记录用本机密钥签名；主分支只接受带令牌的更新。下面四节分别说明。</p>
+    <p>任务分支绕不过门禁，靠的是下面四道信任边界：入口只转发、不含判定代码；判定只读主分支的配置；记录用本机密钥签名；主分支只接受带令牌的更新。</p>
 
     <h2 tabindex="-1" id="pinning">版本锁定的入口</h2>
     <p>门禁代码如果放在项目里，Agent 就可以改它。所以项目只入库一个入口 <code>.harness/bin/harness</code>，它按 <code>.harness/VERSION</code> 锁定的版本，转发到本机的 <code>~/.local/share/harness/versions/&lt;版本&gt;/</code>。</p>
