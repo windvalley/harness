@@ -89,7 +89,7 @@
           <text class="d-l" x="450" y="492" text-anchor="middle">虚线框表示按条件出现的步骤；每一条记录都用本机密钥签名，存进 .git/harness/</text>
         </svg>
       </div>
-      <figcaption>图 3　任务从合并前门禁到实际完成。上方是通用门禁，中间是 PR/MR 的替代交付路径；下方左侧把外部证据交给评审，右侧是仅配置时才出现的合并后验收。红色虚线表示验收失败后的修复回路：新建修复分支，重新走门禁、合入并验收。</figcaption>
+      <figcaption>图 5　任务从合并前门禁到实际完成。上方是通用门禁，中间是 PR/MR 的替代交付路径；下方左侧把外部证据交给评审，右侧是仅配置时才出现的合并后验收。红色虚线表示验收失败后的修复回路：新建修复分支，重新走门禁、合入并验收。</figcaption>
     </figure>
     <ul>
       <li><strong>verify</strong> 在固定检出里检出分支提交，只验证已提交的内容；工作区里没提交的改动不算。</li>
@@ -137,7 +137,7 @@
           <text class="d-t" x="830" y="195" text-anchor="middle">拒绝写入</text>
         </svg>
       </div>
-      <figcaption>图 4　同一个钩子，两种结果。令牌只能由持有密钥的 <code>harness merge</code> 与 <code>harness sync</code> 生成，而且只对这一次“旧提交到新提交”有效。</figcaption>
+      <figcaption>图 6　同一个钩子，两种结果。令牌只能由持有密钥的 <code>harness merge</code> 与 <code>harness sync</code> 生成，而且只对这一次“旧提交到新提交”有效。</figcaption>
     </figure>
     <p>所以在主分支上 <code>git commit</code> 或 <code>git pull</code> 被拒绝是预期行为。同步远程主分支的做法见 <a href="#team">团队与多机</a>。</p>
 
@@ -171,7 +171,7 @@
           <text class="d-l accent" x="770" y="120">合入后才生效</text>
         </svg>
       </div>
-      <figcaption>图 5　信任根在主分支上。任务分支改了规则，只有在人确认并合入之后，新规则才开始约束后面的任务。</figcaption>
+      <figcaption>图 7　信任根在主分支上。任务分支改了规则，只有在人确认并合入之后，新规则才开始约束后面的任务。</figcaption>
     </figure>
     <ul>
       <li>门禁文件包括 <code>.harness/</code> 下的配置、规则、用例与入口，客户端配置和钩子目录，以及 <code>governance.gatePaths</code> 追加的路径。</li>
