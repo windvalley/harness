@@ -74,7 +74,7 @@
           <text class="d-t" x="830" y="311" text-anchor="middle">main</text>
         </svg>
       </div>
-      <figcaption>图 1　三层防线。①② 在过程中当场纠正，③ 在结果上把关；能写本地主分支的只有 <code>harness merge</code> 与 <code>harness sync</code>。本地交付由 merge 带令牌写入主分支；远程交付改用 <code>harness submit</code> 提交 PR/MR，平台合并后由 sync 带令牌快进本地主分支，生命周期见图 5。</figcaption>
+      <figcaption>图 1　三层防线。①② 在过程中当场纠正，③ 在结果上把关；能写本地主分支的只有 <code>harness merge</code> 与 <code>harness sync</code>。本地交付由 merge 带令牌写入主分支；远程交付改用 <code>harness submit</code> 提交 PR/MR，平台合并后由 sync 带令牌快进本地主分支，生命周期见图 6。</figcaption>
     </figure>
 
     <div class="table-wrap"><table class="t-key">
@@ -207,6 +207,74 @@
     </figure>
     <p>收尾检查与实时拦截的失败策略相反：实时拦截是安全边界，出错按拒绝处理；收尾检查是流程提醒，出错时放行并只提示一行，免得门禁自己的问题把会话卡住。Claude Code 对所有阻止结束的 Stop 钩子都显示 <code>Stop hook error occurred</code>，原因在随后的反馈里，不是门禁出错。</p>
 
+    <h3 id="githooks">git 钩子：提交与主分支更新怎么被判定</h3>
+    <p>git 钩子对所有客户端和人都生效，是实时拦截没接上时的兜底。安装时 harness 把检查块插在钩子脚本的最前面：已有的脚本常见写法是“没有相关改动就 <code>exit 0</code>”，追加在末尾的块会跑不到。</p>
+    <figure>
+      <div class="diagram">
+        <svg viewBox="0 0 900 470" role="img" aria-label="git 钩子的判定过程：git commit 先触发 pre-commit，检查暂存区路径与新增内容是否违反写保护和内容禁止规则，再触发 commit-msg，按提交信息规范检查；两者在本机没有安装锁定版本时提示后跳过，其余失败则拒绝提交。任何对主分支的引用更新都触发 reference-transaction：检查环境里的合并令牌是否等于对旧提交和新提交的签名，harness merge 与 harness sync 带着令牌更新所以放行，直接 commit、pull、reset 没有令牌，被拒绝。三个钩子都先确认主分支上有 .harness/config.json，没有则放行，并且都调用主 Worktree 的入口。">
+          <rect class="d-box" x="20" y="30" width="170" height="52" rx="8"/>
+          <text class="d-t" x="105" y="53" text-anchor="middle">git commit</text>
+          <text class="d-s" x="105" y="71" text-anchor="middle">Agent 或人</text>
+          <line class="d-line" x1="190" y1="56" x2="236" y2="56" marker-end="url(#ar)"/>
+
+          <rect class="d-box accent" x="240" y="30" width="190" height="52" rx="8"/>
+          <text class="d-t" x="335" y="53" text-anchor="middle">pre-commit</text>
+          <text class="d-s" x="335" y="71" text-anchor="middle">暂存区的路径与新增内容</text>
+          <line class="d-line allow" x1="430" y1="56" x2="476" y2="56" marker-end="url(#ar-allow)"/>
+          <text class="d-l allow" x="453" y="48" text-anchor="middle">通过</text>
+
+          <rect class="d-box accent" x="480" y="30" width="190" height="52" rx="8"/>
+          <text class="d-t" x="575" y="53" text-anchor="middle">commit-msg</text>
+          <text class="d-s" x="575" y="71" text-anchor="middle">提交信息规范</text>
+          <line class="d-line allow" x1="670" y1="56" x2="716" y2="56" marker-end="url(#ar-allow)"/>
+          <text class="d-l allow" x="693" y="48" text-anchor="middle">通过</text>
+
+          <rect class="d-box allow" x="720" y="30" width="160" height="52" rx="8"/>
+          <text class="d-t" x="800" y="53" text-anchor="middle">提交进分支</text>
+          <text class="d-s" x="800" y="71" text-anchor="middle">任务分支上</text>
+
+          <line class="d-line deny" x1="335" y1="82" x2="335" y2="126" marker-end="url(#ar-deny)"/>
+          <line class="d-line deny" x1="575" y1="82" x2="575" y2="126" marker-end="url(#ar-deny)"/>
+          <text class="d-l deny" x="583" y="108">违反规则，退出码 1</text>
+          <rect class="d-box deny" x="240" y="130" width="430" height="52" rx="8"/>
+          <text class="d-t" x="455" y="153" text-anchor="middle">提交被拒绝</text>
+          <text class="d-s" x="455" y="171" text-anchor="middle">写明原因与正确做法，layer=agent 的规则在这里不判</text>
+
+          <line class="d-line dash" x1="105" y1="82" x2="105" y2="216"/>
+          <text class="d-l" x="113" y="150">更新任何引用</text>
+          <text class="d-l" x="113" y="166">都触发</text>
+
+          <rect class="d-box accent" x="20" y="220" width="190" height="64" rx="8"/>
+          <text class="d-t" x="115" y="244" text-anchor="middle">reference-transaction</text>
+          <text class="d-s" x="115" y="264" text-anchor="middle">只关心 main / master</text>
+          <line class="d-line" x1="210" y1="252" x2="276" y2="252" marker-end="url(#ar)"/>
+          <text class="d-l" x="243" y="244" text-anchor="middle">比对</text>
+
+          <rect class="d-box" x="280" y="220" width="250" height="64" rx="8"/>
+          <text class="d-t" x="405" y="244" text-anchor="middle">环境里的合并令牌</text>
+          <text class="d-m" x="405" y="264" text-anchor="middle">HMAC(密钥, 旧提交, 新提交)</text>
+          <line class="d-line allow" x1="530" y1="238" x2="596" y2="238" marker-end="url(#ar-allow)"/>
+          <text class="d-l allow" x="563" y="230" text-anchor="middle">一致</text>
+          <rect class="d-box allow" x="600" y="220" width="280" height="30" rx="8"/>
+          <text class="d-t" x="740" y="240" text-anchor="middle">放行：harness merge / sync 带令牌更新</text>
+          <line class="d-line deny" x1="530" y1="268" x2="596" y2="268" marker-end="url(#ar-deny)"/>
+          <text class="d-l deny" x="563" y="286" text-anchor="middle">不一致</text>
+          <rect class="d-box deny" x="600" y="254" width="280" height="30" rx="8"/>
+          <text class="d-t" x="740" y="274" text-anchor="middle">拒绝：直接 commit、pull、reset</text>
+
+          <rect class="d-box opt" x="20" y="326" width="860" height="124" rx="8"/>
+          <text class="d-t" x="40" y="352">三个钩子共同的前提</text>
+          <text class="d-s" x="40" y="376">· 主分支上没有 .harness/config.json（仓库没接入）：直接放行，不挡正常的 git 操作</text>
+          <text class="d-s" x="40" y="396">· 一律调用主 Worktree 的入口，任务分支改了自己的入口也不生效</text>
+          <text class="d-s" x="40" y="416">· 本机没有安装锁定的版本：pre-commit、commit-msg 提示后跳过，reference-transaction 直接拒绝</text>
+          <text class="d-s" x="40" y="436">· 设置 HARNESS_MAIN_BYPASS=1 能绕过主分支保护，只能由人在自己的终端使用</text>
+        </svg>
+      </div>
+      <figcaption>图 4　git 钩子的判定。提交前的两个钩子是提前提示，真正的约束在合并与引用保护；主分支只认令牌，令牌只能由持有密钥的 <code>harness merge</code> 与 <code>harness sync</code> 生成。</figcaption>
+    </figure>
+    <p><code>pre-commit</code> 先判这次提交本身能不能发生，例如主 Worktree 只用来合并，不接受提交；再对暂存区的每个路径跑写保护规则，对新增的行扫内容禁止规则。<code>layer=agent</code> 的规则只约束 Agent 的实时调用，git 层看不出写入者，所以跳过。<code>commit-msg</code> 先按 git 默认的规则清理注释行、剪刀线和行尾空白，再按提交信息规范判定；合并提交只是同步分支，与合并时的口径一致，放行。</p>
+    <p><code>reference-transaction</code> 在每次更新引用时触发，只对 <code>main</code> 与 <code>master</code> 求值。<code>update-ref</code> 不带旧值时钩子收到全零，必须以引用当前的实际值为准，否则零值会成为绕过口。令牌的生成与比对见<a href="principles.html#token">主分支只认合并令牌</a>。</p>
+
     <h3 id="components">组件与数据放在哪</h3>
     <p>项目里只入库配置和一个很小的入口脚本，门禁代码、密钥和运行记录都留在本机。</p>
     <figure>
@@ -259,7 +327,7 @@
           <text class="d-l" x="604" y="343">签名密钥</text>
         </svg>
       </div>
-      <figcaption>图 4　谁调用谁。客户端钩子与 git 钩子都只调用入口脚本；真正的判定代码按版本装在本机，配置一律从主分支读取。</figcaption>
+      <figcaption>图 5　谁调用谁。客户端钩子与 git 钩子都只调用入口脚本；真正的判定代码按版本装在本机，配置一律从主分支读取。</figcaption>
     </figure>
     <div class="table-wrap"><table class="t-files">
       <thead><tr><th>位置</th><th>内容</th><th>入库</th></tr></thead>
