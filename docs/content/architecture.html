@@ -74,7 +74,7 @@
           <text class="d-t" x="830" y="311" text-anchor="middle">main</text>
         </svg>
       </div>
-      <figcaption>图 1　三层防线。①② 在过程中当场纠正，③ 在结果上把关；能写本地主分支的只有 <code>harness merge</code> 与 <code>harness sync</code>。本地交付由 merge 带令牌写入主分支；远程交付改用 <code>harness submit</code> 提交 PR/MR，平台合并后由 sync 带令牌快进本地主分支，生命周期见图 3。</figcaption>
+      <figcaption>图 1　三层防线。①② 在过程中当场纠正，③ 在结果上把关；能写本地主分支的只有 <code>harness merge</code> 与 <code>harness sync</code>。本地交付由 merge 带令牌写入主分支；远程交付改用 <code>harness submit</code> 提交 PR/MR，平台合并后由 sync 带令牌快进本地主分支，生命周期见图 5。</figcaption>
     </figure>
 
     <div class="table-wrap"><table class="t-key">
@@ -86,7 +86,124 @@
       </tbody>
     </table></div>
     <p>即使某个客户端没有接上实时拦截（例如 Codex 还没信任钩子），已安装且生效的 git 钩子仍会检查提交与本地主分支更新；使用 <code>harness merge</code> 或 <code>harness submit</code> 时，还必须满足验证、评审与相应授权条件。平台最终合入的内容由 GitHub/GitLab 的保护规则把关，harness 不防有意绕过本机机制的进程。</p>
+
+    <h3 id="pretooluse">实时拦截：一次工具调用怎么被判定</h3>
+    <p>以 Claude Code 为例，客户端配置里的 <code>PreToolUse</code> 钩子在每次读、写、执行命令之前运行入口脚本。其他客户端的判定相同，只是载荷格式与拒绝的返回方式由各自的适配器处理。</p>
+    <figure>
+      <div class="diagram">
+        <svg viewBox="0 0 900 380" role="img" aria-label="实时拦截的判定过程：Claude Code 调用工具前触发钩子，工具名命中 matcher 时把调用的 JSON 经标准输入交给入口脚本；入口按锁定的版本转发到门禁代码，适配器把调用转成统一类型，再对照主分支 policy.json 的规则求值。放行时退出码为 0，工具照常执行；拒绝时退出码为 2，原因和正确做法写入标准错误，Claude Code 不执行调用并把反馈交给模型，模型改道后重新发起调用。载荷无效、不合约定或无法加载项目配置时同样按拒绝处理。">
+          <rect class="d-box" x="20" y="40" width="140" height="56" rx="8"/>
+          <text class="d-t" x="90" y="64" text-anchor="middle">Claude Code</text>
+          <text class="d-s" x="90" y="83" text-anchor="middle">调用工具前触发</text>
+          <line class="d-line" x1="160" y1="68" x2="250" y2="68" marker-end="url(#ar)"/>
+          <text class="d-l" x="205" y="60" text-anchor="middle">matcher 命中</text>
+
+          <rect class="d-box accent" x="254" y="40" width="160" height="56" rx="8"/>
+          <text class="d-t" x="334" y="64" text-anchor="middle">入口脚本</text>
+          <text class="d-m" x="334" y="83" text-anchor="middle">.harness/bin/harness</text>
+          <line class="d-line" x1="414" y1="68" x2="500" y2="68" marker-end="url(#ar)"/>
+          <text class="d-l" x="457" y="60" text-anchor="middle">转发</text>
+
+          <rect class="d-box" x="504" y="40" width="160" height="56" rx="8"/>
+          <text class="d-t" x="584" y="64" text-anchor="middle">适配器归一化</text>
+          <text class="d-s" x="584" y="83" text-anchor="middle">转成统一的调用类型</text>
+          <line class="d-line" x1="664" y1="68" x2="720" y2="68" marker-end="url(#ar)"/>
+          <text class="d-l" x="692" y="60" text-anchor="middle">判定</text>
+
+          <rect class="d-box accent" x="724" y="40" width="156" height="56" rx="8"/>
+          <text class="d-t" x="802" y="64" text-anchor="middle">规则求值</text>
+          <text class="d-s" x="802" y="83" text-anchor="middle">读主分支的 policy.json</text>
+
+          <line class="d-line allow" x1="740" y1="96" x2="660" y2="176" marker-end="url(#ar-allow)"/>
+          <text class="d-l allow" x="708" y="150">放行</text>
+          <rect class="d-box allow" x="560" y="180" width="140" height="56" rx="8"/>
+          <text class="d-t" x="630" y="204" text-anchor="middle">放行</text>
+          <text class="d-s" x="630" y="223" text-anchor="middle">退出码 0，工具执行</text>
+
+          <line class="d-line deny" x1="840" y1="96" x2="815" y2="176" marker-end="url(#ar-deny)"/>
+          <text class="d-l deny" x="842" y="150">拒绝</text>
+          <rect class="d-box deny" x="730" y="180" width="150" height="56" rx="8"/>
+          <text class="d-t" x="805" y="204" text-anchor="middle">拒绝</text>
+          <text class="d-s" x="805" y="223" text-anchor="middle">退出码 2，写 stderr</text>
+
+          <line class="d-line" x1="334" y1="96" x2="334" y2="171" marker-end="url(#ar)"/>
+          <text class="d-l" x="342" y="140">输入或配置有问题</text>
+          <rect class="d-box deny opt" x="200" y="175" width="300" height="80" rx="8"/>
+          <text class="d-t" x="350" y="198" text-anchor="middle">判定本身出错</text>
+          <text class="d-s" x="350" y="217" text-anchor="middle">载荷不是有效 JSON，或不合约定</text>
+          <text class="d-s" x="350" y="235" text-anchor="middle">无法加载项目配置：同样退出码 2</text>
+
+          <line class="d-line deny" x1="805" y1="236" x2="805" y2="286" marker-end="url(#ar-deny)"/>
+          <rect class="d-box" x="730" y="290" width="150" height="56" rx="8"/>
+          <text class="d-t" x="805" y="314" text-anchor="middle">不执行这次调用</text>
+          <text class="d-s" x="805" y="333" text-anchor="middle">stderr 交给模型</text>
+          <line class="d-line deny" x1="730" y1="318" x2="674" y2="318" marker-end="url(#ar-deny)"/>
+          <rect class="d-box" x="480" y="290" width="190" height="56" rx="8"/>
+          <text class="d-t" x="575" y="314" text-anchor="middle">模型改道</text>
+          <text class="d-s" x="575" y="333" text-anchor="middle">按“正确做法”换路径或汇报</text>
+          <path class="d-line dash" d="M480,318 H90 V100" marker-end="url(#ar)"/>
+          <text class="d-l" x="285" y="310" text-anchor="middle">重新发起调用</text>
+        </svg>
+      </div>
+      <figcaption>图 2　一次工具调用的实时拦截。判定只看这一次调用，不记录状态；拒绝的原因、正确做法和规则 id 经标准错误交给模型，输入或配置有问题时一律按拒绝处理。</figcaption>
+    </figure>
+    <p>判定依据是这次调用的路径、命令和写入内容，对照主分支上 <code>policy.json</code> 的规则。命令写文件时，引擎会解析重定向、<code>sed -i</code>、<code>tee</code> 等写入目标，目标无法静态确定时，在受保护的目录里按最严格处理。实时拦截是安全边界，宁可误拦，也不放过无法判定的调用。</p>
+
+    <h3 id="stop-check">收尾检查：Agent 想结束时</h3>
     <p>三层门禁也不能保证 Agent 会在结束回复前完成任务。为此支持的客户端钩子还挂了一道<strong>收尾检查</strong>：Agent 每次结束回复前，核对本会话推进过的任务是否已经交付；没有交付又没有上报阻塞时，告诉它还差哪几步，让它接着做。只差你确认门禁改动或同意方案时放行，两次结束之间没有任何进展时也放行，但会记下来，在 <code>harness status</code> 里给你看。</p>
+    <figure>
+      <div class="diagram">
+        <svg viewBox="0 0 900 390" role="img" aria-label="收尾检查的判定过程：Agent 想结束回复时客户端触发 Stop 事件，入口脚本运行收尾检查，逐个核对本会话推进过的任务分支还欠什么，并与会话记录里上次拦截时的进展指纹对比。没有欠项、只差人来做、已经上报、与上次相比没有进展、收尾检查自己出错或不在 harness 项目里时都放行；仍有欠项且有进展时输出 decision 为 block 的结果，退出码仍为 0，Agent 按 reason 里的下一步接着做，再次结束时重新核对。">
+          <rect class="d-box" x="20" y="40" width="150" height="56" rx="8"/>
+          <text class="d-t" x="95" y="64" text-anchor="middle">Agent 想结束</text>
+          <text class="d-s" x="95" y="83" text-anchor="middle">客户端触发 Stop 事件</text>
+          <line class="d-line" x1="170" y1="68" x2="250" y2="68" marker-end="url(#ar)"/>
+          <text class="d-l" x="210" y="60" text-anchor="middle">Stop</text>
+
+          <rect class="d-box accent" x="254" y="40" width="160" height="56" rx="8"/>
+          <text class="d-t" x="334" y="64" text-anchor="middle">收尾检查</text>
+          <text class="d-m" x="334" y="83" text-anchor="middle">hook --event stop</text>
+          <line class="d-line" x1="414" y1="68" x2="496" y2="68" marker-end="url(#ar)"/>
+          <text class="d-l" x="455" y="60" text-anchor="middle">核对</text>
+
+          <rect class="d-box accent" x="500" y="40" width="190" height="56" rx="8"/>
+          <text class="d-t" x="595" y="64" text-anchor="middle">还欠什么</text>
+          <text class="d-s" x="595" y="83" text-anchor="middle">逐个核对本会话的分支</text>
+          <line class="d-line dash" x1="690" y1="68" x2="736" y2="68" marker-end="url(#ar)"/>
+          <text class="d-l" x="713" y="60" text-anchor="middle">指纹</text>
+
+          <rect class="d-box opt" x="740" y="40" width="140" height="56" rx="8"/>
+          <text class="d-t" x="810" y="64" text-anchor="middle">会话记录</text>
+          <text class="d-s" x="810" y="83" text-anchor="middle">上次拦截的指纹</text>
+
+          <line class="d-line allow" x1="520" y1="96" x2="520" y2="166" marker-end="url(#ar-allow)"/>
+          <text class="d-l allow" x="528" y="135">放行</text>
+          <rect class="d-box allow" x="20" y="170" width="520" height="162" rx="8"/>
+          <text class="d-t" x="40" y="194">放行：不输出拦截结果，Agent 正常结束</text>
+          <text class="d-s" x="40" y="218">· 不在 harness 项目里，或本会话没有推进过任务</text>
+          <text class="d-s" x="40" y="238">· 任务已经交付，没有欠项</text>
+          <text class="d-s" x="40" y="258">· 只差人来做：确认门禁改动、同意实施方案</text>
+          <text class="d-s" x="40" y="278">· 已用 harness escalate 上报，且分支、提交与欠项没有变化</text>
+          <text class="d-s" x="40" y="298">· 与上次拦截相比没有进展：放行，账本记 stop.unresolved</text>
+          <text class="d-s" x="40" y="318">· 收尾检查自己出错：只提示一行，不困住会话</text>
+
+          <line class="d-line deny" x1="660" y1="96" x2="660" y2="166" marker-end="url(#ar-deny)"/>
+          <text class="d-l deny" x="668" y="135">仍有欠项且有进展</text>
+          <rect class="d-box deny" x="580" y="170" width="300" height="80" rx="8"/>
+          <text class="d-t" x="730" y="194" text-anchor="middle">阻止结束</text>
+          <text class="d-m" x="730" y="214" text-anchor="middle">{"decision":"block","reason":…}</text>
+          <text class="d-s" x="730" y="234" text-anchor="middle">退出码仍是 0，reason 写明还差哪几步</text>
+
+          <line class="d-line deny" x1="730" y1="250" x2="730" y2="296" marker-end="url(#ar-deny)"/>
+          <rect class="d-box" x="580" y="300" width="300" height="76" rx="8"/>
+          <text class="d-t" x="730" y="324" text-anchor="middle">Agent 按 reason 接着做</text>
+          <text class="d-s" x="730" y="344" text-anchor="middle">reason 给出下一步，如 verify、review、merge</text>
+          <text class="d-s" x="730" y="362" text-anchor="middle">再次结束时重新核对</text>
+        </svg>
+      </div>
+      <figcaption>图 3　Agent 想结束时的收尾检查。进展指纹由分支顶端提交、阻塞项和任务 Worktree 里未提交文件的内容组成；两次结束之间指纹不变，说明没有进展，放行并记账，避免把会话困在循环里。</figcaption>
+    </figure>
+    <p>收尾检查与实时拦截的失败策略相反：实时拦截是安全边界，出错按拒绝处理；收尾检查是流程提醒，出错时放行并只提示一行，免得门禁自己的问题把会话卡住。Claude Code 对所有阻止结束的 Stop 钩子都显示 <code>Stop hook error occurred</code>，原因在随后的反馈里，不是门禁出错。</p>
 
     <h3 id="components">组件与数据放在哪</h3>
     <p>项目里只入库配置和一个很小的入口脚本，门禁代码、密钥和运行记录都留在本机。</p>
@@ -140,7 +257,7 @@
           <text class="d-l" x="604" y="343">签名密钥</text>
         </svg>
       </div>
-      <figcaption>图 2　谁调用谁。客户端钩子与 git 钩子都只调用入口脚本；真正的判定代码按版本装在本机，配置一律从主分支读取。</figcaption>
+      <figcaption>图 4　谁调用谁。客户端钩子与 git 钩子都只调用入口脚本；真正的判定代码按版本装在本机，配置一律从主分支读取。</figcaption>
     </figure>
     <div class="table-wrap"><table class="t-files">
       <thead><tr><th>位置</th><th>内容</th><th>入库</th></tr></thead>
