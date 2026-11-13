@@ -1,7 +1,196 @@
 <h2 id="principles">核心原理</h2>
+    <p>本页按从小到大的顺序讲判定：一次工具调用、一次结束回复、一次提交，再到一个任务从授权到合入的全过程，以及过程中验证、评审、授权各环节怎么核对。门禁由哪些部分组成、为什么任务分支绕不过去，见<a href="#arch">架构总览</a>。</p>
+
+    <h3 id="pretooluse">实时拦截：一次工具调用怎么被判定</h3>
+    <p>以 Claude Code 为例，客户端配置里的 <code>PreToolUse</code> 钩子在每次读、写、执行命令之前运行入口脚本。其他客户端的判定相同，只是载荷格式与拒绝的返回方式由各自的适配器处理。</p>
+    <figure>
+      <div class="diagram">
+        <svg viewBox="0 0 900 380" role="img" aria-label="实时拦截的判定过程：Claude Code 调用工具前触发钩子，工具名命中 matcher 时把调用的 JSON 经标准输入交给入口脚本；入口按锁定的版本转发到门禁代码，适配器把调用转成统一类型，再对照主分支 policy.json 的规则求值。放行时退出码为 0，工具照常执行；拒绝时退出码为 2，原因和正确做法写入标准错误，Claude Code 不执行调用并把反馈交给模型，模型改道后重新发起调用。载荷无效、不合约定或无法加载项目配置时同样按拒绝处理。">
+          <rect class="d-box" x="20" y="40" width="140" height="56" rx="8"/>
+          <text class="d-t" x="90" y="64" text-anchor="middle">Claude Code</text>
+          <text class="d-s" x="90" y="83" text-anchor="middle">调用工具前触发</text>
+          <line class="d-line" x1="160" y1="68" x2="250" y2="68" marker-end="url(#ar)"/>
+          <text class="d-l" x="205" y="60" text-anchor="middle">matcher 命中</text>
+
+          <rect class="d-box accent" x="254" y="40" width="160" height="56" rx="8"/>
+          <text class="d-t" x="334" y="64" text-anchor="middle">入口脚本</text>
+          <text class="d-m" x="334" y="83" text-anchor="middle">.harness/bin/harness</text>
+          <line class="d-line" x1="414" y1="68" x2="500" y2="68" marker-end="url(#ar)"/>
+          <text class="d-l" x="457" y="60" text-anchor="middle">转发</text>
+
+          <rect class="d-box" x="504" y="40" width="160" height="56" rx="8"/>
+          <text class="d-t" x="584" y="64" text-anchor="middle">适配器归一化</text>
+          <text class="d-s" x="584" y="83" text-anchor="middle">转成统一的调用类型</text>
+          <line class="d-line" x1="664" y1="68" x2="720" y2="68" marker-end="url(#ar)"/>
+          <text class="d-l" x="692" y="60" text-anchor="middle">判定</text>
+
+          <rect class="d-box accent" x="724" y="40" width="156" height="56" rx="8"/>
+          <text class="d-t" x="802" y="64" text-anchor="middle">规则求值</text>
+          <text class="d-s" x="802" y="83" text-anchor="middle">读主分支的 policy.json</text>
+
+          <line class="d-line allow" x1="740" y1="96" x2="660" y2="176" marker-end="url(#ar-allow)"/>
+          <text class="d-l allow" x="708" y="150">放行</text>
+          <rect class="d-box allow" x="560" y="180" width="140" height="56" rx="8"/>
+          <text class="d-t" x="630" y="204" text-anchor="middle">放行</text>
+          <text class="d-s" x="630" y="223" text-anchor="middle">退出码 0，工具执行</text>
+
+          <line class="d-line deny" x1="840" y1="96" x2="815" y2="176" marker-end="url(#ar-deny)"/>
+          <text class="d-l deny" x="842" y="150">拒绝</text>
+          <rect class="d-box deny" x="730" y="180" width="150" height="56" rx="8"/>
+          <text class="d-t" x="805" y="204" text-anchor="middle">拒绝</text>
+          <text class="d-s" x="805" y="223" text-anchor="middle">退出码 2，写 stderr</text>
+
+          <line class="d-line deny" x1="334" y1="96" x2="334" y2="171" marker-end="url(#ar)"/>
+          <text class="d-l" x="342" y="140">输入或配置有问题</text>
+          <rect class="d-box deny opt" x="200" y="175" width="300" height="80" rx="8"/>
+          <text class="d-t" x="350" y="198" text-anchor="middle">判定本身出错</text>
+          <text class="d-s" x="350" y="217" text-anchor="middle">载荷不是有效 JSON，或不合约定</text>
+          <text class="d-s" x="350" y="235" text-anchor="middle">无法加载项目配置：同样退出码 2</text>
+          <path class="d-line deny" d="M470,255 V268 H805"/>
+          <text class="d-l deny" x="636" y="261" text-anchor="middle">同样不执行</text>
+
+          <line class="d-line deny" x1="805" y1="236" x2="805" y2="286" marker-end="url(#ar-deny)"/>
+          <rect class="d-box" x="730" y="290" width="150" height="56" rx="8"/>
+          <text class="d-t" x="805" y="314" text-anchor="middle">不执行这次调用</text>
+          <text class="d-s" x="805" y="333" text-anchor="middle">stderr 交给模型</text>
+          <line class="d-line deny" x1="730" y1="318" x2="674" y2="318" marker-end="url(#ar-deny)"/>
+          <rect class="d-box" x="480" y="290" width="190" height="56" rx="8"/>
+          <text class="d-t" x="575" y="314" text-anchor="middle">模型改道</text>
+          <text class="d-s" x="575" y="333" text-anchor="middle">按“正确做法”换路径或汇报</text>
+          <path class="d-line dash" d="M480,318 H90 V100" marker-end="url(#ar)"/>
+          <text class="d-l" x="285" y="310" text-anchor="middle">重新发起调用</text>
+        </svg>
+      </div>
+      <figcaption>图 5　一次工具调用的实时拦截。判定只看这一次调用，不记录状态；拒绝的原因、正确做法和规则 id 经标准错误交给模型，输入或配置有问题时这次调用同样不执行，但消息只是一句诊断，没有规则和替代做法，能否接着做由模型判断，门禁不中止会话。</figcaption>
+    </figure>
+    <p>判定依据是这次调用的路径、命令和写入内容，对照主分支上 <code>policy.json</code> 的规则。命令写文件时，引擎会解析重定向、<code>sed -i</code>、<code>tee</code> 等写入目标，目标无法静态确定时，在受保护的目录里按最严格处理。实时拦截是安全边界，宁可误拦，也不放过无法判定的调用。</p>
+
+    <h3 id="stop-check">收尾检查：Agent 想结束时</h3>
+    <p>拦截只管 Agent 不做错事，管不了它没做完就停下。为此支持的客户端钩子还挂了一道<strong>收尾检查</strong>：Agent 每次结束回复前，核对本会话推进过的任务是否已经交付；没有交付又没有上报阻塞时，告诉它还差哪几步，让它接着做。只差你确认门禁改动或同意方案时放行，两次结束之间没有任何进展时也放行，但会记下来，在 <code>harness status</code> 里给你看。</p>
+    <figure>
+      <div class="diagram">
+        <svg viewBox="0 0 900 390" role="img" aria-label="收尾检查的判定过程：Agent 想结束回复时客户端触发 Stop 事件，入口脚本运行收尾检查，逐个核对本会话推进过的任务分支还欠什么，并与会话记录里上次拦截时的进展指纹对比。没有欠项、只差人来做、已经上报、与上次相比没有进展、收尾检查自己出错或不在 harness 项目里时都放行；仍有欠项且有进展时输出 decision 为 block 的结果，退出码仍为 0，Agent 按 reason 里的下一步接着做，再次结束时重新核对。">
+          <rect class="d-box" x="20" y="40" width="150" height="56" rx="8"/>
+          <text class="d-t" x="95" y="64" text-anchor="middle">Agent 想结束</text>
+          <text class="d-s" x="95" y="83" text-anchor="middle">客户端触发 Stop 事件</text>
+          <line class="d-line" x1="170" y1="68" x2="250" y2="68" marker-end="url(#ar)"/>
+          <text class="d-l" x="210" y="60" text-anchor="middle">Stop</text>
+
+          <rect class="d-box accent" x="254" y="40" width="160" height="56" rx="8"/>
+          <text class="d-t" x="334" y="64" text-anchor="middle">收尾检查</text>
+          <text class="d-m" x="334" y="83" text-anchor="middle">hook --event stop</text>
+          <line class="d-line" x1="414" y1="68" x2="496" y2="68" marker-end="url(#ar)"/>
+          <text class="d-l" x="455" y="60" text-anchor="middle">核对</text>
+
+          <rect class="d-box accent" x="500" y="40" width="190" height="56" rx="8"/>
+          <text class="d-t" x="595" y="64" text-anchor="middle">还欠什么</text>
+          <text class="d-s" x="595" y="83" text-anchor="middle">逐个核对本会话的分支</text>
+          <line class="d-line dash" x1="690" y1="68" x2="736" y2="68" marker-end="url(#ar)"/>
+          <text class="d-l" x="713" y="60" text-anchor="middle">指纹</text>
+
+          <rect class="d-box opt" x="740" y="40" width="140" height="56" rx="8"/>
+          <text class="d-t" x="810" y="64" text-anchor="middle">会话记录</text>
+          <text class="d-s" x="810" y="83" text-anchor="middle">上次拦截的指纹</text>
+
+          <line class="d-line allow" x1="520" y1="96" x2="520" y2="166" marker-end="url(#ar-allow)"/>
+          <text class="d-l allow" x="528" y="135">放行</text>
+          <rect class="d-box allow" x="20" y="170" width="520" height="162" rx="8"/>
+          <text class="d-t" x="40" y="194">放行：不输出拦截结果，Agent 正常结束</text>
+          <text class="d-s" x="40" y="218">· 不在 harness 项目里，或本会话没有推进过任务</text>
+          <text class="d-s" x="40" y="238">· 任务已经交付，没有欠项</text>
+          <text class="d-s" x="40" y="258">· 只差人来做：确认门禁改动、同意实施方案</text>
+          <text class="d-s" x="40" y="278">· 已用 harness escalate 上报，且分支、提交与欠项没有变化</text>
+          <text class="d-s" x="40" y="298">· 与上次拦截相比没有进展：放行，账本记 stop.unresolved</text>
+          <text class="d-s" x="40" y="318">· 收尾检查自己出错：只提示一行，不困住会话</text>
+
+          <line class="d-line deny" x1="660" y1="96" x2="660" y2="166" marker-end="url(#ar-deny)"/>
+          <text class="d-l deny" x="668" y="135">仍有欠项且有进展</text>
+          <rect class="d-box deny" x="580" y="170" width="300" height="80" rx="8"/>
+          <text class="d-t" x="730" y="194" text-anchor="middle">阻止结束</text>
+          <text class="d-m" x="730" y="214" text-anchor="middle">{"decision":"block","reason":…}</text>
+          <text class="d-s" x="730" y="234" text-anchor="middle">退出码仍是 0，reason 写明还差哪几步</text>
+
+          <line class="d-line deny" x1="730" y1="250" x2="730" y2="296" marker-end="url(#ar-deny)"/>
+          <rect class="d-box" x="580" y="300" width="300" height="76" rx="8"/>
+          <text class="d-t" x="730" y="324" text-anchor="middle">Agent 按 reason 接着做</text>
+          <text class="d-s" x="730" y="344" text-anchor="middle">reason 给出下一步，如 verify、review、merge</text>
+          <text class="d-s" x="730" y="362" text-anchor="middle">再次结束时重新核对</text>
+        </svg>
+      </div>
+      <figcaption>图 6　Agent 想结束时的收尾检查。进展指纹由分支顶端提交、阻塞项和任务 Worktree 里未提交文件的内容组成；两次结束之间指纹不变，说明没有进展，放行并记账，避免把会话困在循环里。</figcaption>
+    </figure>
+    <p>收尾检查与实时拦截的失败策略相反：实时拦截是安全边界，出错按拒绝处理；收尾检查是流程提醒，出错时放行并只提示一行，免得门禁自己的问题把会话卡住。Claude Code 对所有阻止结束的 Stop 钩子都显示 <code>Stop hook error occurred</code>，原因在随后的反馈里，不是门禁出错。</p>
+
+    <h3 id="githooks">git 钩子：提交与主分支更新怎么被判定</h3>
+    <p>git 钩子对所有客户端和人都生效，是实时拦截没接上时的兜底。安装时 harness 把检查块插在钩子脚本的最前面：已有的脚本常见写法是“没有相关改动就 <code>exit 0</code>”，追加在末尾的块会跑不到。</p>
+    <figure>
+      <div class="diagram">
+        <svg viewBox="0 0 900 470" role="img" aria-label="git 钩子的判定过程：git commit 先触发 pre-commit，检查暂存区路径与新增内容是否违反写保护和内容禁止规则，再触发 commit-msg，按提交信息规范检查；两者在本机没有安装锁定版本时提示后跳过，其余失败则拒绝提交。任何对主分支的引用更新都触发 reference-transaction：检查环境里的合并令牌是否等于对旧提交和新提交的签名，harness merge 与 harness sync 带着令牌更新所以放行，直接 commit、pull、reset 没有令牌，被拒绝。三个钩子都先确认主分支上有 .harness/config.json，没有则放行，并且都调用主 Worktree 的入口。">
+          <rect class="d-box" x="20" y="30" width="170" height="52" rx="8"/>
+          <text class="d-t" x="105" y="53" text-anchor="middle">git commit</text>
+          <text class="d-s" x="105" y="71" text-anchor="middle">Agent 或人</text>
+          <line class="d-line" x1="190" y1="56" x2="236" y2="56" marker-end="url(#ar)"/>
+
+          <rect class="d-box accent" x="240" y="30" width="190" height="52" rx="8"/>
+          <text class="d-t" x="335" y="53" text-anchor="middle">pre-commit</text>
+          <text class="d-s" x="335" y="71" text-anchor="middle">暂存区的路径与新增内容</text>
+          <line class="d-line allow" x1="430" y1="56" x2="476" y2="56" marker-end="url(#ar-allow)"/>
+          <text class="d-l allow" x="453" y="48" text-anchor="middle">通过</text>
+
+          <rect class="d-box accent" x="480" y="30" width="190" height="52" rx="8"/>
+          <text class="d-t" x="575" y="53" text-anchor="middle">commit-msg</text>
+          <text class="d-s" x="575" y="71" text-anchor="middle">提交信息规范</text>
+          <line class="d-line allow" x1="670" y1="56" x2="716" y2="56" marker-end="url(#ar-allow)"/>
+          <text class="d-l allow" x="693" y="48" text-anchor="middle">通过</text>
+
+          <rect class="d-box allow" x="720" y="30" width="160" height="52" rx="8"/>
+          <text class="d-t" x="800" y="53" text-anchor="middle">提交进分支</text>
+          <text class="d-s" x="800" y="71" text-anchor="middle">任务分支上</text>
+
+          <line class="d-line deny" x1="335" y1="82" x2="335" y2="126" marker-end="url(#ar-deny)"/>
+          <line class="d-line deny" x1="575" y1="82" x2="575" y2="126" marker-end="url(#ar-deny)"/>
+          <text class="d-l deny" x="583" y="108">违反规则，退出码 1</text>
+          <rect class="d-box deny" x="240" y="130" width="430" height="52" rx="8"/>
+          <text class="d-t" x="455" y="153" text-anchor="middle">提交被拒绝</text>
+          <text class="d-s" x="455" y="171" text-anchor="middle">写明原因与正确做法，layer=agent 的规则在这里不判</text>
+
+          <line class="d-line dash" x1="105" y1="82" x2="105" y2="216"/>
+          <text class="d-l" x="113" y="150">更新任何引用</text>
+          <text class="d-l" x="113" y="166">都触发</text>
+
+          <rect class="d-box accent" x="20" y="220" width="190" height="64" rx="8"/>
+          <text class="d-t" x="115" y="244" text-anchor="middle">reference-transaction</text>
+          <text class="d-s" x="115" y="264" text-anchor="middle">只关心 main / master</text>
+          <line class="d-line" x1="210" y1="252" x2="276" y2="252" marker-end="url(#ar)"/>
+          <text class="d-l" x="243" y="244" text-anchor="middle">比对</text>
+
+          <rect class="d-box" x="280" y="220" width="250" height="64" rx="8"/>
+          <text class="d-t" x="405" y="244" text-anchor="middle">令牌校验</text>
+          <text class="d-s" x="405" y="264" text-anchor="middle">机制见架构总览图 4</text>
+          <line class="d-line allow" x1="530" y1="238" x2="596" y2="238" marker-end="url(#ar-allow)"/>
+          <text class="d-l allow" x="563" y="230" text-anchor="middle">有效</text>
+          <rect class="d-box allow" x="600" y="220" width="280" height="30" rx="8"/>
+          <text class="d-t" x="740" y="240" text-anchor="middle">放行：harness merge / sync</text>
+          <line class="d-line deny" x1="530" y1="268" x2="596" y2="268" marker-end="url(#ar-deny)"/>
+          <text class="d-l deny" x="563" y="286" text-anchor="middle">没有或无效</text>
+          <rect class="d-box deny" x="600" y="254" width="280" height="30" rx="8"/>
+          <text class="d-t" x="740" y="274" text-anchor="middle">拒绝：直接 commit、pull、reset</text>
+
+          <rect class="d-box opt" x="20" y="326" width="860" height="124" rx="8"/>
+          <text class="d-t" x="40" y="352">三个钩子共同的前提</text>
+          <text class="d-s" x="40" y="376">· 主分支上没有 .harness/config.json（仓库没接入）：直接放行，不挡正常的 git 操作</text>
+          <text class="d-s" x="40" y="396">· 一律调用主 Worktree 的入口，任务分支改了自己的入口也不生效</text>
+          <text class="d-s" x="40" y="416">· 本机没有安装锁定的版本：pre-commit、commit-msg 提示后跳过，reference-transaction 直接拒绝</text>
+          <text class="d-s" x="40" y="436">· 设置 HARNESS_MAIN_BYPASS=1 能绕过主分支保护，只能由人在自己的终端使用</text>
+        </svg>
+      </div>
+      <figcaption>图 7　git 钩子的判定。提交前的两个钩子是提前提示，真正的约束在合并与引用保护；主分支只认持有密钥的 <code>harness merge</code> 与 <code>harness sync</code> 生成的令牌。</figcaption>
+    </figure>
+    <p><code>pre-commit</code> 先判这次提交本身能不能发生，例如主 Worktree 只用来合并，不接受提交；再对暂存区的每个路径跑写保护规则，对新增的行扫内容禁止规则。<code>layer=agent</code> 的规则只约束 Agent 的实时调用，git 层看不出写入者，所以跳过。<code>commit-msg</code> 先按 git 默认的规则清理注释行、剪刀线和行尾空白，再按提交信息规范判定；合并提交只是同步分支，与合并时的口径一致，放行。</p>
+    <p><code>reference-transaction</code> 在每次更新引用时触发，只对 <code>main</code> 与 <code>master</code> 求值。令牌怎么生成、怎么比对，以及 <code>update-ref</code> 不带旧值时的处理，见<a href="#token">主分支只认合并令牌</a>。</p>
 
     <h3 id="lifecycle">一次任务的生命周期</h3>
-    <p>每一步都会留下一条签名记录，并且<strong>绑定到具体的内容</strong>上。自动检查与独立评审绑定分支提交；外部证据绑定检查定义和它覆盖的文件；合并后证据绑定实际集成结果。相关内容变化后旧证据失效，无关文档变化则不必重验。这样核对的永远是“这一份代码”的证据，而不是“某个时候跑过一次”。</p>
+    <p>上面三种钩子在过程中当场纠正，一个任务能不能进入主分支，则由交付前的一串步骤决定。这些步骤都由 harness 命令完成，每一步都会留下一条<a href="#signing">签名记录</a>，并且<strong>绑定到具体的内容</strong>上。自动检查与独立评审绑定分支提交；外部证据绑定检查定义和它覆盖的文件；合并后证据绑定实际集成结果。相关内容变化后旧证据失效，无关文档变化则不必重验。这样核对的永远是“这一份代码”的证据，而不是“某个时候跑过一次”。</p>
     <figure>
       <div class="diagram">
         <svg viewBox="0 18 900 500" role="img" aria-label="任务生命周期：合并前依次经过授权、实现提交、verify、review、按需 confirm 和交付；外部 extended 检查成功后由 attest 登记并交给 review；本地 merge 或远程平台合入并 sync 后进入 main；配置合并后检查时，再执行 post-merge，成功后用 attest 登记并完成。验收失败则保持待完成，新建修复分支，重新实现、验证、评审、合入并验收，形成修复闭环。相关记录分别绑定验收清单、分支提交、检查覆盖文件、合并结果或实际集成结果。">
@@ -89,95 +278,13 @@
           <text class="d-l" x="450" y="492" text-anchor="middle">虚线框表示按条件出现的步骤；每一条记录都用本机密钥签名，存进 .git/harness/</text>
         </svg>
       </div>
-      <figcaption>图 6　任务从合并前门禁到实际完成。上方是通用门禁，中间是 PR/MR 的替代交付路径；下方左侧把外部证据交给评审，右侧是仅配置时才出现的合并后验收。红色虚线表示验收失败后的修复回路：新建修复分支，重新走门禁、合入并验收。</figcaption>
+      <figcaption>图 8　任务从合并前门禁到实际完成。上方是通用门禁，中间是 PR/MR 的替代交付路径；下方左侧把外部证据交给评审，右侧是仅配置时才出现的合并后验收。红色虚线表示验收失败后的修复回路：新建修复分支，重新走门禁、合入并验收。</figcaption>
     </figure>
     <ul>
       <li><strong>verify</strong> 在固定检出里检出分支提交，只验证已提交的内容；工作区里没提交的改动不算。</li>
       <li><strong>review</strong> 要求先有通过的验证证据，评审结论同样绑定分支提交。</li>
       <li><strong>confirm</strong> 只在改动涉及门禁本身（配置、规则、入口、钩子）时需要，绑定的是合并结果的 tree。</li>
       <li><strong>merge</strong> 发现没有证据、主分支的新改动波及某些检查，或检查配置变了时，会自己重跑需要的检查；评审不会自动重做，主分支在评审之后改了本分支也改过的文件时评审作废。</li>
-    </ul>
-
-    <h3 id="signing">签名记录</h3>
-    <p>证据、评审、确认与实施授权都是 JSON 记录，用本机密钥 <code>~/.local/share/harness/evidence.key</code>（权限 600）做 HMAC-SHA256 签名，存在仓库的 <code>.git/harness/</code> 下，所有 Worktree 共用，另有一份追加式账本 <code>ledger.jsonl</code>。</p>
-    <p>记录被改动、密钥轮换或丢失时，签名校验失败，harness 会指出该重跑哪一步（例如 <code>harness verify --branch &lt;分支&gt;</code>），而不只是报“签名不匹配”。</p>
-
-    <h3 id="token">主分支只认合并令牌</h3>
-    <p>主分支的保护不靠“约定不要直接提交”，而是由 git 自己的 <code>reference-transaction</code> 钩子执行：每次更新 <code>refs/heads/main</code> 时，钩子都要求环境里带着合并令牌。</p>
-    <figure>
-      <div class="diagram">
-        <svg viewBox="0 0 900 250" role="img" aria-label="合并令牌：harness merge 核对记录后，用密钥对旧提交和新提交签名得到令牌，带着令牌更新主分支（远程交付时由 harness sync 生成同样的令牌），reference-transaction 钩子重算并比对后放行；在主分支上直接 commit、pull、reset 没有令牌，被钩子拒绝。">
-          <rect class="d-box accent" x="20" y="30" width="190" height="60" rx="8"/>
-          <text class="d-t" x="115" y="55" text-anchor="middle">harness merge</text>
-          <text class="d-s" x="115" y="75" text-anchor="middle">先核对证据、评审、确认</text>
-          <line class="d-line accent" x1="210" y1="60" x2="266" y2="60" marker-end="url(#ar-accent)"/>
-          <rect class="d-box" x="270" y="30" width="230" height="60" rx="8"/>
-          <text class="d-t" x="385" y="55" text-anchor="middle">生成令牌</text>
-          <text class="d-m" x="385" y="75" text-anchor="middle">HMAC(密钥, 旧提交, 新提交)</text>
-          <line class="d-line accent" x1="500" y1="60" x2="556" y2="60" marker-end="url(#ar-accent)"/>
-          <text class="d-l accent" x="528" y="52" text-anchor="middle">带令牌</text>
-          <text class="d-l" x="385" y="112" text-anchor="middle">远程交付时由 harness sync 生成同样的令牌</text>
-
-          <rect class="d-box deny" x="20" y="160" width="190" height="60" rx="8"/>
-          <text class="d-t" x="115" y="185" text-anchor="middle">直接写 main</text>
-          <text class="d-s" x="115" y="205" text-anchor="middle">commit、pull、reset 等</text>
-          <line class="d-line deny" x1="210" y1="190" x2="556" y2="190" marker-end="url(#ar-deny)"/>
-          <text class="d-l deny" x="385" y="182" text-anchor="middle">没有令牌</text>
-
-          <rect class="d-box" x="560" y="30" width="170" height="190" rx="8"/>
-          <text class="d-t" x="645" y="112" text-anchor="middle">reference-</text>
-          <text class="d-t" x="645" y="130" text-anchor="middle">transaction 钩子</text>
-          <text class="d-s" x="645" y="152" text-anchor="middle">重算令牌并比对</text>
-
-          <line class="d-line allow" x1="730" y1="60" x2="776" y2="60" marker-end="url(#ar-allow)"/>
-          <rect class="d-box allow" x="780" y="30" width="100" height="60" rx="8"/>
-          <text class="d-t" x="830" y="65" text-anchor="middle">main 更新</text>
-          <line class="d-line deny" x1="730" y1="190" x2="776" y2="190" marker-end="url(#ar-deny)"/>
-          <rect class="d-box deny" x="780" y="160" width="100" height="60" rx="8"/>
-          <text class="d-t" x="830" y="195" text-anchor="middle">拒绝写入</text>
-        </svg>
-      </div>
-      <figcaption>图 7　同一个钩子，两种结果。令牌只能由持有密钥的 <code>harness merge</code> 与 <code>harness sync</code> 生成，而且只对这一次“旧提交到新提交”有效。</figcaption>
-    </figure>
-    <p>所以在主分支上 <code>git commit</code> 或 <code>git pull</code> 被拒绝是预期行为。同步远程主分支的做法见 <a href="#team">团队与多机</a>。</p>
-
-    <h3 id="trust-root">配置只从主分支读取</h3>
-    <p>如果任务分支能改规则并立即生效，Agent 就可以“先关掉检查再提交”。harness 的所有判定（实时拦截、git 钩子、verify 选检查、merge 的合并条件）都<strong>从主分支的 git 对象读取配置</strong>，不读工作区，也不读任务分支。</p>
-    <figure>
-      <div class="diagram">
-        <svg viewBox="0 0 900 260" role="img" aria-label="信任根：门禁判定只读取主分支上已确认的配置；任务分支改了 policy.json 不会影响它自己的判定；改动门禁的分支必须由人确认后合并，合入后新配置才生效。">
-          <rect class="d-box accent" x="30" y="20" width="240" height="80" rx="8"/>
-          <text class="d-t" x="150" y="52" text-anchor="middle">main 分支</text>
-          <text class="d-m" x="150" y="74" text-anchor="middle">.harness/ 已确认的配置</text>
-          <rect class="d-box" x="30" y="170" width="240" height="70" rx="8"/>
-          <text class="d-t" x="150" y="198" text-anchor="middle">任务分支</text>
-          <text class="d-s" x="150" y="220" text-anchor="middle">改了 policy.json，关掉一条规则</text>
-
-          <rect class="d-box" x="360" y="100" width="230" height="64" rx="8"/>
-          <text class="d-t" x="475" y="126" text-anchor="middle">门禁判定</text>
-          <text class="d-s" x="475" y="146" text-anchor="middle">拦截、钩子、选检查、合并条件</text>
-
-          <line class="d-line accent" x1="270" y1="80" x2="356" y2="116" marker-end="url(#ar-accent)"/>
-          <text class="d-l accent" x="300" y="112" text-anchor="middle">读取</text>
-          <line class="d-line deny" x1="270" y1="182" x2="356" y2="152" marker-end="url(#ar-deny)"/>
-          <text class="d-l deny" x="300" y="158" text-anchor="middle">不读取</text>
-
-          <line class="d-line" x1="270" y1="222" x2="636" y2="222" marker-end="url(#ar)"/>
-          <text class="d-l" x="455" y="214" text-anchor="middle">门禁改动：合并前必须由人确认</text>
-          <rect class="d-box" x="640" y="190" width="240" height="64" rx="8"/>
-          <text class="d-t" x="760" y="216" text-anchor="middle">confirm --yes + merge</text>
-          <text class="d-s" x="760" y="236" text-anchor="middle">确认绑定合并结果 tree</text>
-          <path class="d-line accent" d="M760,190 L760,40 L274,40" marker-end="url(#ar-accent)"/>
-          <text class="d-l accent" x="770" y="120">合入后才生效</text>
-        </svg>
-      </div>
-      <figcaption>图 8　信任根在主分支上。任务分支改了规则，只有在人确认并合入之后，新规则才开始约束后面的任务。</figcaption>
-    </figure>
-    <ul>
-      <li>门禁文件包括 <code>.harness/</code> 下的配置、规则、用例与入口，客户端配置和钩子目录，以及 <code>governance.gatePaths</code> 追加的路径。</li>
-      <li>Agent 执行带 <code>--yes</code> 的确认会被拦截，确认必须由人执行；确认后如果分支再提交或主分支前进导致合并结果变化，要重新确认。</li>
-      <li>首次接入时主分支上还没有配置，这时按接入分支提议的配置执行，并且无论改了什么都要人确认；确认后以快进方式合入，这份配置从此成为信任根。</li>
-      <li>改规则之前可以用 <code>harness golden --worktree</code> 按工作区的配置重放黄金任务，确认新规则的判定符合预期。</li>
     </ul>
 
     <h3 id="selection">按改动选检查</h3>
@@ -270,11 +377,3 @@
       <li>合并输出与 <code>harness status</code> 会显示记录下来的原话，你可以随时核对。</li>
     </ul>
     <p>实施默认<strong>先红后绿</strong>：先把每条验收写成测试并确认失败，再实现到全部通过。</p>
-
-    <h3 id="pinning">版本锁定的入口</h3>
-    <p>门禁代码如果放在项目里，Agent 就可以改它。所以项目只入库一个入口 <code>.harness/bin/harness</code>，它按 <code>.harness/VERSION</code> 锁定的版本，转发到本机的 <code>~/.local/share/harness/versions/&lt;版本&gt;/</code>。</p>
-    <ul>
-      <li>版本目录带内容哈希清单，<code>harness doctor</code> 会校验它没有被就地改写。</li>
-      <li>入口与钩子 Agent 不能手改，只能在任务分支运行 <code>harness install</code>、<code>init</code> 或 <code>upgrade</code> 重新生成，合并前同样要人确认。</li>
-      <li>入口随仓库分发，每个 Linked Worktree 检出即可用；同一台机器上的多个项目可以锁定不同版本。</li>
-    </ul>
