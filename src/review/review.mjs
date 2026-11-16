@@ -887,6 +887,8 @@ export async function reviewBranch({ cwd, branch, log = console.error, reviewer 
   } else {
     const coverage = assertChunkCoverage(chunkPlan,
       gitOk(root, ["diff", "--no-color", "-U8", baseCommit, branchCommit]));
+    // 仅依赖 diff 与主分支评审上限：付费局部评审开始前必须先验证全局材料装得下。
+    const globalExcerpt = integrationDiff(chunkPlan, Math.min(80_000, Math.floor(limit * 0.35)));
     log(`[review] diff 超限，自动分为 ${chunkPlan.chunks.length} 批（每批最多 ${chunkPlan.budget} 字符）并追加全局集成评审`);
     const results = [];
     for (const chunk of chunkPlan.chunks) {
@@ -901,7 +903,8 @@ export async function reviewBranch({ cwd, branch, log = console.error, reviewer 
       const localBlocking = blockingFindings(result.structured.findings, blockSeverities);
       results.push({
         index: chunk.index, status: "complete", chars: chunk.chars, fragments: chunk.segments.length,
-        verdict: localBlocking.length || result.structured.verdict === "reject" ? "reject" : "approve",
+        // 与单次评审一致：只使用项目配置的阻断级别，不采用模型的原始 reject。
+        verdict: localBlocking.length ? "reject" : "approve",
         structured: result.structured, reviewer: result.reviewer, costUsd: result.costUsd,
       });
     }
@@ -911,7 +914,6 @@ export async function reviewBranch({ cwd, branch, log = console.error, reviewer 
       `工程质量: ${item.structured.engineeringQuality.rating}，${item.structured.engineeringQuality.evidence}`,
       `发现: ${JSON.stringify(item.structured.findings)}`,
     ].join("\n")).join("\n\n");
-    const globalExcerpt = integrationDiff(chunkPlan, Math.min(80_000, Math.floor(limit * 0.35)));
     const globalMaterial = `${globalExcerpt}\n\n# 全部批次评审发现和跨模块线索\n${localSummary}`;
     if (globalMaterial.length > limit) {
       throw new Error("全局集成评审材料超过 review.maxDiffChars，拒绝截断后放行");
@@ -938,8 +940,12 @@ export async function reviewBranch({ cwd, branch, log = console.error, reviewer 
       coverage,
       chunks: results.map(({ index, status, chars, fragments, verdict, reviewer: info, costUsd: cost }) =>
         ({ index, status, chars, fragments, verdict, reviewer: info ?? null, costUsd: cost ?? null })),
-      integration: { status: "complete", verdict: global.structured.verdict,
-        reviewer: global.reviewer ?? null, costUsd: global.costUsd ?? null },
+      integration: {
+        status: "complete",
+        // 与单次评审使用相同阻断策略，避免局部与全局结论改变项目配置语义。
+        verdict: blockingFindings(global.structured.findings, blockSeverities).length ? "reject" : "approve",
+        reviewer: global.reviewer ?? null, costUsd: global.costUsd ?? null,
+      },
     };
   }
   const { structured, costUsd, backend, reviewer: reviewerInfo, attempts, selection } = outcome;
