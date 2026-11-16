@@ -447,8 +447,8 @@ describe("评审的拆分提示", () => {
     assert.match(review.stderr, /全局集成与验收评审/);
 
     const promptLog = readFileSync(join(repo.root, "..", "prompt.log"), "utf8");
-    assert.match(promptLog, /批次 1\\/2/);
-    assert.match(promptLog, /批次 2\\/2/);
+    assert.match(promptLog, /批次 1\/2/);
+    assert.match(promptLog, /批次 2\/2/);
     assert.match(promptLog, /全部批次评审发现和跨模块线索/);
   });
 });
