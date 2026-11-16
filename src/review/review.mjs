@@ -911,7 +911,7 @@ export async function reviewBranch({ cwd, branch, log = console.error, reviewer 
       `工程质量: ${item.structured.engineeringQuality.rating}，${item.structured.engineeringQuality.evidence}`,
       `发现: ${JSON.stringify(item.structured.findings)}`,
     ].join("\n")).join("\n\n");
-    const globalExcerpt = integrationDiff(chunkPlan, Math.min(80_000, limit));
+    const globalExcerpt = integrationDiff(chunkPlan, Math.min(80_000, Math.floor(limit * 0.35)));
     const globalMaterial = `${globalExcerpt}\n\n# 全部批次评审发现和跨模块线索\n${localSummary}`;
     if (globalMaterial.length > limit) {
       throw new Error("全局集成评审材料超过 review.maxDiffChars，拒绝截断后放行");
