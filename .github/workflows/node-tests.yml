@@ -24,7 +24,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p "$RUNNER_TEMP/harness-test-bin"
-          printf '#!/bin/sh\\nexit 127\\n' > "$RUNNER_TEMP/harness-test-bin/claude"
+          printf '#!/bin/sh\nexit 127\n' > "$RUNNER_TEMP/harness-test-bin/claude"
           chmod +x "$RUNNER_TEMP/harness-test-bin/claude"
           echo "$RUNNER_TEMP/harness-test-bin" >> "$GITHUB_PATH"
       - name: Unit and integration tests
