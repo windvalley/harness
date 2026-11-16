@@ -49,7 +49,7 @@ describe("自动分批评审规划", () => {
   });
 
   test("二进制变更无法获得源码审查，必须阻断分批评审", () => {
-    const binary = "diff --git a/logo.bin b/logo.bin\\nBinary files a/logo.bin and b/logo.bin differ\\n";
+    const binary = "diff --git a/logo.bin b/logo.bin\nBinary files a/logo.bin and b/logo.bin differ\n";
     assert.throws(() => planChunkedDiff(binary, 3_000), /二进制变更/);
   });
 
