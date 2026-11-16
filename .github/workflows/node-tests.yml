@@ -18,6 +18,15 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      # The project doctor tests require a reviewer executable to exist, but
+      # they never need a live model. Keep CI deterministic without API keys.
+      - name: Set up inert reviewer executable for doctor fixtures
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/harness-test-bin"
+          printf '#!/bin/sh\\nexit 127\\n' > "$RUNNER_TEMP/harness-test-bin/claude"
+          chmod +x "$RUNNER_TEMP/harness-test-bin/claude"
+          echo "$RUNNER_TEMP/harness-test-bin" >> "$GITHUB_PATH"
       - name: Unit and integration tests
         run: npm test
       - name: Documentation consistency
