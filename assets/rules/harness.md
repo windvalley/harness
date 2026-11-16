@@ -89,7 +89,7 @@
 每项验证结果的 `outcome` 与 `reasonCode` 区分通过、命令失败、已知阻塞和未执行；`not_run` 的 `blockedBy` 列出阻断它的检查 ID。
 普通非零记为 `command_failed`，不能据此猜测是断言或环境问题；恢复后重跑受影响检查，必需 `gate` 不得跳过。
 
-验证失败、评审拒绝、`review_stale`、合并冲突、`bad_commit_message`、`branch_commit_rule_invalid`、`branch_moved`、`main_moved` 这类拒绝由 Agent 按拒绝原因修改后重新 verify、review，再交付，不需要用户安排。
+验证失败、评审拒绝、`review_stale`、合并冲突、`bad_commit_message`、`branch_commit_rule_invalid`、`branch_moved`、`main_moved` 这类拒绝由 Agent 按拒绝原因修改后重新 verify、review，再交付，不需要用户安排，也不向用户征询是否修复。
 修复只能改实现、测试或提交本身：任务分支放宽不了门禁，删测试、弱化断言、跳过检查同样不允许。
 需要人的拒绝停下来说明对象和做法：`gate_change_unconfirmed`（人确认门禁改动）、`risk_unconfirmed`（人确认高风险改动）、`plan_unapproved`（用户同意实施）、`platform_missing` 与 `platform_failed`（人安装或登录平台命令）、`version_missing`（人安装版本）、`push_rejected` 与 `not_fast_forward`（远程或本地主分支有来源不明的提交，由人判断）、`push_failed` 与 `push_skipped`（本地交付开启 `push` 后合并已完成但推送没有成功，由人推送）。
 另外按 `core.md` 的停下条件处理：缺权限、需要业务拍板、改动范围明显超出方案、同一个问题连续三轮没有解决。
