@@ -875,7 +875,7 @@ export async function reviewBranch({ cwd, branch, log = console.error, reviewer 
   log(
     `[review] 评审 ${branch}，diff ${diffText.length} 字符，提交 ${commits.count} 个` +
       (commits.truncated ? "（说明过长，只列标题）" : "") +
-      (collapsed.length ? `（${collapsed.length} 个删除的文件只列路径）` : "") +
+      (!chunkPlan && collapsed.length ? `（${collapsed.length} 个删除的文件只列路径）` : "") +
       `，${acceptance ? `验收清单来自${{ main: "主分支", approved: "已授权实施的方案", branch: "任务分支(未确认)" }[acceptance.source]}` : "无验收清单"}`,
   );
   const blockSeverities = config.blockSeverities ?? ["high", "critical"];
@@ -975,7 +975,7 @@ export async function reviewBranch({ cwd, branch, log = console.error, reviewer 
     attempts: attempts ?? undefined,
     reviewerSelection: selection ?? undefined,
     // 记录哪些删除的文件只给了路径，事后能看出这次评审没有读到这些文件的原内容。
-    collapsedDeletions: collapsed.length ? collapsed : undefined,
+    collapsedDeletions: !chunked && collapsed.length ? collapsed : undefined,
     costUsd,
     reviewedAt: new Date().toISOString(),
   });
