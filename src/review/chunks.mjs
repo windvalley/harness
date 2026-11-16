@@ -27,7 +27,9 @@ function fragmentsOf(file, budget, maxChars) {
   const fragments = [];
   let start = 0;
   while (start < file.patch.length) {
-    const prefix = start === 0 ? "" : `${file.header}\n# 以下为同一文件 diff 的连续续片；并非新的改动\n`;
+    const hunk = start === 0 ? null : file.patch.slice(0, start).match(/^@@[^\n]*$/gm)?.at(-1);
+    const prefix = start === 0 ? "" :
+      `${file.header}\n# 以下为同一文件 diff 的连续续片，原文字符偏移 ${start}，所在 hunk: ${hunk ?? "文件头"}\n`;
     const room = budget - prefix.length;
     if (room <= 0) throw new Error("评审上限小于续片文件头，无法安全分批");
     let end = Math.min(file.patch.length, start + room);
@@ -51,6 +53,9 @@ function fragmentsOf(file, budget, maxChars) {
 
 export function planChunkedDiff(diff, maxChars) {
   if (!Number.isSafeInteger(maxChars) || maxChars <= 0) throw new Error("评审上限必须是正整数");
+  if (/^(?:Binary files .* differ|GIT binary patch)$/m.test(diff)) {
+    throw new Error("分批评审包含不可直接审查的二进制变更；请提供可验证的源文件或专门验收证据，不能以文件名代替审查后放行");
+  }
   // 给每批的系统指令、验收、统计和额外上下文留余量。
   const budget = Math.floor(maxChars * 0.72);
   const files = diffFiles(diff);
@@ -73,6 +78,9 @@ export function planChunkedDiff(diff, maxChars) {
     }
   }
   flush();
+  if (chunks.length > 32) {
+    throw new Error(`变更需要 ${chunks.length} 次局部评审，超过自动分批的安全上限 32 次；请先缩小无关变更范围`);
+  }
   const plan = { files, chunks, budget, diffHash: diffDigest(diff), totalChars: diff.length };
   assertChunkCoverage(plan, diff);
   return plan;
