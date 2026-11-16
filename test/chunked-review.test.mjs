@@ -2,11 +2,25 @@ import { strict as assert } from "node:assert";
 import { describe, test, afterEach } from "node:test";
 import { planChunkedDiff, assertChunkCoverage, integrationDiff, chunkedRecordProblem } from "../src/review/chunks.mjs";
 import { reviewBranch } from "../src/review/review.mjs";
-import { APPROVE, makeRepo, readReviewRecord, writeReview } from "./helpers.mjs";
+import { APPROVE, CONFIG, makeRepo, readReviewRecord, writeReview } from "./helpers.mjs";
 
 let repos = [];
 afterEach(() => { for (const repo of repos) repo.cleanup(); repos = []; });
-const setup = () => { const repo = makeRepo(); repos.push(repo); return repo; };
+const setup = (options = {}) => { const repo = makeRepo(options); repos.push(repo); return repo; };
+
+// 与 repo.cli() 使用相同隔离目录；try/finally 防止测试之间泄露证据、密钥及评审配置。
+async function withRepoEnv(repo, task) {
+  const saved = Object.fromEntries(Object.keys(repo.env).map((key) => [key, process.env[key]]));
+  Object.assign(process.env, repo.env);
+  try {
+    return await task();
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+}
 
 const patch = (path, n = 500) =>
   `diff --git a/${path} b/${path}\nnew file mode 100644\nindex 0000000..1234567\n--- /dev/null\n+++ b/${path}\n@@ -0,0 +1,${n} @@\n` +
@@ -89,7 +103,8 @@ describe("自动分批评审与完整门禁", () => {
       return { structured: APPROVE, costUsd: 0.1, backend: "command",
         reviewer: { name: "test-reviewer", client: "command", actualModels: ["fake"] }, attempts: [] };
     };
-    const record = await reviewBranch({ cwd: repo.root, branch: "task/chunked", reviewer, log: () => {} });
+    const record = await withRepoEnv(repo, () =>
+      reviewBranch({ cwd: repo.root, branch: "task/chunked", reviewer, log: () => {} }));
     assert.equal(record.verdict, "approve");
     assert.equal(record.reviewMode, "chunked");
     assert.ok(record.chunked.chunks.length >= 2);
@@ -112,7 +127,8 @@ describe("自动分批评审与完整门禁", () => {
         ? { ...APPROVE, verdict: "reject", findings: [high] } : APPROVE,
       costUsd: 0, backend: "command", reviewer: { name: "stub", client: "command" },
     });
-    const record = await reviewBranch({ cwd: repo.root, branch: "task/reject", reviewer, log: () => {} });
+    const record = await withRepoEnv(repo, () =>
+      reviewBranch({ cwd: repo.root, branch: "task/reject", reviewer, log: () => {} }));
     assert.equal(record.verdict, "reject");
     assert.equal(record.blocking.length, 1);
     assert.match(chunkedRecordProblem(record), /全局集成评审/);
@@ -125,8 +141,70 @@ describe("自动分批评审与完整门禁", () => {
     let calls = 0;
     const reviewer = () => { if (++calls === 2) throw new Error("预算耗尽");
       return { structured: APPROVE, costUsd: 0.1 }; };
-    await assert.rejects(reviewBranch({ cwd: repo.root, branch: "task/fail", reviewer, log: () => {} }), /预算耗尽/);
+    await assert.rejects(withRepoEnv(repo, () =>
+      reviewBranch({ cwd: repo.root, branch: "task/fail", reviewer, log: () => {} })), /预算耗尽/);
     assert.equal(calls, 2);
+    assert.throws(() => readReviewRecord(repo, oid), /ENOENT/);
+  });
+
+
+  test("配置 critical-only 时局部 high 的原始 reject 不得额外阻断", async () => {
+    const repo = setup({ project: { ".harness/config.json": {
+      ...CONFIG, review: { ...CONFIG.review, blockSeverities: ["critical"] },
+    } } });
+    repo.branch("task/severity-local", bigFiles());
+    assert.equal(repo.cli("verify", "--branch", "task/severity-local").status, 0);
+    const high = { severity: "high", dimension: "engineering", file: "module-0.txt",
+      summary: "非阻断级问题", scenario: "输入某些参数导致高严重级别问题" };
+    const reviewer = ({ prompt }) => ({
+      structured: prompt.includes("# 批次 1/")
+        ? { ...APPROVE, verdict: "reject", findings: [high] } : APPROVE,
+      costUsd: 0, backend: "command", reviewer: { name: "stub", client: "command" },
+    });
+    const result = await withRepoEnv(repo, () =>
+      reviewBranch({ cwd: repo.root, branch: "task/severity-local", reviewer, log: () => {} }));
+    assert.equal(result.verdict, "approve");
+    assert.deepEqual(result.blocking, []);
+    assert.equal(result.chunked.chunks[0].verdict, "approve");
+    assert.equal(chunkedRecordProblem(result), null);
+    assert.equal(result.findings.length, 1);
+  });
+
+  test("配置 critical-only 时全局 high 的原始 reject 不得额外阻断", async () => {
+    const repo = setup({ project: { ".harness/config.json": {
+      ...CONFIG, review: { ...CONFIG.review, blockSeverities: ["critical"] },
+    } } });
+    repo.branch("task/severity-global", bigFiles());
+    assert.equal(repo.cli("verify", "--branch", "task/severity-global").status, 0);
+    const high = { severity: "high", dimension: "engineering", file: "module-0.txt",
+      summary: "非阻断级集成发现", scenario: "某场景中接口出现高等级兼容性问题" };
+    const reviewer = ({ prompt }) => ({
+      structured: prompt.includes("全部批次评审发现和跨模块线索")
+        ? { ...APPROVE, verdict: "reject", findings: [high] } : APPROVE,
+      costUsd: 0, backend: "command", reviewer: { name: "stub", client: "command" },
+    });
+    const result = await withRepoEnv(repo, () =>
+      reviewBranch({ cwd: repo.root, branch: "task/severity-global", reviewer, log: () => {} }));
+    assert.equal(result.verdict, "approve");
+    assert.deepEqual(result.blocking, []);
+    assert.equal(result.chunked.integration.verdict, "approve");
+    assert.equal(chunkedRecordProblem(result), null);
+  });
+
+  test("全局文件清单超出可审容量时，不产生任何评审调用和签名记录", async () => {
+    const repo = setup({ project: { ".harness/config.json": {
+      ...CONFIG, review: { ...CONFIG.review, maxDiffChars: 3_000 },
+    } } });
+    const files = Object.fromEntries(Array.from({ length: 15 }, (_, i) =>
+      [`group-${i}.txt`, `message-${i}: ${"x".repeat(220)}\n`]));
+    const oid = repo.branch("task/wide", files);
+    assert.equal(repo.cli("verify", "--branch", "task/wide").status, 0);
+    let calls = 0;
+    const reviewer = () => { calls++; return { structured: APPROVE, costUsd: 0.1 }; };
+    await assert.rejects(withRepoEnv(repo, () =>
+      reviewBranch({ cwd: repo.root, branch: "task/wide", reviewer, log: () => {} })),
+    /改动文件过多|全局集成评审材料超限/);
+    assert.equal(calls, 0, "预检查必须先于任何付费模型调用");
     assert.throws(() => readReviewRecord(repo, oid), /ENOENT/);
   });
 
