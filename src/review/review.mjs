@@ -911,10 +911,14 @@ export async function reviewBranch({ cwd, branch, log = console.error, reviewer 
       `工程质量: ${item.structured.engineeringQuality.rating}，${item.structured.engineeringQuality.evidence}`,
       `发现: ${JSON.stringify(item.structured.findings)}`,
     ].join("\n")).join("\n\n");
-    if (localSummary.length > limit) throw new Error("分批发现摘要超过全局评审输入上限，拒绝截断后放行");
+    const globalExcerpt = integrationDiff(chunkPlan, Math.min(80_000, limit));
+    const globalMaterial = `${globalExcerpt}\n\n# 全部批次评审发现和跨模块线索\n${localSummary}`;
+    if (globalMaterial.length > limit) {
+      throw new Error("全局集成评审材料超过 review.maxDiffChars，拒绝截断后放行");
+    }
     const globalPrompt = buildPrompt({
       acceptance, evidence: evidenceText, commits: commits.text, stats,
-      diff: `${integrationDiff(chunkPlan, Math.min(80_000, limit))}\n\n# 全部批次评审发现和跨模块线索\n${localSummary}`,
+      diff: globalMaterial,
       branch,
     });
     log("[review] 局部覆盖 100%，执行全局集成与验收评审");
@@ -949,6 +953,9 @@ export async function reviewBranch({ cwd, branch, log = console.error, reviewer 
   // 清单来自主分支或用户同意实施的方案时，它就是约定的交付范围，只满足一部分不能合入；
   // 范围确实要缩小时，先向用户说明并重新取得同意。任务分支自带、未经确认的清单仍只作参考。
   if (CONFIRMED_SOURCES.has(acceptance?.source) && structured.requirementFit?.rating === "partial") verdict = "reject";
+  // 即使汇总模型遗漏了局部否决，任一批被拒或集成评审拒绝都必须保持 reject。
+  if (chunked && (chunked.chunks.some((chunk) => chunk.verdict === "reject") ||
+    chunked.integration.verdict === "reject")) verdict = "reject";
 
   const record = writeRecord(root, REVIEW_KIND, branchCommit, {
     verdict,
@@ -1021,7 +1028,8 @@ export function reviewerSummary(record, { forPlatform = false } = {}) {
     effortLabel(reviewer),
     endpoint,
   ].filter(Boolean);
-  return `${parts.join(" / ")}${fallback}`;
+  const chunked = record.reviewMode === "chunked" ? `，分批 ${record.chunked?.chunks?.length ?? "?"} + 全局集成` : "";
+  return `${parts.join(" / ")}${fallback}${chunked}`;
 }
 
 /** 当前目录所在项目的 review 配置；不在已接入的仓库里、读不出配置时返回 null。 */
@@ -1066,6 +1074,9 @@ export function reviewerLines(record) {
   ].filter(Boolean);
   const seconds = typeof reviewer.durationMs === "number" ? `，耗时 ${(reviewer.durationMs / 1000).toFixed(1)} 秒` : "";
   lines.push(`  评审者: ${reviewer.name}（${detail.join("，")}）${seconds}`);
+  if (record.reviewMode === "chunked") {
+    lines.push(`  分批评审: ${record.chunked?.chunks?.length ?? "?"} 批 + 1 次集成评审，覆盖 ${record.chunked?.coverage?.coveredChars ?? 0}/${record.chunked?.coverage?.totalChars ?? 0} 字符`);
+  }
   const earlier = (record.attempts ?? []).filter((item) => item.outcome !== "done");
   if (earlier.length > 0) {
     lines.push(`  由备选 ${reviewer.name} 完成，前面的评审者没有给出结论:`);
