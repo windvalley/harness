@@ -1,7 +1,5 @@
 import { strict as assert } from "node:assert";
 import { describe, test, afterEach } from "node:test";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { planChunkedDiff, assertChunkCoverage, integrationDiff, chunkedRecordProblem } from "../src/review/chunks.mjs";
 import { reviewBranch } from "../src/review/review.mjs";
 import { APPROVE, makeRepo, readReviewRecord, writeReview } from "./helpers.mjs";
@@ -34,7 +32,7 @@ describe("自动分批评审规划", () => {
 
   test("单文件跨批时续片不能遗漏一行，且不得悄悄截断", () => {
     const diff = patch("very-big.js", 600);
-    const plan = planChunkedDiff(diff, 1_000);
+    const plan = planChunkedDiff(diff, 1_600);
     assert.ok(plan.chunks.length > 10);
     assert.ok(plan.files.length === 1);
     assert.ok(plan.chunks.some((chunk) => chunk.text.includes("连续续片")));
@@ -48,6 +46,11 @@ describe("自动分批评审规划", () => {
   test("无法按行拆分的超长行一律失败关闭", () => {
     const diff = patch("huge-line.js", 2) + "+" + "x".repeat(1_100);
     assert.throws(() => planChunkedDiff(diff, 1_000), /超长行|无法按行拆分/);
+  });
+
+  test("二进制变更无法获得源码审查，必须阻断分批评审", () => {
+    const binary = "diff --git a/logo.bin b/logo.bin\\nBinary files a/logo.bin and b/logo.bin differ\\n";
+    assert.throws(() => planChunkedDiff(binary, 3_000), /二进制变更/);
   });
 
   test("校验原始 diff 内容版本，且全局摘要保留全部文件清单", () => {
