@@ -230,6 +230,22 @@ describe("安装与自检", () => {
     assert.doesNotMatch(block, /需要停下时先/, "不能把交方案、等确认也划进上报");
   });
 
+  test("授权内的步骤不向用户征询是否继续，压缩或续接后沿用已有分级与授权", () => {
+    // 压缩后托管块仍在上下文里，core.md 不一定会重读，所以约束同时写进托管块。
+    const block = managedBlockBody();
+    assert.match(block, /实现、提交、验证、按评审意见修改和交付直接执行，不以提问或选项征询是否继续/);
+    assert.match(block, /上下文压缩或续接已有任务后，沿用已确定的分级与授权/);
+    const core = readFileSync(join(PACKAGE_ROOT_TEST, "assets/rules/core.md"), "utf8");
+    assert.match(core, /不把命令清单交给用户逐条运行，也不以提问或选项征询是否继续/);
+    assert.match(core, /上下文压缩或续接已有任务时，沿用已确定的分级与授权，不因此重新分级或重新征询授权/);
+    const rules = readFileSync(join(PACKAGE_ROOT_TEST, "assets/rules/harness.md"), "utf8");
+    assert.match(rules, /不需要用户安排，也不向用户征询是否修复/);
+    // 规则对所有编程智能体通用，不写某个客户端的提问工具名。
+    for (const text of [block, core, rules]) {
+      assert.doesNotMatch(text, /request_user_input|AskUserQuestion/);
+    }
+  });
+
   test("init 在没有任何提交的新仓库上按 HEAD 判断主分支名", () => {
     const repo = setup({ install: false, project: { ".harness/config.json": null, ".harness/policy.json": null, ".harness/verify.json": null } });
     // 删掉分支等价于刚 git init：refs/heads 下没有任何分支，只有 HEAD 指向 main。
