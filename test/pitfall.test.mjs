@@ -254,13 +254,14 @@ describe("接入与门禁", () => {
     assert.equal(readFileSync(join(repo.root, FILE), "utf8"), before);
   });
 
-  test("托管块引用坑位文件与命令，且不展开细则", () => {
+  test("托管块只引用坑位文件，记录方法由文件头承载", () => {
     const repo = setup();
     const agents = readFileSync(join(repo.root, "AGENTS.md"), "utf8");
     const block = agents.slice(agents.indexOf("<!-- harness:start -->"), agents.indexOf("<!-- harness:end -->"));
     assert.match(block, /\.harness\/pitfalls\.md/);
-    assert.match(block, /harness pitfall add/);
+    assert.doesNotMatch(block, /harness pitfall add/);
     assert.doesNotMatch(block, /signature|MAX_ENTRIES|8192/);
+    assert.match(readFileSync(join(repo.root, FILE), "utf8"), /harness pitfall add/);
   });
 
   test("默认卸载保留坑位文件", () => {
