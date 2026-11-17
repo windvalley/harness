@@ -87,6 +87,16 @@ describe("预设解析", () => {
     assert.equal(rule.reason, "x");
   });
 
+  test("disabled 中已声明的预设和项目规则不报未知，只有未声明的规则才报告", () => {
+    const custom = resolvePolicy({
+      presets: ["git-safety"],
+      disabled: ["git-stash", "branch-name", "missing-rule"],
+      rules: [{ id: "branch-name", kind: "branch-name", pattern: "^feature/", reason: "规范", fix: "改名" }],
+    });
+    assert.equal(custom.rules.some((rule) => rule.id === "git-stash" || rule.id === "branch-name"), false);
+    assert.deepEqual(custom.unknownDisabled, ["missing-rule"]);
+  });
+
   test("所有正则都能编译", () => {
     for (const rule of resolved.rules) {
       for (const pattern of [...(rule.patterns ?? []), ...(rule.headerPatterns ?? [])]) {

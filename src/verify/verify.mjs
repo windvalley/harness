@@ -26,6 +26,7 @@ import { evaluateCoverage, evaluateTdd, testEvidenceChecks, testEvidenceProblems
 import { checkFingerprint, checkPhase, checkScopeDigest, POST_MERGE } from "./checks.mjs";
 import { readAttestation } from "./attestation.mjs";
 import { hasObligation } from "./obligation.mjs";
+import { assertBranchRule } from "../policy/branch-name.mjs";
 
 export { checkFingerprint } from "./checks.mjs";
 
@@ -413,6 +414,7 @@ export async function verify({
   // 首次接入时主分支还没有配置，按接入分支（gateBranch）提议的配置验证。
   const project = loadGateProject(cwd, { branch: gateBranch });
   const root = project.root;
+  assertBranchRule({ project, ref: gateBranch ?? head });
   const headCommit = resolveCommit(root, head);
   const baseRef = base ?? mainBranch(project);
   const baseCommit = resolveCommit(root, baseRef);

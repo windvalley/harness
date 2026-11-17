@@ -168,7 +168,7 @@ describe("接入已有项目", () => {
     assert.match(merged.stderr, /合并完成，还需要在客户端做/);
 
     // 接入后主分支受新门禁保护：直接改主分支被拒绝。
-    const target = commitOnBranch(repo, "task/after", { "a.txt": "a\n" });
+    const target = commitOnBranch(repo, "feature/after", { "a.txt": "a\n" });
     const refused = sh(repo.root, "git", ["update-ref", "refs/heads/main", target], repo.env);
     assert.notEqual(refused.status, 0);
     assert.match(refused.stderr, /本地主分支只允许由 harness merge 更新/);

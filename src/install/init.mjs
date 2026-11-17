@@ -50,6 +50,14 @@ function starterPolicy({ mainBranch }) {
     disabled: [],
     rules: [
       {
+        id: "branch-name",
+        kind: "branch-name",
+        pattern: "^(feature|fix|docs|refactor|test|chore)/[a-z0-9]+(?:-[a-z0-9]+)*$",
+        example: "feature/add-policy-check",
+        reason: "任务分支名称必须符合项目分支规范",
+        fix: "使用类型前缀和小写 kebab-case 任务描述，例如 feature/add-policy-check",
+      },
+      {
         id: "commit-message",
         kind: "commit-message",
         // 提交信息规范只在这一条里定义：钩子、verify 与 review 的前置检查、status 和合并共用同一份判定。

@@ -27,7 +27,7 @@ harness 是一套面向 AI 编程 Agent 的 AI-Native 研发流程与交付门�
 ```text
 Agent 调用工具 ----> [1] 实时拦截：读写文件、执行命令之前按规则判定
       |
-  git commit ------> [2] git 钩子：pre-commit 查暂存内容，commit-msg 查提交信息
+  git commit ------> [2] git 钩子：pre-commit 查分支名与暂存内容，commit-msg 查提交信息
       |
   任务分支 --> verify --> review --> confirm --> merge  --> 本地主分支
                签名证据   独立评审    人工确认      或 submit --> PR/MR，平台合并后 sync 快进本地主分支
@@ -37,7 +37,7 @@ Agent 调用工具 ----> [1] 实时拦截：读写文件、执行命令之前按
 | 层 | 何时生效 | 管什么 | 覆盖谁 |
 | --- | --- | --- | --- |
 | 实时拦截 | 支持并已启用钩子的客户端调用工具之前 | 读取密钥、改写门禁入口、不可逆的 git 操作、绕过开关 | 已正确接入钩子的客户端 |
-| git 钩子 | 本机钩子安装并生效时的提交与引用更新 | 提交信息、暂存的密钥文件、主分支的写入 | 经过本机 git 钩子的客户端和人 |
+| git 钩子 | 本机钩子安装并生效时的提交与引用更新 | 分支命名、提交信息、暂存的密钥文件、主分支的写入 | 经过本机 git 钩子的客户端和人 |
 | 受控交付 | 通过 `harness merge` 或 `harness submit` 交付时 | 验证证据、独立评审、实施授权、门禁改动与交付设置变化的人工确认 | 使用 harness 交付命令的任务 |
 
 前两层负责当场纠正：拦截信息里带着原因和正确做法，Agent 照着改道即可。
@@ -129,6 +129,8 @@ git clone https://github.com/windvalley/harness.git ~/github/harness
 ```
 
 Agent 应直接从 GitHub 获取最新版本并安装到本机，不依赖本机已有仓库；再阅读来源仓库的 README 和接入说明，调查项目规则、Git 状态、已有钩子和检查命令，预览改动并保留有效规则和检查。
+首次接入先调查项目已有明确的分支命名规范，有则优先转换到 `init` 生成的 policy 中，首次提交接入改动前完成对齐；没有明确约定时才使用默认命名规则。
+对齐时只调整 `branch-name` 规则，保留其他 presets、提交规范和项目规则，并保留原规范说明及出处，使其与 policy 一致；已有 policy 不自动覆盖。
 接入默认走任务分支、验证、独立评审、人工确认和受控交付。
 交付方式在提交接入改动前确定，默认本地交付；主分支在 GitHub 或 GitLab 上、合并走 PR/MR 时，见下面的“接入时就用 PR/MR”。
 工作环境由 Agent 根据项目规则和现状准备，用户不需要先创建分支或 Worktree。
@@ -141,6 +143,7 @@ Agent 应保留用户已有改动；确实需要处理这些改动时，先说�
 合并后完成[客户端操作](#客户端那一侧)，再由 Agent 运行诊断，区分配置就位、已验证生效和仍待验证。
 
 下面以新建 Linked Worktree 为例列出完整命令，供 Agent 执行或手工排障时参考。
+示例假设项目没有已有分支命名约定；有明确规范时，接入分支名及下文命令参数都按该规范替换，并在首次提交前对齐 policy。
 使用现有目录时省略 Worktree 创建步骤，合并前切回主分支，并改用 `node ~/github/harness/bin/harness.mjs merge`，因为主分支上还没有项目入口。
 
 ```bash
@@ -154,6 +157,7 @@ node ~/github/harness/bin/harness.mjs init --dry-run
 # 2. 写入；项目里已有其他门禁时，按预览结果决定是否加 --take-over
 node ~/github/harness/bin/harness.mjs init
 # 核对起始检查与项目真实命令，保留或迁移已有有效规则，再提交
+# 分支命名有项目既有规范时，先把 policy.json 的 branch-name 对齐到该规范，保留其他规则
 
 # 3. 提交；全部入库，包括入口 .harness/bin/harness
 git add -A
@@ -490,10 +494,10 @@ Agent 开始任务前先判断分级，规则写在 `.harness/rules/core.md`，�
 先方案后实施的任务，方案提交到任务分支后、交给你之前，Agent 可以让另一个模型审一轮方案：
 
 ```sh
-harness review-plan --branch feat/login        # 默认只展示 high 及以上的发现
-harness review-plan --branch feat/login --all  # 展示全部
-harness review-plan --branch feat/login --timeout-seconds 300 --attempt-timeout-seconds 90
-harness review-plan --branch feat/login --max-queries 25  # 调整读仓库的查询次数上限
+harness review-plan --branch feature/login        # 默认只展示 high 及以上的发现
+harness review-plan --branch feature/login --all  # 展示全部
+harness review-plan --branch feature/login --timeout-seconds 300 --attempt-timeout-seconds 90
+harness review-plan --branch feature/login --max-queries 25  # 调整读仓库的查询次数上限
 ```
 
 代码评审发生在实施之后，并且把验收清单当作既定标准；清单本身有遗漏或理解偏差时，实现会照着错的标准通过评审。
@@ -603,15 +607,56 @@ Agent 核实这只是现有表单的局部校验，不需要调整接口、数�
 
 ### 分支命名
 
-任务分支优先遵循项目已有的明确命名规范。
-项目没有明确规定时，Agent 按 `.harness/rules/core.md` 的默认约定创建分支：使用 `<type>/<task>`，类型采用 `feature`、`fix`、`docs`、`refactor`、`test`、`chore`，任务描述使用简短的小写英文和数字，单词以 `-` 分隔。
-例如 `feature/add-policy-check`、`fix/commit-message-validation`、`docs/update-install-guide`；需要关联工单时可加入数字工单号，例如 `fix/123-login-timeout`。
-默认不使用 Codex、Claude、dsh、Kimi 等客户端名称作为分支前缀，`release/`、`hotfix/` 按项目发布流程采用。
+分支命名运行时以 `.harness/policy.json` 的 `branch-name` 规则为唯一机器判定来源，Agent 和程序读取同一份要求。
+首次接入先调查项目已有明确命名规范，有则优先转写到 `init` 生成的 `branch-name` 规则，首次提交接入改动前完成对齐；没有明确约定时才使用下面的默认规则。
+对齐只调整这条规则，保留其他 presets、`commit-message` 和项目规则；已有 policy 不自动覆盖。
+项目原有规范说明及出处继续保留，并与 policy 保持一致，不由运行时解析自然语言来选择执行要求。
+例如项目明确采用 `team/ABC-123` 格式时，将 `pattern` 写成 `^team/ABC-[0-9]+$`，并同步这条规则的 `example` 和 `fix`。
 
-这是由 Agent 执行的命名约定，手工 Git 操作不会仅因分支名称不符合默认约定而被 harness 拒绝。
-已有分支继续使用原名称，主分支名沿用 `.harness/config.json` 的 `mainBranch` 设置。
-`init` 会分发默认约定，已接入项目通过 `upgrade` 获得新版规则和 `AGENTS.md` 托管块。
-项目自定义命名规范应写在 `AGENTS.md` 托管块之外或项目自有规则文件中，避免升级重写 `.harness/rules/` 时丢失。
+`init` 生成的默认规则：
+
+```json
+{
+  "id": "branch-name",
+  "kind": "branch-name",
+  "pattern": "^(feature|fix|docs|refactor|test|chore)/[a-z0-9]+(?:-[a-z0-9]+)*$",
+  "example": "feature/add-policy-check",
+  "reason": "任务分支名称必须符合项目分支规范",
+  "fix": "使用类型前缀和小写 kebab-case 任务描述，例如 feature/add-policy-check"
+}
+```
+
+默认名称采用 `<type>/<task>`，允许 `feature`、`fix`、`docs`、`refactor`、`test`、`chore` 前缀，任务描述使用小写英文和数字，单词以 `-` 分隔。
+例如 `feature/add-policy-check`、`fix/123-login-timeout`、`docs/update-install-guide` 都符合默认规则，客户端名称前缀、大小写混用和下划线不符合。
+`release/`、`hotfix/` 默认不豁免，需要时在项目的 `pattern` 中明确允许。
+
+| 字段 | 要求 | 说明 |
+| --- | --- | --- |
+| `id`、`kind` | 默认均为 `branch-name` | 生效的 `branch-name` 规则最多一条 |
+| `pattern` | 必填非空字符串 | JavaScript 正则，匹配实际分支名称；默认正则限定完整名称 |
+| `example` | 可选字符串 | 拒绝时展示的正确命名示例 |
+| `reason`、`fix` | 必填非空字符串 | 拒绝时展示的原因与正确做法 |
+
+规则存在即执行，沿用 `disabled` 按规则 ID 关闭，例如 `"disabled": ["branch-name"]`。
+自定义命名直接修改 policy，并同步项目原有规范说明；运行时只读取 policy，不同时执行另一套自然语言判定。
+`upgrade` 更新规则指引和托管块，保留项目的 policy 配置。
+
+| 位置 | 什么时候 | 不合规时 |
+| --- | --- | --- |
+| `pre-commit` 钩子 | 每次提交，包括手工提交 | 拒绝提交，不产生提交 |
+| `harness status` | 只读检查 | 列一项 `branch-name` 并标 `FAIL` |
+| `harness merge`、`harness submit` | 交付之前 | 以 `bad_branch_name` 再次拒绝，绕过钩子或提交后改名也不能通过 |
+| `harness doctor` | 项目诊断 | 规则配置错误时显示 `project:branch-name` |
+
+`verify`、`review` 面向提交内容，不因分支名称不合规而拒绝；任务分支提议的规则配置错误仍会在开始检查或调用评审者前报出，避免错误配置进入主分支。
+检查前先按 Git 解析实际分支：`HEAD` 使用当前分支，`refs/heads/feature/login` 使用 `feature/login`，远程跟踪引用去掉实际远程名前缀后判断。
+配置中的主分支名豁免任务命名要求，原有主分支写入保护继续生效；`origin/main` 等远程主分支仍可按下面的同步流程走门禁。
+SHA、tag、detached HEAD 可用于纯内容验证与评审，不会被认定为分支命名通过；启用规则后的交付必须有明确的分支来源，detached HEAD 提交会被拒绝。
+不合规时先修正任务分支名，并核对验收清单路径与 `harness status` 的结果；已有内容证据与评审仍有效时直接复用，不因只改分支名而重复执行。
+
+实际判定以主分支 policy 为准，任务分支修改自己的规则不能放宽本次门禁；首次接入尚无主分支配置时，沿用接入分支提议配置和人工确认流程。
+规则变更经人工确认合入主分支后生效。
+字段类型错误、未知字段、无效正则或重复规则以 `branch_name_rule_invalid` 报告；任务分支提议的规则和最终合并结果都要检查，错误配置不能进入主分支。
 
 ### 一次任务
 
@@ -669,7 +714,8 @@ harness merge  --branch feature/login   # 本地交付：核对证据与评审�
 
 - 验证入口失败先按下面的“验证入口受阻时”做最小诊断，区分缺失证据与目标行为失败。
   找到符合项目规则且覆盖同一验收行为的定向入口时，继续完成验证；必需 `gate` 仍须通过，不能用外部证据跳过它。
-- 验证失败、评审拒绝、`review_stale`、合并冲突、`bad_commit_message`、`branch_commit_rule_invalid`、`branch_moved`、`main_moved` 这类拒绝，由 Agent 按原因修改后重新 verify、review，再交付，不需要你安排。
+- 验证失败、评审拒绝、`review_stale`、合并冲突、`branch_name_rule_invalid`、`bad_commit_message`、`branch_commit_rule_invalid`、`branch_moved`、`main_moved` 这类拒绝，由 Agent 按原因修改后重新 verify、review，再交付，不需要你安排。
+  `branch_name_rule_invalid` 只有在任务分支提议的规则有误时才由 Agent 修正；主分支上已生效的规则有误时，需要人修正主分支配置。
 - 修复只能改实现、测试或提交本身：任务分支放宽不了门禁，删测试、弱化断言、跳过检查也被项目规范禁止。
 - 常见的需要人的情况只有两种：改动涉及门禁本身（`merge` 与 `sync` 的拒绝码是 `gate_change_unconfirmed`，`status` 里同一件事显示为 `gate_unconfirmed`），由人看过摘要后亲自确认；同一个问题连续三轮没有解决，Agent 说明情况后由人决定。
 - 其余需要人的拒绝少见，出现时 Agent 停下说明对象和做法：
@@ -780,7 +826,7 @@ git -C <主 Worktree> worktree unlock <Worktree 路径>
 
 ### 验收清单
 
-清单放在 `.harness/acceptance/<分支名>.md`，分支名里字母、数字、`.`、`_`、`-` 以外的字符换成 `-`，例如 `feat/login` 对应 `.harness/acceptance/feat-login.md`。
+清单放在 `.harness/acceptance/<分支名>.md`，分支名里字母、数字、`.`、`_`、`-` 以外的字符换成 `-`，例如 `feature/login` 对应 `.harness/acceptance/feature-login.md`。
 每条写成能用测试或命令验证的结果。
 清单可以随任务分支提交，评审会标注它“尚未经人工确认”；也可以先合入主分支。
 从主分支继承、在任务分支上没有改过的清单，仍按主分支上确认过的清单对待。
@@ -840,7 +886,7 @@ harness 不解释检查的内容，换成别的项目只需要改 `howToVerify` 
 }
 ```
 
-在验收清单 `.harness/acceptance/feat-login.md` 里，把后置条目写进 `## 合并后验收` 二级章节：
+在验收清单 `.harness/acceptance/feature-login.md` 里，把后置条目写进 `## 合并后验收` 二级章节：
 
 ```markdown
 ## 应该发生
@@ -857,7 +903,7 @@ harness 不解释检查的内容，换成别的项目只需要改 `howToVerify` 
 **2. 合并前：照常验证、评审**
 
 ```bash
-harness verify --plan --branch feat/login
+harness verify --plan --branch feature/login
 ```
 
 ```text
@@ -869,7 +915,7 @@ harness verify --plan --branch feat/login
 `unit` 是项目已有的 `gate` 检查。
 `POST_MERGE` 表示这项检查在合并后才要求登记，不会在 `verify` 里执行，也不阻塞合并。
 `harness verify`、`harness review` 照常运行：`verify` 的结果里同样列出 `POST_MERGE login-e2e`，`review` 只逐条核对合并前的清单内容，不评判 `## 合并后验收` 章节。
-`harness status --branch feat/login` 里这项显示为 `[-] evidence:postMerge`，并提示“不阻塞本次交付”。
+`harness status --branch feature/login` 里这项显示为 `[-] evidence:postMerge`，并提示“不阻塞本次交付”。
 
 合并前提前登记会被拒绝，因为证据要绑定合入后的主分支提交：
 
@@ -880,7 +926,7 @@ harness verify --plan --branch feat/login
 **3. 合并：交付完成，但任务还没有完成**
 
 ```bash
-harness merge --branch feat/login
+harness merge --branch feature/login
 ```
 
 合并前，harness 为这项检查写下一条义务记录，键是检查 ID 加分支顶端。
@@ -888,11 +934,11 @@ harness merge --branch feat/login
 
 ```text
 合并后验收待完成:
-  待验收 login-e2e（分支 feat/login）：确认测试环境已部署合入后的主分支，再运行 pnpm e2e --grep login，报告写明提交号
-    登记: harness attest --branch feat/login --check login-e2e --command "<实际命令>" --report <报告>
+  待验收 login-e2e（分支 feature/login）：确认测试环境已部署合入后的主分支，再运行 pnpm e2e --grep login，报告写明提交号
+    登记: harness attest --branch feature/login --check login-e2e --command "<实际命令>" --report <报告>
 ```
 
-之后 `harness status --branch feat/login` 显示如下，退出码为 1：
+之后 `harness status --branch feature/login` 显示如下，退出码为 1：
 
 ```text
   [ok] branch: 该分支已经包含在主分支中
@@ -915,7 +961,7 @@ harness 不部署，也不核对测试环境部署的是哪个提交。
 ```bash
 cd <主 Worktree>
 pnpm e2e --grep login > /tmp/e2e-login.md 2>&1 \
-  && harness attest --branch feat/login --check login-e2e \
+  && harness attest --branch feature/login --check login-e2e \
        --command "pnpm e2e --grep login" \
        --report /tmp/e2e-login.md
 ```
@@ -924,10 +970,10 @@ pnpm e2e --grep login > /tmp/e2e-login.md 2>&1 \
 不要写成 `pnpm e2e ... | tee`：管道的退出码取最后一个命令，`tee` 会吞掉 e2e 的失败。
 
 ```text
-已登记 feat/login 的 post-merge 外部证据 login-e2e（检查范围 a809357dc3ae，报告 183673f4d6e2），关闭 1 条合并后验收义务
+已登记 feature/login 的 post-merge 外部证据 login-e2e（检查范围 a809357dc3ae，报告 183673f4d6e2），关闭 1 条合并后验收义务
 ```
 
-再看 `harness status --branch feat/login`：
+再看 `harness status --branch feature/login`：
 
 ```text
   [ok] branch: 该分支已经包含在主分支中
@@ -945,7 +991,7 @@ pnpm e2e --grep login > /tmp/e2e-login.md 2>&1 \
 
 **远程交付**
 
-把第 3 步的 `merge` 换成 `harness submit --branch feat/login`，义务在 `submit` 时写下。
+把第 3 步的 `merge` 换成 `harness submit --branch feature/login`，义务在 `submit` 时写下。
 平台合入后运行 `harness sync`，`sync` 的输出列出待办，再按第 4 步登记。
 `sync` 之前登记同样会被拒绝。
 PR/MR 描述里这项显示为 `合并后验收 login-e2e: <howToVerify>（平台合入并 sync 后完成）`，只写检查 ID 与验收方式，不写 `attest` 登记的实际命令。
@@ -973,7 +1019,7 @@ pnpm e2e --grep login > /tmp/e2e-login.md 2>&1 \
 ```
 
 关闭规则是：同一检查下，分支顶端已包含在被测提交里的全部义务一并关闭。
-这次测试跑在同时包含 `feat/login` 与 `fix/login-gateway` 的主分支上，所以两个分支的义务都被关闭，不需要对原分支再登记。
+这次测试跑在同时包含 `feature/login` 与 `fix/login-gateway` 的主分支上，所以两个分支的义务都被关闭，不需要对原分支再登记。
 修复分支只要改到该检查的 `when` 范围，合入后就同样产生这项义务，登记时一并关闭。
 
 ### 评审结论
@@ -1655,7 +1701,7 @@ TDD 当前实现与还原实现的测试、coverage 子命令同样保留已知�
 }
 ```
 
-示例只列出新增的一条规则，`init` 生成的 `commit-message` 规则照常留在 `rules` 里。
+示例只列出新增的一条规则，`init` 生成的 `branch-name`、`commit-message` 规则照常留在 `rules` 里。
 预设规则在前，项目规则在后；项目规则与预设规则同 id 时覆盖预设。
 `disabled` 按 id 关闭规则，写了不存在的 id 时 `harness doctor` 会指出来。
 每条规则都要写 `reason` 和 `fix`，拦截时原样展示给 Agent。
@@ -1669,6 +1715,7 @@ TDD 当前实现与还原实现的测试、coverage 子命令同样保留已知�
 | `shell-forbid` | 命令 | `patterns`、`scope` | 实时拦截 |
 | `shell-secret-access` | 命令里出现密钥文件 | `patterns`、`allowVerbs` | 实时拦截 |
 | `commit-message` | 提交信息 | `pattern`、`types`、`lang`、`header`、`body`、`forbidPatterns`、`example`，见“提交信息” | `commit-msg`；`verify`、`review` 前置检查；`status`；合并 |
+| `branch-name` | 任务分支命名 | `pattern`、`example`，见“分支命名” | `pre-commit` 提前拒绝；交付前最终检查；`status` 只读展示；`doctor` 配置诊断 |
 | `commit-forbid` | 能否在当前位置提交 | `when` | `pre-commit` |
 
 - 路径字段是相对仓库根的 glob；`patterns`、`pattern` 是 JavaScript 正则，写在 JSON 里反斜杠要写两次。
@@ -2061,6 +2108,8 @@ harness 防的是 Agent 的误操作，以及被提示注入后常见的绕过�
 | 接入前需要手工创建 Worktree、依次运行命令吗 | 在目标项目中用自然语言请求接入即可；Agent 按项目规则准备环境，是否新建 Worktree 取决于实际约束；必须由人执行的确认与客户端操作会单独提示 |
 | Agent 报告初始化成功，是否已经全部接入 | 还要核对真实检查、验证与评审、确认和合并、当前客户端的启用情况；配置就位不等于当前会话已验证生效 |
 | `合并被拒绝(bad_commit_message)` | 分支上有提交不符合提交信息规范；`harness status` 会列出具体提交与不符合的条目，在任务分支改写后再重新 verify、review |
+| `bad_branch_name` | 实际分支名不符合 policy，或交付没有明确的分支来源；按提示修正分支名，核对验收清单路径，再运行 `harness status` |
+| `branch_name_rule_invalid` | 分支命名规则配置错误；按 `doctor` 或拒绝提示修正 policy，不绕过检查把错误规则合入主分支 |
 | `主 Worktree 当前不在 main 分支` 或 `存在未提交或未跟踪文件` | Agent 先核对状态并保留已有改动，再按项目规则准备主 Worktree；需要处置用户改动时说明具体对象并取得授权，不能直接丢弃 |
 | `本机没有安装门禁锁定的版本` | Agent 工具调用被拦截时，由人在项目目录运行 `node ~/github/harness/bin/harness.mjs install --local`，再让 Agent 继续诊断 |
 | `gate_change_unconfirmed` | Agent 展示确认摘要；由人在自己的终端执行它给出的带 `--yes` 的确认命令 |

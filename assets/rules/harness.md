@@ -7,6 +7,9 @@
 ## 接入项目
 
 - 先阅读 harness 仓库的 README 与参考手册，调查项目规则、Git 状态、已有钩子和真实检查命令，并运行 `init --dry-run` 预览。
+- 首次接入优先沿用项目已有明确的分支命名规范，在首次提交接入改动前，将它转写到 `init` 生成的 `.harness/policy.json` 的 `branch-name` 规则。
+  对齐该规则的 `pattern`、`example` 和 `fix`；没有明确约定时才采用默认规则，已有 policy 不自动覆盖，并保留其他 presets、提交规范与项目规则。
+  保留项目原有说明及出处，使其与 policy 一致；运行时仍只按 policy 判定，不解析自然语言来决定优先级。
 - 按项目约束选择接入方式，准备任务分支与需要的 Worktree，不要求用户预先创建。
   接入默认走受控流程，是否新建 Linked Worktree 取决于隔离需要与项目规则。
 - 保留已有有效规则和检查，把起始检查对应到项目真实命令，明确占位与未执行项。
@@ -47,7 +50,7 @@
 先按 `core.md` 判断任务分级：直接实施的任务从第 1 步开始；先方案后实施的任务，方案经用户授权后再从第 1 步开始。
 
 1. 按项目规则准备任务分支和工作环境，需要 Worktree 时由 Agent 创建或复用符合隔离要求的目录。
-   新建分支遵循 `core.md` 的“分支命名”，项目已有明确规则时优先沿用。
+   新建分支遵循 `.harness/policy.json` 的 `branch-name` 规则；提交前和交付前共用同一份判定，`status` 只读展示结果。
    在任务分支里实现并提交，提交信息按项目规范，`commit-msg` 钩子按 `.harness/policy.json` 的 `commit-message` 规则校验，`verify` 与 `review` 也会在动手前再判一次。
    提交后、`harness verify` 之前按 `method-review.md` 自审，发现问题先改完再提交一次，然后去验证。
    自审改出的新提交会让已有证据与评审作废，所以不放在验证之后。
@@ -91,7 +94,9 @@
 每项验证结果的 `outcome` 与 `reasonCode` 区分通过、命令失败、已知阻塞和未执行；`not_run` 的 `blockedBy` 列出阻断它的检查 ID。
 普通非零记为 `command_failed`，不能据此猜测是断言或环境问题；恢复后重跑受影响检查，必需 `gate` 不得跳过。
 
-验证失败、评审拒绝、`review_stale`、合并冲突、`bad_commit_message`、`branch_commit_rule_invalid`、`branch_moved`、`main_moved` 这类拒绝由 Agent 按拒绝原因修改后重新 verify、review，再交付，不需要用户安排，也不向用户征询是否修复。
+验证失败、评审拒绝、`review_stale`、合并冲突、`branch_name_rule_invalid`、`bad_commit_message`、`branch_commit_rule_invalid`、`branch_moved`、`main_moved` 这类拒绝由 Agent 按拒绝原因修改后重新 verify、review，再交付，不需要用户安排，也不向用户征询是否修复。
+`branch_name_rule_invalid` 只有在任务分支提议的规则有误时才由 Agent 修正；主分支上已生效的规则有误时，需要人修正主分支配置。
+`bad_branch_name` 先修正分支名称并核对验收清单路径，再查看 `status` 判断已有验证与评审是否仍有效，不因只改分支名而重复执行内容检查。
 修复只能改实现、测试或提交本身：任务分支放宽不了门禁，删测试、弱化断言、跳过检查同样不允许。
 需要人的拒绝停下来说明对象和做法：`gate_change_unconfirmed`（人确认门禁改动）、`risk_unconfirmed`（人确认高风险改动）、`plan_unapproved`（用户同意实施）、`platform_missing` 与 `platform_failed`（人安装或登录平台命令）、`version_missing`（人安装版本）、`push_rejected` 与 `not_fast_forward`（远程或本地主分支有来源不明的提交，由人判断）、`push_failed` 与 `push_skipped`（本地交付开启 `push` 后合并已完成但推送没有成功，由人推送）。
 另外按 `core.md` 的停下条件处理：缺权限、需要业务拍板、改动范围明显超出方案、同一个问题连续三轮没有解决。

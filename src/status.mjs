@@ -13,6 +13,7 @@ import { approvalState, assessRisk, planEnforced } from "./plan/plan.mjs";
 import { latestSubmit } from "./delivery/submit.mjs";
 import { unresolvedStop } from "./stop/session.mjs";
 import { commitRangeProblems, commitRuleErrorAt } from "./policy/commit-message.mjs";
+import { assertBranchPolicy, branchRuleErrorAt } from "./policy/branch-name.mjs";
 import { resolvePolicy } from "./policy/resolve.mjs";
 import { FLAG_HITS, PITFALL_FILE, pitfallSummary } from "./pitfall/pitfall.mjs";
 
@@ -109,6 +110,25 @@ export function branchStatus({ cwd, branch }) {
     return result;
   }
   add("branch", "ok", `待合入 ${branchCommit.slice(0, 10)} -> ${mainRef}`);
+
+  try {
+    const { spec, source } = assertBranchPolicy({ project, root, branch, requireBranch: true });
+    let proposed = null;
+    try {
+      proposed = branchRuleErrorAt(root, planMergeResult({ project, root, branch }).resultCommit);
+    } catch {
+      // 合并冲突由交付阶段处理，不把无法生成合并结果误判为命名配置错误。
+    }
+    if (proposed) {
+      add("branch-name", "fail", `合并结果里的分支命名规则不能用：${proposed}`);
+      block("branch_name_rule_invalid", "分支命名规则配置有误");
+    } else {
+      add("branch-name", spec ? "ok" : "skip", spec ? `分支 ${source.name} 符合命名规范` : "未启用分支命名规则");
+    }
+  } catch (error) {
+    add("branch-name", "fail", error.message);
+    block(error.code ?? "branch_name_rule_invalid", error.code === "bad_branch_name" ? "分支名称不符合规范" : "分支命名规则配置有误");
+  }
 
   // 提交信息与合并同码：status 说可以交付时，merge 不应再以 bad_commit_message 拒绝。
   try {

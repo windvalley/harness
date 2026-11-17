@@ -44,6 +44,7 @@ import { approvalState, assessRisk, planEnforced } from "../plan/plan.mjs";
 import { MERGE_TOKEN_ENV, mainUpdateToken } from "../githook.mjs";
 import { divergedGuidance, fetchRemoteMain, pushMain } from "../delivery/remote.mjs";
 import { commitRangeProblems, commitRuleErrorAt } from "../policy/commit-message.mjs";
+import { assertBranchPolicy, branchRuleErrorAt } from "../policy/branch-name.mjs";
 import { resolvePolicy } from "../policy/resolve.mjs";
 import { leftoverWorktrees } from "../worktree/clean.mjs";
 
@@ -256,6 +257,11 @@ export function reviewStaleFiles({ root, review, mainCommit, branchCommit }) {
  * 任何一项不满足都抛 MergeError，调用方不需要重复判断。
  */
 export async function checkGates({ project, root, branch, log = console.error, dryRun = false, label = "merge" }) {
+  try {
+    assertBranchPolicy({ project, root, branch, requireBranch: true });
+  } catch (error) {
+    throw new MergeError(error.message, error.code);
+  }
   const bootstrap = Boolean(project.bootstrap);
   const mainRef = mainBranch(project);
   const policy = project.config.merge ?? {};
@@ -274,6 +280,8 @@ export async function checkGates({ project, root, branch, log = console.error, d
 
   const planned = planMergeResult({ project, root, branch });
   const { fastForward, resultTree, resultCommit: newHead } = planned;
+  const branchRuleError = branchRuleErrorAt(root, newHead);
+  if (branchRuleError) throw new MergeError(`合并结果里的分支命名规则不能用：${branchRuleError}。在任务分支修正后重新验证和评审`, "branch_name_rule_invalid");
   if (bootstrap && !fastForward) {
     throw new MergeError(
       `首次接入要求接入分支包含最新的 ${mainRef}：在分支上 git merge ${mainRef} 或变基后重试`,

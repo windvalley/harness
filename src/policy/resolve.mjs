@@ -28,18 +28,18 @@ export function resolvePolicy(policy) {
   for (const id of presets) {
     const preset = loadPreset(id);
     for (const rule of preset.rules) {
+      seen.add(rule.id);
       if (disabled.has(rule.id)) continue;
       rules.push({ ...rule, preset: id });
-      seen.add(rule.id);
     }
   }
 
   for (const rule of policy.rules ?? []) {
+    seen.add(rule.id);
     if (disabled.has(rule.id)) continue;
     const index = rules.findIndex((item) => item.id === rule.id);
     if (index >= 0) rules[index] = { ...rule, preset: rules[index].preset };
     else rules.push({ ...rule, preset: null });
-    seen.add(rule.id);
   }
 
   const unknownDisabled = [...disabled].filter((id) => !seen.has(id));

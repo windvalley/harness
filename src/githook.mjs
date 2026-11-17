@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { matchAny } from "./lib/glob.mjs";
 import { currentBranch, git, gitOk, isLinkedWorktree, ZERO_OID } from "./lib/git.mjs";
 import { describeProblems, messageProblems, normalizeMessage, resolveCommitRule } from "./policy/commit-message.mjs";
+import { assertBranchPolicy } from "./policy/branch-name.mjs";
 import { evaluateCommit, formatDenial } from "./policy/engine.mjs";
 import { resolvePolicy } from "./policy/resolve.mjs";
 import { signPayload, loadKey } from "./lib/store.mjs";
@@ -28,7 +29,7 @@ function deny(rule, detail) {
  * 暂存区检查：git 层是唯一所有客户端都会经过的入口。
  * 只判路径与新增内容，不判生成文件头（无法区分人工修改与生成器产出）。
  */
-export function checkStaged({ root, resolved }) {
+export function checkStaged({ root, resolved, config = {} }) {
   // 先判提交本身能不能发生（例如主 Worktree 只用来合并），再判暂存了什么。
   const branch = currentBranch(root);
   const commit = evaluateCommit({
@@ -36,6 +37,12 @@ export function checkStaged({ root, resolved }) {
     context: { linkedWorktree: isLinkedWorktree(root), branch, onMainBranch: ["main", "master"].includes(branch) },
   });
   if (commit.decision === "deny") return commit;
+
+  try {
+    assertBranchPolicy({ project: { root, policy: { rules: resolved.rules }, config }, requireBranch: true, checkRule: false });
+  } catch (error) {
+    return deny({ id: "branch-name", reason: "分支命名检查未通过", fix: "按 .harness/policy.json 的 branch-name 规则修正后重试" }, `${error.code}: ${error.message}`);
+  }
 
   const paths = gitOk(root, ["diff", "--cached", "--name-only", "--no-renames"])
     .split("\n")

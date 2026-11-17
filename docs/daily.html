@@ -20,7 +20,7 @@
 
 <script src="assets/docs.js?v=acdbbf2b96" defer></script>
 </head>
-<body data-page="daily" data-index="26ff9c640e">
+<body data-page="daily" data-index="9d1e376ac4">
 <a class="skip-link" href="#main-content">跳到主要内容</a>
 <header class="topbar">
   <div class="topbar-inner">
@@ -55,13 +55,16 @@
     <p>用户当前只要求分析、评估或讨论时仍保持只读，不能因为需求看起来小就动手。用户也可以补充约束或调整节奏。</p>
 
     <h2 tabindex="-1" id="branch-naming">分支命名</h2>
-    <p>任务分支优先遵循项目已有的明确命名规范。没有明确规定时，Agent 按 <code>.harness/rules/core.md</code> 的默认约定使用 <code>&lt;type&gt;/&lt;task&gt;</code>，类型采用 <code>feature</code>、<code>fix</code>、<code>docs</code>、<code>refactor</code>、<code>test</code>、<code>chore</code>，任务描述使用简短的小写英文和数字，单词以 <code>-</code> 分隔。</p>
+    <p>首次接入先调查项目已有明确的分支命名规范，有则优先转换到 <code>.harness/policy.json</code> 的 <code>branch-name</code> 规则，在首次提交接入改动前完成对齐；没有明确约定时才使用 <code>init</code> 生成的默认规则。对齐时保留其他 presets、提交规范和项目规则，已有 policy 不自动覆盖。</p>
+    <p>运行时只按 policy 判定，Agent 和门禁读取同一份要求，项目原有规范说明及出处继续保留并与 policy 保持一致。默认规则采用 <code>&lt;type&gt;/&lt;task&gt;</code>，允许 <code>feature</code>、<code>fix</code>、<code>docs</code>、<code>refactor</code>、<code>test</code>、<code>chore</code> 前缀，任务描述使用小写英文和数字，单词以 <code>-</code> 分隔。</p>
     <div class="code"><pre><code>feature/add-policy-check
 fix/123-login-timeout
 docs/update-install-guide</code></pre></div>
-    <p>数字工单号可按需加入。默认不使用 Codex、Claude、dsh、Kimi 等客户端名称作为前缀，<code>release/</code>、<code>hotfix/</code> 按项目发布流程采用。</p>
-    <p>这是由 Agent 执行的命名约定，手工 Git 操作不会仅因名称不符合默认约定而被 harness 拒绝。已有分支继续使用原名称，主分支名沿用现有配置。</p>
-    <p><code>init</code> 会分发默认约定，已接入项目通过 <code>upgrade</code> 获得新版规则。项目自定义规范应写在 <code>AGENTS.md</code> 托管块之外或项目自有规则文件中，避免升级重写 <code>.harness/rules/</code> 时丢失。</p>
+    <p>默认规则允许数字工单号，拒绝客户端名称前缀、大小写混用和下划线。需要 <code>release/</code>、<code>hotfix/</code> 或其他格式时，修改项目 policy 中的 <code>pattern</code> 并同步原规范说明；关闭规则沿用 <code>disabled</code>。</p>
+    <p><code>pre-commit</code> 提前拒绝非法名称，<code>merge</code>、<code>submit</code> 在交付前做最终检查，<code>status</code> 只读展示，<code>doctor</code> 检查配置，判定共用同一份实现。手工提交同样受钩子检查，绕过钩子或提交后改名仍会在交付前被拒绝。</p>
+    <p><code>verify</code>、<code>review</code> 面向提交内容，不因分支名称不合规而拒绝，规则配置错误仍会提前报出。只改分支名时核对验收清单路径和 <code>status</code>，内容证据与评审仍有效时直接复用。</p>
+    <p>门禁先解析实际分支名称，支持 <code>HEAD</code>、完整分支引用和远程跟踪分支；配置主分支豁免任务命名要求，原主分支保护保持生效。SHA、tag 和 detached HEAD 可做纯内容验证与评审，但不代表命名通过，启用规则后的交付必须有明确分支来源，detached HEAD 提交会被拒绝。</p>
+    <p>实际判定取主分支 policy，任务分支不能通过修改自己的配置放行。项目命名要求直接维护在 policy，规则变更经人工确认合入后生效；<code>upgrade</code> 更新指引并保留项目 policy。字段错误、无效正则或重复规则会在进入主分支前被拒绝，详见<a href="https://github.com/windvalley/harness/blob/main/docs/reference.md#分支命名">分支命名参考</a>。</p>
 
     <h2 tabindex="-1" id="one-task">一次任务</h2>
     <p>两类任务都由 Agent 整理验收标准，关键业务含义有歧义时再与你确认，按相应流程准备任务分支及需要的 Worktree，执行验证和独立评审，再按项目的交付方式交付：本地合并，或提交 PR/MR。没过门禁时它按拒绝原因修复后重跑；改动涉及门禁本身时由你亲自确认，同一个问题连续三轮修不好时停下说明。用户不需要额外提醒它汇报效果入口、验收结果和最终交付状态。</p>
@@ -72,17 +75,18 @@ docs/update-install-guide</code></pre></div>
       <li><strong>看状态</strong>：本地交付说明已合并、待你同意合并还是被阻塞；远程交付说明已提交 PR/MR 等平台合并、平台已合入并已同步还是被阻塞。同时给出分支、提交与工作区位置。</li>
     </ul>
     <p>Agent 可以通过 <code>status</code> 汇总还差什么。下面示例表示门禁条件已满足，但没有验收清单，需求符合度仍是 <code>unknown</code>，不能据此宣布用户需求已经验收通过：</p>
-    <div class="code term"><pre><code>分支 feat/login -> main
+    <div class="code term"><pre><code>分支 feature/login -> main
 
   [ok] branch: 待合入 5685e8a474 -> main
+  [ok] branch-name: 分支 feature/login 符合命名规范
   [ok] main-worktree: 主 Worktree 停在 main 且洁净
   [ok] evidence: 验证通过，主分支自验证以来新增 0 个文件，未波及已执行的检查，可直接复用
   [ok] review: 评审通过（需求符合度 unknown，工程质量 good，清单来源 无）
   [ok] plan: 属于直接实施的范围（代码改动 1 行），不需要实施授权
   [ok] gate: 本次没有改动门禁配置与规则
-  [-] acceptance: 验收清单约定位置：acceptance/feat-login.md（存在时评审会核对需求符合度）
+  [-] acceptance: 验收清单约定位置：acceptance/feature-login.md（存在时评审会核对需求符合度）
 
-可以合并：harness merge --branch feat/login</code></pre></div>
+可以合并：harness merge --branch feature/login</code></pre></div>
     <ul>
       <li>合并前的工作区检查、常规冲突处理和重新验证由 Agent 按项目规则执行。</li>
       <li>涉及用户已有改动或业务意图无法判断时，Agent 说明具体分歧，交由你决定。</li>

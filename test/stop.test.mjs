@@ -121,6 +121,39 @@ describe("收尾检查", () => {
     assert.match(owed.reason, /下一步 在任务分支改写不符合规范的提交信息/);
   });
 
+  test("证据与评审齐备但分支命名不合规时仍拦下，提示改名后核对清单与复用证据", () => {
+    const repo = setup({ project: { ".harness/policy.json": {
+      version: 1,
+      presets: ["secrets", "git-safety", "gate-self"],
+      disabled: [],
+      rules: [{
+        id: "branch-name",
+        kind: "branch-name",
+        pattern: "^(feature|fix|docs|refactor|test|chore)/[a-z0-9]+(?:-[a-z0-9]+)*$",
+        reason: "任务分支名称必须符合项目分支规范",
+        fix: "使用类型前缀和小写 kebab-case 任务描述",
+      }],
+    } } });
+    const dir = linkedTask(repo);
+    toolCall(repo, writeCall(join(dir, "src/a.js")));
+    // 模拟钩子被绕过留下的非法命名分支，验证与评审按内容运行，交付前仍需修正名称。
+    const head = commitWith(dir, repo.env, "feat(demo): 调整示例\n\n- 增加示例文件\n- 补充对应说明", { "src/a.js": "export const a = 1;\n" });
+    assert.equal(repo.cli("verify", "--branch", BRANCH).status, 0);
+    writeReview(repo, head, "approve");
+    const status = repo.cli("status", "--branch", BRANCH);
+    assert.match(status.stdout, /\[ok\] evidence:/);
+    assert.match(status.stdout, /\[ok\] review:/);
+    assert.match(status.stdout, /还差 1 步：分支名称不符合规范/, "只剩分支命名阻塞");
+
+    const owed = stop(repo);
+    assert.equal(owed?.decision, "block", "命名不合规是 Agent 可继续处理的步骤");
+    assert.match(owed.reason, /下一步 按 \.harness\/policy\.json.*修正任务分支名称/);
+    assert.match(owed.reason, /核对验收清单路径/);
+    assert.match(owed.reason, /harness status --branch/);
+    assert.match(owed.reason, /证据.*有效.*复用/);
+    assert.doesNotMatch(owed.reason, /下一步 harness verify|下一步 harness review/);
+  });
+
   test("任务分支里的提交信息规则不能用时拦下，下一步先修正规则", () => {
     const repo = setup();
     const dir = linkedTask(repo);

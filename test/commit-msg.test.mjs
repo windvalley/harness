@@ -370,7 +370,7 @@ describe("提交信息规范只有一处定义，钩子、verify、review、stat
     commit(repo.root, "chore: 接入门禁\n\n- 写入配置与入口\n- 采用本地交付", {});
     git(repo.root, "checkout", "-q", "main");
     git(repo.root, "merge", "-q", "--ff-only", "chore/onboard");
-    git(repo.root, "checkout", "-q", "-b", "task/init");
+    git(repo.root, "checkout", "-q", "-b", "feature/init");
     assert.equal(hookCommit(repo, rule.example).status, 0);
     assert.notEqual(hookCommit(repo, "feat(demo): 只有标题").status, 0);
   });
@@ -413,7 +413,7 @@ describe("提交信息规范只有一处定义，钩子、verify、review、stat
     commit(repo.root, "chore: 接入门禁\n\n- 写入配置与入口", {});
     git(repo.root, "checkout", "-q", "main");
     git(repo.root, "merge", "-q", "--ff-only", "chore/onboard");
-    git(repo.root, "checkout", "-q", "-b", "task/wip");
+    git(repo.root, "checkout", "-q", "-b", "chore/wip");
     write(repo.root, "probe.txt", "p\n");
     git(repo.root, "add", "probe.txt");
     const committed = sh(repo.root, "git", ["commit", "-q", ...segments.flatMap((segment) => ["-m", segment])], repo.env);

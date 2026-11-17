@@ -19,6 +19,7 @@ import { readSession, saveSession } from "./session.mjs";
 const AGENT_STEPS = [
   "branch_commit_rule_invalid",
   "bad_commit_message",
+  "bad_branch_name",
   "evidence_failed",
   "evidence_missing",
   "review_rejected",
@@ -33,6 +34,8 @@ function nextStep(code, { branch, mainRef, evidenceNextStep }) {
       return `修正 .harness/policy.json 的 commit-message 规则（与 config.json 的旧字段只留一处）并提交，再重新 harness verify、harness review --branch ${branch}`;
     case "bad_commit_message":
       return `在任务分支改写不符合规范的提交信息（git commit --amend 或变基），再重新 harness verify、harness review --branch ${branch}`;
+    case "bad_branch_name":
+      return "按 .harness/policy.json 的 branch-name 规则修正任务分支名称并核对验收清单路径，再运行 harness status --branch <修正后的分支名>；已有证据与评审仍有效时可复用";
     case "evidence_failed":
       return evidenceNextStep || `修好失败的检查后运行 harness verify --branch ${branch}`;
     case "evidence_missing":

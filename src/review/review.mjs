@@ -11,6 +11,7 @@ import { runPlanProcess } from "./plan-process.mjs";
 import { splitAcceptance } from "../lib/acceptance.mjs";
 import { redact } from "../lib/redact.mjs";
 import { planChunkedDiff, assertChunkCoverage, integrationDiff } from "./chunks.mjs";
+import { assertBranchRule } from "../policy/branch-name.mjs";
 
 export const REVIEW_KIND = "review";
 // diff 上限可以在 review.maxDiffChars 里调整；提交说明与文件统计各自另有上限，不挤占 diff 的额度。
@@ -840,6 +841,7 @@ export function reviewDiff(root, baseCommit, branchCommit, maxChars = DEFAULT_MA
 
 export async function reviewBranch({ cwd, branch, log = console.error, reviewer = runReviewer }) {
   const project = loadGateProject(cwd, { branch });
+  assertBranchRule({ project, ref: branch });
   const root = project.root;
   const mainRef = mainBranch(project);
   const config = project.config.review ?? {};

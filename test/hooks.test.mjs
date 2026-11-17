@@ -43,19 +43,16 @@ const BASIC = "feat(demo): 增加示例\n\n- 增加一个文件\n- 补充说明"
 // 私钥类文件用常量拼出来，避免命令文本里出现完整扩展名而触发密钥保护规则。
 const SECRET_FILE = `config/server.${"pem"}`;
 
-function assertBranchNamingRules(repo) {
+function assertBranchNamingGuidance(repo) {
   const core = readFileSync(join(repo.root, ".harness/rules/core.md"), "utf8");
   const naming = core.match(/(?:^|\n)## 分支命名\n([\s\S]*?)(?=\n## |$)/)?.[1];
-  assert.ok(naming, "项目规则包含分支命名默认约定");
-  assert.match(naming, /`<type>\/<task>`/);
-  assert.match(naming, /项目已有明确的分支命名规则时优先遵循/);
-  for (const type of ["feature", "fix", "docs", "refactor", "test", "chore"]) {
-    assert.ok(naming.includes(`\`${type}\``), `默认类型包含 ${type}`);
-  }
+  assert.ok(naming, "项目规则包含分支命名指引");
+  assert.match(naming, /`\.harness\/policy\.json`.*`branch-name`/);
+  assert.doesNotMatch(naming, /类型采用|项目已有明确的分支命名规则时优先遵循/, "规则正文不再单独维护命名要求或承诺自然语言优先");
   const agents = readFileSync(join(repo.root, "AGENTS.md"), "utf8");
-  assert.match(agents, /分支命名.*`core\.md`/);
+  assert.match(agents, /分支命名.*`\.harness\/policy\.json`.*`branch-name`/);
   const workflow = readFileSync(join(repo.root, ".harness/rules/harness.md"), "utf8");
-  assert.match(workflow, /`core\.md`.*分支命名/);
+  assert.match(workflow, /`\.harness\/policy\.json`.*`branch-name`/);
 }
 
 describe("git 层钩子", () => {
@@ -223,7 +220,7 @@ describe("安装与自检", () => {
     assert.match(readFileSync(join(repo.root, ".harness/config.json"), "utf8"), /保留/);
   });
 
-  test("init 分发默认分支命名约定并保留项目规范", () => {
+  test("init 生成默认分支命名 policy 并分发统一指引", () => {
     const projectRules = "# 项目规范\n\n分支统一采用 team/ABC-123 格式。\n";
     const repo = setup({
       install: false,
@@ -232,7 +229,15 @@ describe("安装与自检", () => {
     });
     const result = repo.rawCli("init");
     assert.equal(result.status, 0, result.stderr);
-    assertBranchNamingRules(repo);
+    const policy = JSON.parse(readFileSync(join(repo.root, ".harness/policy.json"), "utf8"));
+    const rule = policy.rules.find((item) => item.kind === "branch-name");
+    assert.ok(rule, "init 在 policy.json 中定义分支命名规则");
+    assert.equal(rule.id, "branch-name");
+    assert.ok(new RegExp(rule.pattern).test(rule.example), "默认示例符合生成的规则");
+    for (const type of ["feature", "fix", "docs", "refactor", "test", "chore"]) {
+      assert.ok(new RegExp(rule.pattern).test(`${type}/123-policy-check`), `默认规则允许 ${type}`);
+    }
+    assertBranchNamingGuidance(repo);
     assert.ok(readFileSync(join(repo.root, "AGENTS.md"), "utf8").startsWith(`${projectRules}\n`), "已有项目规范原样保留在托管块之外");
   });
 
@@ -540,7 +545,7 @@ describe("安装与自检", () => {
     assert.match(result.stdout, /内容被改动|内容与清单一致/);
   });
 
-  test("升级补充分支命名约定并保留项目规范、配置与分支", () => {
+  test("升级分发 policy 指引并保留项目规范、配置与分支", () => {
     const prefix = "# 项目规范\n\n分支统一采用 team/ABC-123 格式。\n\n";
     const suffix = "\n\n## 发布规范\n\n发布分支采用 release/版本号。\n";
     const repo = setup({ files: { "AGENTS.md": `${prefix}<!-- harness:start -->\n旧托管块\n<!-- harness:end -->${suffix}` } });
@@ -551,7 +556,7 @@ describe("安装与自检", () => {
     const refs = git(repo.root, "for-each-ref", "--format=%(refname):%(objectname)");
     const result = repo.cli("upgrade");
     assert.equal(result.status, 0, result.stderr);
-    assertBranchNamingRules(repo);
+    assertBranchNamingGuidance(repo);
     assert.deepEqual(configs.map((file) => readFileSync(join(repo.root, ".harness", file), "utf8")), before, "升级保留全部 JSON 配置");
     const agents = readFileSync(join(repo.root, "AGENTS.md"), "utf8");
     assert.ok(agents.startsWith(prefix), "托管块之前的项目规范原样保留");

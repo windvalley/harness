@@ -160,7 +160,14 @@ async function cmdVerify(argv) {
   const head = values.branch ?? values.head ?? "HEAD";
   // 证据按“被验证的提交”索引，不按分支名（名字里可能有 /，且分支会移动）。
   const recordKey = values.branch ? git(repoRoot(cwd), ["rev-parse", "--verify", `${values.branch}^{commit}`]).stdout.trim() : undefined;
-  const outcome = await verify({ cwd, head, base: values.base, reuse: !values["no-reuse"], recordKey, gateBranch: values.branch ?? values.head });
+  let outcome;
+  try {
+    outcome = await verify({ cwd, head, base: values.base, reuse: !values["no-reuse"], recordKey, gateBranch: values.branch ?? values.head });
+  } catch (error) {
+    if (!error.code?.startsWith("branch_name_")) throw error;
+    process.stderr.write(`验证被拒绝(${error.code}): ${error.message}\n`);
+    return 1;
+  }
   if (values.json) print(JSON.stringify(outcome.record, null, 2));
   const lines = [`验证结果: ${outcome.status}`];
   for (const item of outcome.results) {
@@ -307,7 +314,7 @@ async function cmdReview(argv) {
     process.stderr.write(`${lines.join("\n")}\n`);
     return record.verdict === "approve" ? 0 : 1;
   } catch (error) {
-    process.stderr.write(`评审失败: ${error.message}\n`);
+    process.stderr.write(error.code === "branch_name_rule_invalid" ? `评审被拒绝(${error.code}): ${error.message}\n` : `评审失败: ${error.message}\n`);
     return 1;
   }
 }
@@ -531,7 +538,7 @@ function cmdGithook(argv) {
   const resolved = resolvePolicy(project.policy);
 
   if (name === "pre-commit") {
-    const result = checkStaged({ root, resolved });
+    const result = checkStaged({ root, resolved, config: project.config });
     if (result.decision === "deny") {
       process.stderr.write(`${formatDenialText(result)}\n`);
       return 1;
@@ -916,6 +923,7 @@ function cmdInit(argv) {
   print("  接入流程由 Agent 按项目规则接续处理，用户只需在需要时做决定或亲自操作，不必重复提醒验证、评审和交付要求。");
   print("  Agent 按项目规则准备任务分支与需要的 Worktree；下面的命令由 Agent 执行，标明由人的除外。");
   print("  Agent 需核对项目真实检查命令，明确起始占位、未执行项和待处理项，初始化成功不等于全部接入完成。");
+  print("  默认分支命名仅为起始值：项目已有明确命名规范时优先沿用，先将其写入 .harness/policy.json 的 branch-name 规则，再提交接入改动。");
   if (report.harnessOnMain) {
     print(`  1. 在任务分支提交本次改动后按日常任务流程交付：harness verify / review / ${deliver} --branch ${onMain ? "<任务分支>" : branch}`);
     print("     涉及门禁配置、规则、入口或钩子时，Agent 展示 harness confirm 摘要，带 --yes 的确认由人在自己的终端执行。");
