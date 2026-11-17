@@ -601,6 +601,18 @@ Agent 核实这只是现有表单的局部校验，不需要调整接口、数�
 两类任务都由 Agent 整理验收标准，关键业务含义有歧义时再与你确认，按规则准备工作环境、执行验证与独立评审，并在交付时主动给出结果入口、验收证据、最终合并状态和未完成项。
 用户可以补充约束或调整节奏，但不需要记住固定话术来触发这些职责。
 
+### 分支命名
+
+任务分支优先遵循项目已有的明确命名规范。
+项目没有明确规定时，Agent 按 `.harness/rules/core.md` 的默认约定创建分支：使用 `<type>/<task>`，类型采用 `feature`、`fix`、`docs`、`refactor`、`test`、`chore`，任务描述使用简短的小写英文和数字，单词以 `-` 分隔。
+例如 `feature/add-policy-check`、`fix/commit-message-validation`、`docs/update-install-guide`；需要关联工单时可加入数字工单号，例如 `fix/123-login-timeout`。
+默认不使用 Codex、Claude、dsh、Kimi 等客户端名称作为分支前缀，`release/`、`hotfix/` 按项目发布流程采用。
+
+这是由 Agent 执行的命名约定，手工 Git 操作不会仅因分支名称不符合默认约定而被 harness 拒绝。
+已有分支继续使用原名称，主分支名沿用 `.harness/config.json` 的 `mainBranch` 设置。
+`init` 会分发默认约定，已接入项目通过 `upgrade` 获得新版规则和 `AGENTS.md` 托管块。
+项目自定义命名规范应写在 `AGENTS.md` 托管块之外或项目自有规则文件中，避免升级重写 `.harness/rules/` 时丢失。
+
 ### 一次任务
 
 用户提出需求后，Agent 先理解需求并判断任务分级，再按相应流程负责澄清、工作环境准备、实现、提交、验证、独立评审和按项目交付方式的交付。
@@ -609,17 +621,17 @@ Agent 核实这只是现有表单的局部校验，不需要调整接口、数�
 
 ```bash
 cd <项目>
-git worktree add -b feat/login ../<项目>-login main
+git worktree add -b feature/login ../<项目>-login main
 cd ../<项目>-login
-# 可选：写验收清单 .harness/acceptance/feat-login.md
+# 可选：写验收清单 .harness/acceptance/feature-login.md
 # 实现并提交
 # 提交后按 .harness/rules/method-review.md 自审，发现问题先改完再提交一次
-harness verify --branch feat/login   # 选检查，在固定检出里执行，写签名证据
-harness review --branch feat/login   # 独立评审
-harness status --branch feat/login   # 只读：还差哪几步才能交付
-harness merge  --branch feat/login   # 本地交付：核对证据与评审，更新本地主分支
+harness verify --branch feature/login   # 选检查，在固定检出里执行，写签名证据
+harness review --branch feature/login   # 独立评审
+harness status --branch feature/login   # 只读：还差哪几步才能交付
+harness merge  --branch feature/login   # 本地交付：核对证据与评审，更新本地主分支
 # 远程交付改为：
-# harness submit --branch feat/login # 推送核对过的提交，创建或更新 PR/MR
+# harness submit --branch feature/login # 推送核对过的提交，创建或更新 PR/MR
 # harness sync                       # 平台合入后，快进本地主分支
 ```
 

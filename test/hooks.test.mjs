@@ -43,6 +43,21 @@ const BASIC = "feat(demo): 增加示例\n\n- 增加一个文件\n- 补充说明"
 // 私钥类文件用常量拼出来，避免命令文本里出现完整扩展名而触发密钥保护规则。
 const SECRET_FILE = `config/server.${"pem"}`;
 
+function assertBranchNamingRules(repo) {
+  const core = readFileSync(join(repo.root, ".harness/rules/core.md"), "utf8");
+  const naming = core.match(/(?:^|\n)## 分支命名\n([\s\S]*?)(?=\n## |$)/)?.[1];
+  assert.ok(naming, "项目规则包含分支命名默认约定");
+  assert.match(naming, /`<type>\/<task>`/);
+  assert.match(naming, /项目已有明确的分支命名规则时优先遵循/);
+  for (const type of ["feature", "fix", "docs", "refactor", "test", "chore"]) {
+    assert.ok(naming.includes(`\`${type}\``), `默认类型包含 ${type}`);
+  }
+  const agents = readFileSync(join(repo.root, "AGENTS.md"), "utf8");
+  assert.match(agents, /分支命名.*`core\.md`/);
+  const workflow = readFileSync(join(repo.root, ".harness/rules/harness.md"), "utf8");
+  assert.match(workflow, /`core\.md`.*分支命名/);
+}
+
 describe("git 层钩子", () => {
   test("pre-commit 拦住写密钥文件", () => {
     // 在任务分支验证：主分支上的提交会先被引用保护拦下，看不到 pre-commit 的判定。
@@ -206,6 +221,19 @@ describe("安装与自检", () => {
     const second = repo.rawCli("init");
     assert.equal(second.status, 0, second.stderr);
     assert.match(readFileSync(join(repo.root, ".harness/config.json"), "utf8"), /保留/);
+  });
+
+  test("init 分发默认分支命名约定并保留项目规范", () => {
+    const projectRules = "# 项目规范\n\n分支统一采用 team/ABC-123 格式。\n";
+    const repo = setup({
+      install: false,
+      project: { ".harness/config.json": null, ".harness/policy.json": null, ".harness/verify.json": null },
+      files: { "AGENTS.md": projectRules },
+    });
+    const result = repo.rawCli("init");
+    assert.equal(result.status, 0, result.stderr);
+    assertBranchNamingRules(repo);
+    assert.ok(readFileSync(join(repo.root, "AGENTS.md"), "utf8").startsWith(`${projectRules}\n`), "已有项目规范原样保留在托管块之外");
   });
 
   test("托管块写出没有机械判定的分级条件，机械条件交给 core.md 与 verify --plan", () => {
@@ -512,13 +540,25 @@ describe("安装与自检", () => {
     assert.match(result.stdout, /内容被改动|内容与清单一致/);
   });
 
-  test("升级会按新版本重写规则并保留配置", () => {
-    const repo = setup();
-    const before = readFileSync(join(repo.root, ".harness/config.json"), "utf8");
+  test("升级补充分支命名约定并保留项目规范、配置与分支", () => {
+    const prefix = "# 项目规范\n\n分支统一采用 team/ABC-123 格式。\n\n";
+    const suffix = "\n\n## 发布规范\n\n发布分支采用 release/版本号。\n";
+    const repo = setup({ files: { "AGENTS.md": `${prefix}<!-- harness:start -->\n旧托管块\n<!-- harness:end -->${suffix}` } });
+    git(repo.root, "checkout", "-q", "-b", "task/existing-branch");
+    write(repo.root, ".harness/rules/core.md", "# 旧规则\n");
+    const configs = ["config.json", "policy.json", "verify.json"];
+    const before = configs.map((file) => readFileSync(join(repo.root, ".harness", file), "utf8"));
+    const refs = git(repo.root, "for-each-ref", "--format=%(refname):%(objectname)");
     const result = repo.cli("upgrade");
     assert.equal(result.status, 0, result.stderr);
-    assert.equal(readFileSync(join(repo.root, ".harness/config.json"), "utf8"), before);
-    assert.ok(existsSync(join(repo.root, ".harness/rules/harness.md")));
+    assertBranchNamingRules(repo);
+    assert.deepEqual(configs.map((file) => readFileSync(join(repo.root, ".harness", file), "utf8")), before, "升级保留全部 JSON 配置");
+    const agents = readFileSync(join(repo.root, "AGENTS.md"), "utf8");
+    assert.ok(agents.startsWith(prefix), "托管块之前的项目规范原样保留");
+    assert.ok(agents.endsWith(suffix), "托管块之后的项目规范原样保留");
+    assert.doesNotMatch(agents, /旧托管块/);
+    assert.equal(git(repo.root, "branch", "--show-current"), "task/existing-branch");
+    assert.equal(git(repo.root, "for-each-ref", "--format=%(refname):%(objectname)"), refs, "升级不重命名或改写已有分支");
   });
 
   test("升级移除项目里与内置完全相同的旧副本，改过的用例保留并提示", () => {
