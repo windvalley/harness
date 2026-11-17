@@ -43,16 +43,32 @@ harness 是本地研发流程与交付门禁 CLI，使用 Node.js 原生 ESM，�
 doctor 测试需在 PATH 中找到 `claude` 或 `codex`；离线占位方式见 `.github/workflows/node-tests.yml`。
 仓库未设置统一覆盖率门槛，应验证成功路径、拒绝路径及相关边界。
 
-## 文档生成与版本管理
+## 文档生成
 
 修改文档正文或 `docs/build.mjs` 后运行 `npm run docs:build`，并审查生成差异。
 禁止手工编辑生成的 `docs/*.html` 和 `docs/assets/search-index.json`。
-修改分发目录 `src/`、`assets/`、`bin/` 或 `package.json` 时更新 `package.json` 版本，并在 `CHANGELOG.md` 记录变更。
-仅修改文档或测试无需升版。
+
+## Worktree 与自动交付
+
+每个开发任务必须使用独立的 Git worktree 和任务分支，分支命名为 `codex/<task>`；主工作区保持在 `main` 且洁净。
+例如：`git worktree add -b codex/<task> ../harness-worktrees/<task> main`。
+任务完成且必要验证通过后，自动提交当前任务改动，合并到本地 `main`，再普通推送 `origin main`。
+本项目逐项授权上述自动提交、合并 `main` 和 push，无需逐次征求确认；该授权不包含强推、远程 PR/MR、部署或发版。
+提交前确认暂存区仅包含当前任务改动，合并时不得混入其他分支尚未交付的变更。
+合并成功后用 `git branch -d` 删除已合并的本地任务分支。
+
+## 发版授权与版本管理
+
+用户未主动要求发版时，不得自动更新发版用的 `package.json` 版本号或 `CHANGELOG.md`，也不得打 tag、执行真实本地 `publish` 或创建 GitHub Release。
+普通开发改动即使涉及 `src/`、`assets/`、`bin/` 或 `package.json`，也不能据此自动发版。
+用户主动要求发版后，先评估变更，主动给出建议版本号及 `v<版本>` tag，说明依据并征求用户同意。
+获得明确同意后，按确认的版本完成版本号与 CHANGELOG 更新、验证、提交与交付、本地 `publish`、tag 和远程 GitHub Release，并核对发布内容一致。
+发布工作流仅允许手动触发，必须传入已确认的版本号；普通 merge 或 push 不触发发版。
+保留同版本安装内容不可变的保护，不得以未发布源码覆盖已安装的同版本代码。
+完整步骤见 `docs/development.md`。
 
 ## 提交与 Pull Request
 
-在任务分支工作，提交前确认暂存区仅包含当前任务改动。
 沿用历史中的 `type(scope): 中文摘要` 格式，scope 可省略，例如 `fix(doctor): 修复工作树信任检查` 或 `docs: 补充贡献指南`。
 每个提交只包含一个逻辑变更，提交信息不包含工具署名或 `Co-Authored-By`。
 PR 描述应说明问题、行为变化及验证结果，关联相关 issue；文档界面变化附截图。

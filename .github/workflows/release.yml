@@ -1,11 +1,13 @@
 name: Publish GitHub release
 
-# A version bump merged to main is the only trigger. Never publish unreviewed PR code.
+# Dispatch only after the user has approved the release version. Never publish unreviewed branch code.
 on:
-  push:
-    branches: [main]
-    paths:
-      - package.json
+  workflow_dispatch:
+    inputs:
+      version:
+        description: User-approved version (without v prefix)
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -25,13 +27,19 @@ jobs:
           node-version: '22'
       - name: Validate version and build release notes
         id: version
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
         shell: bash
         run: |
           node --input-type=module <<'NODE'
           import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
           import { join } from "node:path";
+          if (process.env.GITHUB_REF !== "refs/heads/main") throw new Error("Releases must run from main");
+          const approvedVersion = process.env.RELEASE_VERSION ?? "";
+          if (!/^\d+\.\d+\.\d+$/.test(approvedVersion)) throw new Error("Invalid approved release version: " + approvedVersion);
           const version = JSON.parse(readFileSync("package.json", "utf8")).version;
           if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error("Invalid release version: " + version);
+          if (approvedVersion !== version) throw new Error("Approved release version does not match package.json: " + approvedVersion);
           const lines = readFileSync("CHANGELOG.md", "utf8").split("\n");
           const heading = "## [" + version + "] - ";
           const start = lines.findIndex((line) => line.startsWith(heading));

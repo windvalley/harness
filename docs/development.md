@@ -1,6 +1,7 @@
 # 开发与发布
 
-本文面向 harness 维护者。首次接入和日常使用请从 [README](../README.md) 开始，具体命令与配置见[参考手册](reference.md)。
+本文面向 harness 维护者。
+首次接入和日常使用请从 [README](../README.md) 开始，具体命令与配置见[参考手册](reference.md)。
 
 ## 运行测试
 
@@ -21,20 +22,44 @@ npm test
 
 本地预览可在仓库根目录运行 `python3 -m http.server 8000`，再访问 `http://127.0.0.1:8000/docs/`。
 
-## 版本管理
+## 开发与交付
 
-- 版本号只维护在 `package.json` 中。
-- 修改会随版本分发的 `src/`、`assets/`、`bin/` 或 `package.json` 时，需要更新版本号。
-- 只修改 README、CHANGELOG 或测试等不分发文件时，无需更新版本号。
-- 已安装的同一版本如果分发内容发生变化，`publish` 和 `install` 会拒绝继续；不要用相同版本号覆盖不同的门禁代码。
+每个开发任务使用独立的 Git worktree 和任务分支，主工作区保持在 `main` 且洁净。
+
+```bash
+git worktree add -b codex/<task> ../harness-worktrees/<task> main
+```
+
+任务完成且必要验证通过后，自动提交当前任务改动、合并到 `main`，再普通推送 `origin main`，无需逐次确认。
+这项授权只覆盖开发交付，不包含强推、远程 PR/MR、部署或发版。
+提交和合并仅包含当前任务改动，不混入其他分支尚未交付的变更。
+合并成功后用 `git branch -d` 删除已合并的本地任务分支。
+
+## 版本管理与发版授权
+
+版本号只维护在 `package.json` 中。
+普通开发不自动更新发版版本号或 `CHANGELOG.md`；修改分发目录也不构成发版授权。
+用户未主动要求发版时，不得打 tag、执行真实本地 `publish` 或创建 GitHub Release。
+用户主动要求发版后，先评估上次发布以来的变更，主动给出建议版本号及对应的 `v<版本>` tag，说明依据并征求同意。
+得到用户对版本的明确同意后，才执行以下发布流程。
+
+已安装的同一版本内容保持不可变，`publish` 和 `install` 会拒绝用不同的分发内容覆盖同版本目录。
+开发源码可以暂时与当前已发布版本不同，但不能将其覆盖进该版本的安装目录；完成发版确认后再升版并发布。
 
 ## 发布流程
 
-1. 分发内容变化时，在 `package.json` 中更新版本号。
-2. 更新 `CHANGELOG.md`，记录本次变更。
-3. 确认将要打标签的提交与本机安装的同版本分发内容一致。
-4. 为该提交创建 `v<版本>` 标签并推送。
+1. 按用户已确认的版本更新 `package.json` 和 `CHANGELOG.md`。
+2. 完成必要验证，包括 `npm test` 和 `npm run docs:check`；文档源有变化时先运行 `npm run docs:build`。
+3. 提交并合并到 `main`，普通推送发布提交，核对本地与远程 `main` 一致。
+4. 在该发布提交上运行 `node bin/harness.mjs publish`，将相同版本的分发内容发布到本机版本目录。
+5. 手动触发 `.github/workflows/release.yml`，传入已确认的版本号，创建 tag 和 GitHub Release；随后同步本地 tag 并核对结果。
 
-其他机器执行 `install --local` 时，会按项目锁定的版本从对应标签安装代码。标签指向的分发内容应与本机同版本安装内容一致，否则不同机器的门禁代码可能不一致。
+手动触发示例：`gh workflow run release.yml --ref main -f version=<已确认版本号>`，版本号不含 `v` 前缀。
+工作流只允许从 `main` 发布，并校验输入版本与 `package.json` 一致、CHANGELOG 条目非空、测试及文档检查通过。
+普通 merge、push 或 `package.json` 变更不会自动触发发布工作流。
+发布后确认 package 版本、CHANGELOG 和本机分发内容一致，tag 与 GitHub Release 指向同一个发布提交。
+
+其他机器执行 `install --local` 时，会按项目锁定的版本从对应标签安装代码。
+标签指向的分发内容应与本机同版本安装内容一致，否则不同机器的门禁代码可能不一致。
 
 项目级安装、升级与本机版本目录见[参考手册的安装说明](reference.md#安装)和[升级说明](reference.md#升级)。
