@@ -194,7 +194,7 @@ describe("安装与自检", () => {
     for (const pattern of [/日常语言/, /固定话术/, /不要求用户/, /Agent 按项目规则准备任务分支/, /验收证据、最终合并状态/]) {
       assert.doesNotMatch(block, pattern, `托管块不应包含: ${pattern}`);
     }
-    for (const pattern of [/\.harness\/rules\/core\.md/, /先判断任务分级/, /最初提出需求或回答澄清问题都不算/, /先红后绿/, /harness merge --branch/, /轮次长短、耗时与上下文大小都不是停下的理由/, /收尾检查/]) {
+    for (const pattern of [/\.harness\/rules\/core\.md/, /先判断任务分级/, /最初提出需求或回答澄清问题都不算/, /先红后绿/, /harness merge --branch/, /轮次长短、耗时与上下文大小都不是停下的理由/]) {
       assert.match(block, pattern, `托管块应保留: ${pattern}`);
     }
     const rules = readFileSync(join(repo.root, ".harness/rules/harness.md"), "utf8");
@@ -258,11 +258,19 @@ describe("安装与自检", () => {
     }
   });
 
-  test("托管块只让要人决定的阻塞上报，等授权或人工确认时直接结束", () => {
+  test("托管块只保留通用上报规则，具体情形由规则与项目配置承载", () => {
     const block = managedBlockBody();
-    assert.match(block, /需要人决定的阻塞（缺权限、需要业务拍板、用户要求暂不合并、必要验证被外部问题阻塞等）先 `harness escalate open` 上报/);
+    assert.match(block, /需要人决定的阻塞先 `harness escalate open` 上报/);
     assert.match(block, /只差用户同意实施或人工确认时，说明要人做什么后结束，不用上报/);
     assert.doesNotMatch(block, /需要停下时先/, "不能把交方案、等确认也划进上报");
+    assert.doesNotMatch(block, /授权后连续实施到完成/, "连续执行只在后文完整说明一次");
+    assert.doesNotMatch(block, /需要人决定的阻塞（|收尾检查会拦下/);
+    const core = readFileSync(join(PACKAGE_ROOT_TEST, "assets/rules/core.md"), "utf8");
+    const rules = readFileSync(join(PACKAGE_ROOT_TEST, "assets/rules/harness.md"), "utf8");
+    for (const text of [core, rules]) {
+      assert.match(text, /escalate\.triggers/);
+      assert.match(text, /不自动触发/);
+    }
   });
 
   test("授权内的步骤不向用户征询是否继续，压缩或续接后沿用已有分级与授权", () => {

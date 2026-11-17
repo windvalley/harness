@@ -179,7 +179,7 @@ export function formatStopReason(owed) {
   lines.push(
     "harness 命令经项目入口 .harness/bin/harness 运行。",
     "按 .harness/rules/harness.md 的“一次任务”连续推进到合并（远程交付到 submit）；轮次长短、耗时与上下文大小都不是停下的理由。",
-    "缺权限、需要用户拍板、用户明确要求暂不合并，或必要验证被外部问题阻塞时，先运行 harness escalate open 写明阻塞与选项（context.branch 填任务分支），再结束这一轮并向用户说明。",
+    "需要人决定时，参考 .harness/rules/core.md 的基础停止条件与 .harness/config.json 的 escalate.triggers，先运行 harness escalate open 写明阻塞与选项（context.branch 填任务分支），再结束这一轮并向用户说明。",
     "用户在本轮明确要求暂停时，在回复里照录用户原话说明为什么停下。",
   );
   return lines.join("\n");

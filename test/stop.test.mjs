@@ -79,6 +79,9 @@ describe("收尾检查", () => {
     assert.match(first.reason, /task\/a：还差 缺验证证据、缺独立评审；下一步 harness verify --branch task\/a/);
     assert.match(first.reason, /轮次长短、耗时与上下文大小都不是停下的理由/);
     assert.match(first.reason, /harness escalate open/);
+    assert.match(first.reason, /core\.md/);
+    assert.match(first.reason, /escalate\.triggers/);
+    assert.doesNotMatch(first.reason, /缺权限、需要用户拍板/);
 
     toolCall(repo, bashCall(`.harness/bin/harness verify --branch ${BRANCH}`));
     assert.equal(repo.cli("verify", "--branch", BRANCH).status, 0);
