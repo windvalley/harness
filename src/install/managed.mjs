@@ -77,8 +77,7 @@ export function writeRules({ root, version }) {
 export function managedBlockBody() {
   return `## Harness
 
-本项目的本地门禁由 harness 管。
-下面几条对所有任务生效，不得跳过：
+本项目的门禁由 harness 管理，以下要求适用于所有任务，不得跳过：
 
 - 开始任何任务前（包括分析、设计与评审）先读 \`.harness/rules/core.md\`，再按场景读同目录下的方法文档；读不到时报告，不凭印象继续。
 - 开始任务前读 \`.harness/pitfalls.md\` 避开本项目已知的坑；踩到新的环境类坑并解决后，当场运行 \`harness pitfall add\` 记录。
