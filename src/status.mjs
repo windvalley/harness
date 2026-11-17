@@ -9,7 +9,8 @@ import { landedIn } from "./lib/landed.mjs";
 import { REVIEW_KIND, reviewerSummary } from "./review/review.mjs";
 import { CONFIRM_KIND } from "./confirm/confirm.mjs";
 import { mainWorktreeProblems, mergePushTarget, planMergeResult, reuseDecision, reviewStaleFiles } from "./merge/merge.mjs";
-import { approvalState, assessRisk, planEnforced } from "./plan/plan.mjs";
+import { approvalRecord, approvalState, assessRisk, planEnforced } from "./plan/plan.mjs";
+import { formatProgress, stageProgress } from "./plan/stages.mjs";
 import { latestSubmit } from "./delivery/submit.mjs";
 import { unresolvedStop } from "./stop/session.mjs";
 import { commitRangeProblems, commitRuleErrorAt } from "./policy/commit-message.mjs";
@@ -35,6 +36,14 @@ function legacyClosedBy({ project, root }) {
 }
 
 const uniqueBy = (items, key) => [...new Map(items.map((item) => [key(item), item])).values()];
+
+/** 属于多阶段方案的分支多显示一行方案进度；授权失效时提示需要用户重新授权。 */
+function stageStep({ root, branch, mainCommit, add }) {
+  const link = approvalRecord(root, branch)?.stages;
+  if (!link) return;
+  const progress = stageProgress({ root, link, mainCommit });
+  add("stages", progress.invalid ? "warn" : "info", formatProgress(progress));
+}
 
 function postMergeStatus({ project, root, branch, mainCommit, result, add }) {
   const due = collectObligations({ root, mainCommit, branch, legacyClosed: legacyClosedBy({ project, root }) }).filter((item) => item.due);
@@ -107,6 +116,7 @@ export function branchStatus({ cwd, branch }) {
     result.ready = true;
     result.merged = true;
     postMergeStatus({ project, root, branch, mainCommit, result, add });
+    stageStep({ root, branch, mainCommit, add });
     return result;
   }
   add("branch", "ok", `待合入 ${branchCommit.slice(0, 10)} -> ${mainRef}`);
@@ -237,7 +247,7 @@ export function branchStatus({ cwd, branch }) {
     if (risk.reasons.length === 0) {
       add("plan", "ok", `属于直接实施的范围（代码改动 ${risk.lines} 行），不需要实施授权`);
     } else {
-      const state = approvalState({ root, branch, acceptanceText: showBlob(root, branchCommit, acceptancePath(project, branch)) });
+      const state = approvalState({ root, branch, acceptanceText: showBlob(root, branchCommit, acceptancePath(project, branch)), at: branchCommit });
       if (state.approved) add("plan", "ok", `已有实施授权（${risk.reasons.join("；")}；依据：${state.record.note}）`);
       else {
         add("plan", "fail", `${risk.reasons.join("；")}，${state.reason}：用户同意实施后运行 harness approve --branch ${branch} --yes --note "<用户原话>"`);
@@ -245,6 +255,7 @@ export function branchStatus({ cwd, branch }) {
       }
     }
   }
+  stageStep({ root, branch, mainCommit, add });
 
   if (project.bootstrap) {
     // 首次接入：分支里的配置就是待确认的信任根，不论改了哪些文件都要人确认。

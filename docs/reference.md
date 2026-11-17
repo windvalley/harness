@@ -454,6 +454,16 @@ Agent 开始任务前先判断分级，规则写在 `.harness/rules/core.md`，�
 - 授权绑定验收清单的内容：之后要改清单，Agent 要先向你说明并重新取得同意；实施方案里的进度记录可以随时更新。
 - 有授权记录后，独立评审把这份清单当作你同意过的需求来核对。
 
+一个分支交付不完的需求可以写成多阶段方案：方案目录里放阶段文件（默认 `docs/changes/*/stages.json`，可由 `intent.plan.stages` 覆盖），格式为 `{"stages": [{"id", "title", "branch", "acceptance"}]}`。
+
+- 你同意授权覆盖全部阶段时，Agent 在第一个阶段的分支上运行 `harness approve --branch <分支> --yes --note "<你的原话>" --stages <阶段文件> [--stage <阶段>]`，同时记下方案级授权，绑定阶段文件与全部阶段清单的内容。
+  同一份方案只有一条当前记录，重新授权会覆盖它，历次授权都在账本里。
+- 一个阶段合并后，收尾检查提示下一阶段：建分支、原样复制阶段清单并提交，再运行 `harness approve --branch <新分支> --yes --from-stages <阶段文件> --stage <阶段>`。
+  它不接受 `--note`，原话照搬方案级授权；主分支上的阶段文件与授权时不一致、本分支清单与该阶段授权时的清单不一致、前序阶段还没合入时拒绝。
+- 阶段按 `id` 关联分支，建议分支名不符合当前命名规则时改用合规名称，不需要重新授权；`approve --stages` 会提示不合规的建议分支名。
+- 授权失效按内容判断，`status`、`merge`、`submit`、评审与收尾检查一致：携带分支改了阶段文件或任何一个阶段清单，或方案在别的分支重新授权后失效；后续阶段分支只看本阶段清单是否与当前方案级授权一致，其他阶段的修订不影响它。
+- 阶段分支的 `harness status` 多一行 `stages`，显示已合入几个阶段与下一阶段；方案级授权失效时这一行提示需要你重新授权，收尾检查也只提示、不再生成下一阶段的欠项。
+
 ### 风险分级
 
 任务分级的机械部分由 `risk` 配置与 `intent.plan` 共同决定。
@@ -1484,6 +1494,7 @@ node ~/github/harness/bin/harness.mjs install --local   # 按新锁定的版本�
 | `intent.mode` | `checklist` | 验收清单：`checklist` 有则核对，`required` 没有不能合并，`off` 不提示 |
 | `intent.dir` | `acceptance` | 清单目录，位于 `.harness/` 下 |
 | `intent.plan.maxLines` | `500` | 直接实施的代码改动上限，按新增加删除的行数算 |
+| `intent.plan.stages` | `docs/changes/*/stages.json` | 多阶段方案的阶段文件 glob；`approve --stages` 与 `--from-stages` 只接受匹配它的文件 |
 | `intent.plan.markers` | `docs/changes/*/plan.md` | 实施方案文件；分支里出现它就按先方案后实施处理 |
 | `intent.plan.triggers` | `**/migrations/**`、`**/*.sql` | 库表相关文件，改了就需要实施授权 |
 | `intent.plan.exclude` | 测试、文档、锁文件与 `.harness/` | 不计入代码改动行数的文件；写了这一项会整个替换默认列表 |

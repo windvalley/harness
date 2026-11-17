@@ -315,7 +315,7 @@ export async function checkGates({ project, root, branch, log = console.error, d
   const confirmed = confirmRecord.ok && confirmRecord.record.decision === "approve";
   const needsPlan = planEnforced(project.policy) && risk.reasons.length > 0;
   const planState = needsPlan
-    ? approvalState({ root, branch, acceptanceText: showBlob(root, branchCommit, acceptancePath(project, branch)) })
+    ? approvalState({ root, branch, acceptanceText: showBlob(root, branchCommit, acceptancePath(project, branch)), at: branchCommit })
     : { approved: true };
   const alsoPending = (skip) =>
     [
