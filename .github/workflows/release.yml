@@ -1,0 +1,72 @@
+name: Publish GitHub release
+
+# A version bump merged to main is the only trigger. Never publish unreviewed PR code.
+on:
+  push:
+    branches: [main]
+    paths:
+      - package.json
+
+permissions:
+  contents: write
+
+concurrency:
+  group: harness-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validate version and build release notes
+        id: version
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+          import { join } from "node:path";
+          const version = JSON.parse(readFileSync("package.json", "utf8")).version;
+          if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error("Invalid release version: " + version);
+          const lines = readFileSync("CHANGELOG.md", "utf8").split("\n");
+          const heading = "## [" + version + "] - ";
+          const start = lines.findIndex((line) => line.startsWith(heading));
+          if (start < 0) throw new Error("Missing version heading in CHANGELOG.md: " + version);
+          const end = lines.findIndex((line, index) => index > start && line.startsWith("## ["));
+          const notes = lines.slice(start + 1, end < 0 ? undefined : end).join("\n").trim();
+          if (!notes) throw new Error("Release notes cannot be empty");
+          appendFileSync(process.env.GITHUB_OUTPUT, "version=" + version + "\n");
+          writeFileSync(join(process.env.RUNNER_TEMP, "harness-release-notes.md"), notes + "\n");
+          NODE
+      # Doctor requires a reviewer executable on PATH; tests never call a real AI service.
+      - name: Set up inert reviewer executable for doctor fixtures
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/harness-test-bin"
+          printf '%s\n' '#!/bin/sh' 'exit 127' > "$RUNNER_TEMP/harness-test-bin/claude"
+          chmod +x "$RUNNER_TEMP/harness-test-bin/claude"
+          echo "$RUNNER_TEMP/harness-test-bin" >> "$GITHUB_PATH"
+      - name: Unit and integration tests
+        run: npm test
+      - name: Documentation consistency
+        run: npm run docs:check
+      - name: Publish tag and GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          tag="v${{ steps.version.outputs.version }}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "::notice::Release $tag already exists; nothing to do"
+            exit 0
+          fi
+          if git ls-remote --tags origin "refs/tags/$tag" | grep -q .; then
+            echo "::error::Tag $tag exists without a release; refusing to overwrite"
+            exit 1
+          fi
+          gh release create "$tag" --target "$GITHUB_SHA" --title "$tag" \
+            --notes-file "$RUNNER_TEMP/harness-release-notes.md" --latest
