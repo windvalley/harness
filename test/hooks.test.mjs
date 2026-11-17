@@ -185,6 +185,7 @@ describe("安装与自检", () => {
     }
     const agents = readFileSync(join(repo.root, "AGENTS.md"), "utf8");
     assert.match(agents, /harness:start/);
+    assert.match(agents, /本项目的门禁由 harness 管理，以下要求适用于所有任务，不得跳过：/);
     assert.doesNotMatch(agents, /合并成功后清理任务 Worktree/);
     // 托管块只放每次任务都要遵守的硬性要求；产品使用方式与协作职责写在 core.md，不重复进每个项目的 AGENTS.md。
     const block = agents.slice(agents.indexOf("<!-- harness:start -->"), agents.indexOf("<!-- harness:end -->"));
