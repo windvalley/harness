@@ -20,7 +20,7 @@
 
 <script src="assets/docs.js?v=acdbbf2b96" defer></script>
 </head>
-<body data-page="principles" data-index="9d1e376ac4">
+<body data-page="principles" data-index="8f473503ad">
 <a class="skip-link" href="#main-content">跳到主要内容</a>
 <header class="topbar">
   <div class="topbar-inner">
@@ -106,10 +106,10 @@
     <p>并非每个调用都会被判定：适配器认不出的工具，或缺少工具名的载荷，直接放行。通用入口例外，它先校验载荷，不合约定按拒绝处理。钩子还会顺带记下本会话涉及的任务分支，供下面的收尾检查使用，拒绝时在账本记一条 <code>policy.deny</code>；这些记录不影响本次判定。</p>
 
     <h2 tabindex="-1" id="stop-check">收尾检查：Agent 想结束时</h2>
-    <p>拦截只管 Agent 不做错事，管不了它没做完就停下。为此支持的客户端钩子还挂了一道<strong>收尾检查</strong>：Agent 每次结束回复前，核对本会话推进过的任务是否已经交付；没有交付又没有上报阻塞时，告诉它还差哪几步，让它接着做。只差你确认门禁改动或同意方案时放行，两次结束之间没有任何进展时也放行，但会记下来，在 <code>harness status</code> 里给你看。</p>
+    <p>拦截只管 Agent 不做错事，管不了它没做完就停下。为此支持的客户端钩子还挂了一道<strong>收尾检查</strong>：Agent 每次结束回复前，核对本会话推进过的任务是否已经交付；没有交付又没有上报阻塞时，告诉它还差哪几步，让它接着做。只差你确认门禁改动或同意方案时放行；同一状态连续拦满上限（<code>stop.idleBlocks</code>，缺省 3 次）仍没有进展时也放行，避免把会话困住，放行时会提示你会话停在哪、还欠什么，发送“继续”即可恢复，<code>harness status</code> 里也能看到。收尾检查只能降低 Agent 提前停下的概率，不能保证它不停。</p>
     <figure>
       <div class="diagram">
-        <svg viewBox="0 0 900 390" role="img" aria-label="收尾检查的判定过程：Agent 想结束回复时客户端触发 Stop 事件，入口脚本运行收尾检查，逐个核对本会话推进过的任务分支还欠什么，并与会话记录里上次拦截时的进展指纹对比。没有欠项、只差人来做、已经上报、与上次相比没有进展、收尾检查自己出错或不在 harness 项目里时都放行；仍有欠项且有进展时输出 decision 为 block 的结果，退出码仍为 0，Agent 按 reason 里的下一步接着做，再次结束时重新核对。">
+        <svg viewBox="0 0 900 390" role="img" aria-label="收尾检查的判定过程：Agent 想结束回复时客户端触发 Stop 事件，入口脚本运行收尾检查，逐个核对本会话推进过的任务分支还欠什么，并与会话记录里上次拦截时的进展指纹对比。没有欠项、只差人来做、已经上报、同一状态连续拦满上限仍没有进展、收尾检查自己出错或不在 harness 项目里时都放行；仍有欠项且未拦满时输出 decision 为 block 的结果，退出码仍为 0，Agent 按 reason 里的下一步接着做，再次结束时重新核对。">
           <rect class="d-box" x="20" y="40" width="150" height="56" rx="8"/>
           <text class="d-t" x="95" y="64" text-anchor="middle">Agent 想结束</text>
           <text class="d-s" x="95" y="83" text-anchor="middle">客户端触发 Stop 事件</text>
@@ -140,11 +140,11 @@
           <text class="d-s" x="40" y="238">· 任务已经交付，没有欠项</text>
           <text class="d-s" x="40" y="258">· 只差人来做：确认门禁改动、同意实施方案</text>
           <text class="d-s" x="40" y="278">· 已用 harness escalate 上报，且分支、提交与欠项没有变化</text>
-          <text class="d-s" x="40" y="298">· 与上次拦截相比没有进展：放行，账本记 stop.unresolved</text>
+          <text class="d-s" x="40" y="298">· 同一状态拦满上限（缺省 3 次）：放行并通知你</text>
           <text class="d-s" x="40" y="318">· 收尾检查自己出错：只提示一行，不困住会话</text>
 
           <line class="d-line deny" x1="660" y1="96" x2="660" y2="166" marker-end="url(#ar-deny)"/>
-          <text class="d-l deny" x="668" y="135">仍有欠项且有进展</text>
+          <text class="d-l deny" x="668" y="135">仍有欠项且未拦满</text>
           <rect class="d-box deny" x="580" y="170" width="300" height="80" rx="8"/>
           <text class="d-t" x="730" y="194" text-anchor="middle">阻止结束</text>
           <text class="d-m" x="730" y="214" text-anchor="middle">{"decision":"block","reason":…}</text>
@@ -157,7 +157,7 @@
           <text class="d-s" x="730" y="362" text-anchor="middle">再次结束时重新核对</text>
         </svg>
       </div>
-      <figcaption>图 6　Agent 想结束时的收尾检查。进展指纹由分支顶端提交、阻塞项和任务 Worktree 里未提交文件的内容组成；两次结束之间指纹不变，说明没有进展，放行并记账，避免把会话困在循环里。</figcaption>
+      <figcaption>图 6　Agent 想结束时的收尾检查。进展指纹由分支顶端提交、阻塞项和任务 Worktree 里未提交文件的内容组成；指纹变化时重新计数，同一指纹连续拦满 <code>stop.idleBlocks</code> 次后放行，账本记 <code>stop.unresolved</code>，并提示你发送“继续”恢复，避免把会话困在循环里。</figcaption>
     </figure>
     <p>收尾检查与实时拦截的失败策略相反：实时拦截是安全边界，出错按拒绝处理；收尾检查是流程提醒，出错时放行并只提示一行，免得门禁自己的问题把会话卡住。Claude Code 对所有阻止结束的 Stop 钩子都显示 <code>Stop hook error occurred</code>，原因在随后的反馈里，不是门禁出错。</p>
 

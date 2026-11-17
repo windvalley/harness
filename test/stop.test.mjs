@@ -171,17 +171,20 @@ describe("收尾检查", () => {
     assert.match(owed.reason, /下一步 修正 \.harness\/policy\.json 的 commit-message 规则/);
   });
 
-  test("两次结束之间没有进展时放行，账本记一次未上报的结束，status 与 merge 都会提示", () => {
-    const repo = setup();
+  test("stop.idleBlocks 为 1 时与旧版一致：同一状态只拦一次，账本记一次未上报的结束，status 与 merge 都会提示", () => {
+    const repo = setup({ project: { ".harness/config.json": { ...CONFIG, stop: { idleBlocks: 1 } } } });
     const dir = linkedTask(repo);
     const head = agentCommit(repo, dir, { "src/a.js": "export const a = 1;\n" });
     assert.equal(stop(repo)?.decision, "block");
-    assert.equal(stop(repo, { active: true }), null, "同一状态只拦一次");
+    const released = stop(repo, { active: true });
+    assert.equal(released?.decision, undefined, "同一状态只拦一次");
+    assert.match(released.systemMessage, /task\/a/);
     const unresolved = ledger(repo).filter((event) => event.event === "stop.unresolved");
     assert.equal(unresolved.length, 1);
     assert.equal(unresolved[0].branch, BRANCH);
     assert.equal(unresolved[0].head, head);
-    assert.equal(stop(repo, { active: true }), null);
+    assert.equal(unresolved[0].blocks, 1);
+    assert.equal(stop(repo, { active: true }), null, "放行通知只在第一次放行时给出");
     assert.equal(ledger(repo).filter((event) => event.event === "stop.unresolved").length, 1, "同一状态不重复记账");
 
     const status = repo.cli("status", "--branch", BRANCH);
@@ -195,8 +198,87 @@ describe("收尾检查", () => {
     assert.match(merged.stderr, /没有上报阻塞就结束了/);
   });
 
-  test("只改文件没提交也算进展；新分支上改了文件就结束，按未提交拦下", () => {
+  test("未配置时同一状态最多拦 3 次，之后放行并通知用户分支、欠项、拦截次数与恢复方式", () => {
     const repo = setup();
+    const dir = linkedTask(repo);
+    const head = agentCommit(repo, dir, { "src/a.js": "export const a = 1;\n" });
+    assert.equal(stop(repo)?.decision, "block");
+    assert.equal(stop(repo, { active: true })?.decision, "block", "第 2 次仍拦");
+    assert.equal(stop(repo, { active: true })?.decision, "block", "第 3 次仍拦");
+    assert.equal(ledger(repo).filter((event) => event.event === "stop.unresolved").length, 0, "拦截期间不记未上报的结束");
+    const released = stop(repo, { active: true });
+    assert.equal(released?.decision, undefined, "第 4 次放行");
+    assert.match(released.systemMessage, /^\[harness\] /);
+    assert.match(released.systemMessage, /task\/a/);
+    assert.match(released.systemMessage, /缺验证证据、缺独立评审/);
+    assert.match(released.systemMessage, /连续拦截 3 次/);
+    assert.match(released.systemMessage, /发送“继续”/);
+    assert.doesNotMatch(released.systemMessage, /配置无效/);
+    const unresolved = ledger(repo).filter((event) => event.event === "stop.unresolved");
+    assert.equal(unresolved.length, 1);
+    assert.equal(unresolved[0].head, head);
+    assert.equal(unresolved[0].blocks, 3);
+  });
+
+  test("有进展后拦截次数清零，重新计数", () => {
+    const repo = setup();
+    const dir = linkedTask(repo);
+    agentCommit(repo, dir, { "src/a.js": "export const a = 1;\n" });
+    assert.equal(stop(repo)?.decision, "block");
+    assert.equal(stop(repo, { active: true })?.decision, "block");
+    agentCommit(repo, dir, { "src/b.js": "export const b = 1;\n" });
+    for (let i = 1; i <= 3; i++) assert.equal(stop(repo, { active: true })?.decision, "block", `新提交后第 ${i} 次仍拦`);
+    const released = stop(repo, { active: true });
+    assert.equal(released?.decision, undefined);
+    assert.match(released.systemMessage, /连续拦截 3 次/);
+  });
+
+  for (const value of [0, -1, 1.5, "2", null]) {
+    test(`stop.idleBlocks 为 ${JSON.stringify(value)} 时按 3 处理，放行提示注明已回退`, () => {
+      const repo = setup({ project: { ".harness/config.json": { ...CONFIG, stop: { idleBlocks: value } } } });
+      const dir = linkedTask(repo);
+      agentCommit(repo, dir, { "src/a.js": "export const a = 1;\n" });
+      for (let i = 1; i <= 3; i++) assert.equal(stop(repo, { active: i > 1 })?.decision, "block", `第 ${i} 次拦`);
+      const released = stop(repo, { active: true });
+      assert.equal(released?.decision, undefined);
+      assert.match(released.systemMessage, /stop\.idleBlocks 配置无效，已按 3 处理/);
+    });
+  }
+
+  test("缺验证或缺评审时，提示写明验收未完成先继续实现，并要求每轮以工具调用推进", () => {
+    const repo = setup();
+    const dir = linkedTask(repo);
+    agentCommit(repo, dir, { "src/a.js": "export const a = 1;\n" });
+    const first = stop(repo);
+    assert.match(first.reason, /验收清单还有未实现的条目时，先继续实现并提交，实现完成后再运行 harness verify/);
+    assert.match(first.reason, /每一轮以工具调用推进/);
+    assert.match(first.reason, /回应客户端的进度提醒后继续调用工具/);
+
+    assert.equal(repo.cli("verify", "--branch", BRANCH).status, 0);
+    const second = stop(repo, { active: true });
+    assert.match(second.reason, /下一步 harness review --branch task\/a/);
+    assert.match(second.reason, /验收清单还有未实现的条目时，先继续实现并提交/);
+
+    writeReview(repo, git(repo.root, "rev-parse", BRANCH), "approve");
+    const third = stop(repo, { active: true });
+    assert.match(third.reason, /门禁已经齐备，还没有合并/);
+    assert.doesNotMatch(third.reason, /验收清单还有未实现的条目时/, "门禁齐备后不再提示继续实现");
+    assert.match(third.reason, /每一轮以工具调用推进/);
+  });
+
+  test("Codex 放行时同样输出 systemMessage", () => {
+    const repo = setup({ project: { ".harness/config.json": { ...CONFIG, stop: { idleBlocks: 1 } } } });
+    const dir = linkedTask(repo);
+    toolCall(repo, { tool_name: "apply_patch", tool_input: { input: `*** Begin Patch\n*** Add File: ${join(dir, "src/a.js")}\n+a\n*** End Patch\n` } }, { client: "codex", session: "codex-1" });
+    write(dir, "src/a.js", "a\n");
+    assert.equal(stop(repo, { client: "codex", session: "codex-1" })?.decision, "block");
+    const released = stop(repo, { client: "codex", session: "codex-1", active: true });
+    assert.equal(released?.decision, undefined);
+    assert.match(released.systemMessage, /task\/a/);
+  });
+
+  test("只改文件没提交也算进展；新分支上改了文件就结束，按未提交拦下", () => {
+    const repo = setup({ project: { ".harness/config.json": { ...CONFIG, stop: { idleBlocks: 1 } } } });
     const dir = linkedTask(repo);
     toolCall(repo, writeCall(join(dir, "src/a.js")));
     write(dir, "src/a.js", "export const a = 1;\n");
@@ -206,7 +288,7 @@ describe("收尾检查", () => {
 
     write(dir, "src/a.js", "export const a = 2;\n");
     assert.equal(stop(repo, { active: true })?.decision, "block", "内容变了算进展，再拦一次");
-    assert.equal(stop(repo, { active: true }), null, "之后没有进展，放行");
+    assert.equal(stop(repo, { active: true })?.decision, undefined, "之后没有进展，放行");
   });
 
   test("只做分析的会话、其他会话、未经手的任务分支都不受影响", () => {

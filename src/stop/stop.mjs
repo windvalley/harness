@@ -28,6 +28,23 @@ const AGENT_STEPS = [
   "acceptance_missing",
 ];
 
+// 门禁只差验证或评审时，分支可能还在实施中，验收清单没做完就不该先验证。
+const IMPLEMENTING_STEPS = new Set(["evidence_missing", "review_missing"]);
+
+// 同一进展指纹最多拦截的次数，超过后放行并通知用户，避免把会话困在循环里。
+const IDLE_BLOCKS_DEFAULT = 3;
+
+/** 读取 stop.idleBlocks：正整数有效；没配置用缺省值；配置了但不是正整数时按缺省值处理并标记回退。 */
+export function idleBlocksSetting(config) {
+  const stop = config?.stop;
+  if (stop === undefined || stop === null || typeof stop !== "object" || !("idleBlocks" in stop)) {
+    return { limit: IDLE_BLOCKS_DEFAULT, fallback: false };
+  }
+  const value = stop.idleBlocks;
+  if (Number.isInteger(value) && value >= 1) return { limit: value, fallback: false };
+  return { limit: IDLE_BLOCKS_DEFAULT, fallback: true };
+}
+
 function nextStep(code, { branch, mainRef, evidenceNextStep }) {
   switch (code) {
     case "branch_commit_rule_invalid":
@@ -141,7 +158,12 @@ function owedBy({ root, branch, escalations, worktrees }) {
     return owed(`任务 Worktree 里有 ${dirty.length} 个文件没有提交（${sample}）`, "属于本任务的提交后 harness verify、harness review 并交付，不属于的清理掉或在回复里说明");
   }
   const pending = AGENT_STEPS.filter((code) => status.codes.includes(code));
-  if (pending.length > 0) return owed(`还差 ${status.blockers.join("、")}`, nextStep(pending[0], status));
+  if (pending.length > 0) {
+    const result = owed(`还差 ${status.blockers.join("、")}`, nextStep(pending[0], status));
+    // 缺验证或缺评审时，Agent 可能还在实施；提示照给门禁的下一步，同时说明验收没做完时先继续实现。
+    if (IMPLEMENTING_STEPS.has(pending[0])) result.implementing = true;
+    return result;
+  }
   // 剩下的都要人来做（门禁改动确认、主 Worktree 不洁净），交给 Agent 的汇报说明。
   if (status.blockers.length > 0) return null;
   if (status.delivery.mode === "remote") {
@@ -176,19 +198,30 @@ function fingerprint(owed, worktrees) {
 export function formatStopReason(owed) {
   const lines = ["[harness] 收尾检查：本会话推进过的任务还没有交付完成，接着做，不要结束这一轮。"];
   for (const { branch, missing, next } of owed) lines.push(`- ${branch}：${missing}；下一步 ${next}`);
+  if (owed.some((item) => item.implementing)) {
+    lines.push("验收清单还有未实现的条目时，先继续实现并提交，实现完成后再运行 harness verify；暂时不该验证不是结束这一轮的理由。");
+  }
   lines.push(
     "harness 命令经项目入口 .harness/bin/harness 运行。",
     "按 .harness/rules/harness.md 的“一次任务”连续推进到合并（远程交付到 submit）；轮次长短、耗时与上下文大小都不是停下的理由。",
+    "每一轮以工具调用推进；回应客户端的进度提醒后继续调用工具，不要只用文字汇报就结束。",
     "需要人决定时，参考 .harness/rules/core.md 的基础停止条件与 .harness/config.json 的 escalate.triggers，先运行 harness escalate open 写明阻塞与选项（context.branch 填任务分支），再结束这一轮并向用户说明。",
     "用户在本轮明确要求暂停时，在回复里照录用户原话说明为什么停下。",
   );
   return lines.join("\n");
 }
 
+/** 放行时给用户看的通知：会话停在哪、还欠什么、拦了几次、怎么恢复。 */
+export function formatReleaseNotice(owed, blocks, idle) {
+  const items = owed.map(({ branch, missing }) => `${branch} ${missing}`).join("；");
+  const fallback = idle.fallback ? `（stop.idleBlocks 配置无效，已按 ${idle.limit} 处理）` : "";
+  return `会话没有交付就结束了：${items}。收尾检查已连续拦截 ${blocks} 次仍没有进展，本次放行${fallback}。发送“继续”即可让 Agent 接着做。`;
+}
+
 /**
  * 客户端的 Stop 事件调用。返回 { decision: "allow" | "block", reason }。
- * 同一会话两次结束之间没有任何进展时放行，并在账本记 stop.unresolved，避免把会话困在循环里，
- * 由 harness status 把这次未上报的结束展示给人。
+ * 同一会话的进展指纹不变时，最多拦截 stop.idleBlocks 次（缺省 3），之后放行并在账本记 stop.unresolved，避免把会话困在循环里；
+ * 第一次放行时返回 notice，由钩子入口展示给用户，harness status 也会显示这次未上报的结束。
  */
 export function stopCheck({ cwd, client, session }) {
   const project = loadGuardProject(cwd);
@@ -220,17 +253,25 @@ export function stopCheck({ cwd, client, session }) {
 
   const print = fingerprint(owed, worktrees);
   if (state.lastBlock?.fingerprint === print) {
-    if (!state.lastBlock.unresolved) {
-      for (const { branch, status, missing } of owed) {
-        appendLedger(root, { event: "stop.unresolved", branch, head: status.branchCommit, missing, client });
-      }
-      state.lastBlock.unresolved = true;
+    if (state.lastBlock.unresolved) return { decision: "allow", owed, unresolved: true };
+    // 旧版会话记录没有 blocks，当作已经拦过一次。
+    const blocks = state.lastBlock.blocks ?? 1;
+    const idle = idleBlocksSetting(project.config);
+    if (blocks < idle.limit) {
+      state.lastBlock.blocks = blocks + 1;
       saveSession(root, state);
+      appendLedger(root, { event: "stop.block", branches: owed.map((item) => item.branch), client });
+      return { decision: "block", reason: formatStopReason(owed), owed };
     }
-    return { decision: "allow", owed, unresolved: true };
+    for (const { branch, status, missing } of owed) {
+      appendLedger(root, { event: "stop.unresolved", branch, head: status.branchCommit, missing, blocks, client });
+    }
+    state.lastBlock.unresolved = true;
+    saveSession(root, state);
+    return { decision: "allow", owed, unresolved: true, notice: formatReleaseNotice(owed, blocks, idle) };
   }
 
-  state.lastBlock = { fingerprint: print, at: new Date().toISOString() };
+  state.lastBlock = { fingerprint: print, at: new Date().toISOString(), blocks: 1 };
   saveSession(root, state);
   appendLedger(root, { event: "stop.block", branches: owed.map((item) => item.branch), client });
   return { decision: "block", reason: formatStopReason(owed), owed };
