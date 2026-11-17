@@ -17,7 +17,8 @@
 - 未配置 `stop.idleBlocks` 时，同一指纹最多拦截 3 次，之后的结束放行。
 - 配置为正整数 N 时，同一指纹最多拦截 N 次；N 为 1 时，拦截与放行的时机和当前版本一致。
 - 指纹变化后拦截次数清零，重新计数。
-- 配置值不是正整数时按 3 处理，放行提示注明已回退，收尾检查不报错。
+- 配置值不是正整数（包括 `stop` 不是对象）时按 3 处理，放行提示注明已回退，收尾检查不报错。
+- 旧版或损坏的会话记录缺少有效拦截次数时，按已拦截一次计数。
 
 ## 放行通知
 
@@ -43,3 +44,14 @@
 - `npm test`、`npm run docs:check` 与 `git diff --check` 通过。
 - 完成独立评审，合并本地 `main` 并推送 `origin main`，删除任务分支。
 - 不修改版本号与 CHANGELOG，不打标签。
+
+## 验证记录
+
+- 红灯：`node --test test/stop.test.mjs test/plan.test.mjs`，40 个用例中 11 个失败，全部是新增或改动的用例，失败原因是提示缺少新文案、第 2 次结束即放行、放行无 `systemMessage`、`stop.unresolved` 无 `blocks` 字段、托管块缺少新句子。
+  日志保留在本机 `/tmp/harness-stop-red.log`。
+- 绿灯：实现后同一命令 40/40 通过。
+- 评审补充的红灯：`stop` 不是对象未标记回退、会话记录 `blocks` 为非法值时计数错误，3 个用例失败，缺少 `blocks` 的旧格式用例在原实现上已通过；修复后 `node --test test/stop.test.mjs test/plan.test.mjs` 44/44 通过。
+- Codex 放行通知：本机 Codex 0.162.1 内嵌的 `stop.command.output` 输出格式包含 `systemMessage` 字段，`test/stop.test.mjs` 证明 harness 在 Codex 客户端下会输出该字段。
+  没有在运行中的 Codex 界面里端到端实测是否显示；若不显示，影响是 Codex 用户只能在 `harness status` 里看到放行记录。
+- DeepSeek Harness 的插件只读取拦截结果，不显示放行通知，已写入规则、参考手册与已知限制。
+- 全量：评审修改后 `npm test` 662/662 通过，无跳过；`npm run docs:check` 与 `git diff --check` 通过。

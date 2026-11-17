@@ -34,12 +34,12 @@ const IMPLEMENTING_STEPS = new Set(["evidence_missing", "review_missing"]);
 // 同一进展指纹最多拦截的次数，超过后放行并通知用户，避免把会话困在循环里。
 const IDLE_BLOCKS_DEFAULT = 3;
 
-/** 读取 stop.idleBlocks：正整数有效；没配置用缺省值；配置了但不是正整数时按缺省值处理并标记回退。 */
+/** 读取 stop.idleBlocks：正整数有效；没配置用缺省值；配置了但不是正整数（包括 stop 不是对象）时按缺省值处理并标记回退。 */
 export function idleBlocksSetting(config) {
   const stop = config?.stop;
-  if (stop === undefined || stop === null || typeof stop !== "object" || !("idleBlocks" in stop)) {
-    return { limit: IDLE_BLOCKS_DEFAULT, fallback: false };
-  }
+  if (stop === undefined) return { limit: IDLE_BLOCKS_DEFAULT, fallback: false };
+  if (stop === null || typeof stop !== "object" || Array.isArray(stop)) return { limit: IDLE_BLOCKS_DEFAULT, fallback: true };
+  if (!("idleBlocks" in stop)) return { limit: IDLE_BLOCKS_DEFAULT, fallback: false };
   const value = stop.idleBlocks;
   if (Number.isInteger(value) && value >= 1) return { limit: value, fallback: false };
   return { limit: IDLE_BLOCKS_DEFAULT, fallback: true };
@@ -254,8 +254,9 @@ export function stopCheck({ cwd, client, session }) {
   const print = fingerprint(owed, worktrees);
   if (state.lastBlock?.fingerprint === print) {
     if (state.lastBlock.unresolved) return { decision: "allow", owed, unresolved: true };
-    // 旧版会话记录没有 blocks，当作已经拦过一次。
-    const blocks = state.lastBlock.blocks ?? 1;
+    // 旧版会话记录没有 blocks，或记录被改坏时，当作已经拦过一次。
+    const recorded = state.lastBlock.blocks;
+    const blocks = Number.isInteger(recorded) && recorded >= 1 ? recorded : 1;
     const idle = idleBlocksSetting(project.config);
     if (blocks < idle.limit) {
       state.lastBlock.blocks = blocks + 1;

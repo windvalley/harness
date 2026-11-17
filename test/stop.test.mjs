@@ -1,4 +1,5 @@
 import { strict as assert } from "node:assert";
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
@@ -242,6 +243,38 @@ describe("收尾检查", () => {
       const released = stop(repo, { active: true });
       assert.equal(released?.decision, undefined);
       assert.match(released.systemMessage, /stop\.idleBlocks 配置无效，已按 3 处理/);
+    });
+  }
+
+  test("stop 本身不是对象时同样按 3 处理，放行提示注明已回退", () => {
+    const repo = setup({ project: { ".harness/config.json": { ...CONFIG, stop: 5 } } });
+    const dir = linkedTask(repo);
+    agentCommit(repo, dir, { "src/a.js": "export const a = 1;\n" });
+    for (let i = 1; i <= 3; i++) assert.equal(stop(repo, { active: i > 1 })?.decision, "block", `第 ${i} 次拦`);
+    const released = stop(repo, { active: true });
+    assert.equal(released?.decision, undefined);
+    assert.match(released.systemMessage, /stop\.idleBlocks 配置无效，已按 3 处理/);
+  });
+
+  for (const blocks of [undefined, "x", 0]) {
+    test(`旧版或损坏的会话记录（blocks 为 ${JSON.stringify(blocks)}）按已拦过一次计数`, () => {
+      const repo = setup();
+      const dir = linkedTask(repo);
+      agentCommit(repo, dir, { "src/a.js": "export const a = 1;\n" });
+      assert.equal(stop(repo)?.decision, "block");
+      const key = createHash("sha256").update(`claude:${SESSION}`).digest("hex").slice(0, 32);
+      const file = join(repo.env.HARNESS_DATA_DIR, "sessions", `${key}.json`);
+      const state = JSON.parse(readFileSync(file, "utf8"));
+      assert.equal(state.lastBlock.blocks, 1);
+      if (blocks === undefined) delete state.lastBlock.blocks;
+      else state.lastBlock.blocks = blocks;
+      writeFileSync(file, `${JSON.stringify(state)}\n`);
+      assert.equal(stop(repo, { active: true })?.decision, "block", "第 2 次仍拦");
+      assert.equal(stop(repo, { active: true })?.decision, "block", "第 3 次仍拦");
+      const released = stop(repo, { active: true });
+      assert.equal(released?.decision, undefined);
+      assert.match(released.systemMessage, /连续拦截 3 次/);
+      assert.equal(ledger(repo).find((event) => event.event === "stop.unresolved").blocks, 3);
     });
   }
 
