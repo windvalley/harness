@@ -61,4 +61,6 @@
 - 自查补充的红灯：阶段分支删除后只认本地合并记录，远程推送记录不算已合入，新增用例失败；修复后 `test/stages.test.mjs` 11/11 通过。
 - 授权失效的各入口：`status`、`merge`、评审读取清单来源与收尾检查由 `test/stages.test.mjs` 直接覆盖；`submit` 与 `merge` 共用 `checkGates` 里的同一次 `approvalState` 判定（`src/merge/merge.mjs`），没有单独的 `submit` 用例。
 - “单个分支的阶段信息读取失败”：方案级授权缺失、被改动或主分支阶段文件不一致时，该分支只生成要用户处理的提示，与其他分支的欠项一起列出，用例覆盖；读取中抛出的异常沿用收尾检查已有的按分支隔离，记 `stop.error`。
-- 全量：`npm test` 672/672 通过（不含自查补充的 1 个用例），`npm run docs:check` 与 `git diff --check` 通过；最终结果见交付说明。
+- 独立评审补充的红灯：分支删除后的续跑、全部合入后误报、提示去重不清除、`status` 读取出错整体失败，4 个用例先失败；修复后 `node --test test/stages.test.mjs test/stop.test.mjs test/plan.test.mjs` 59/59 通过。
+- 全量：评审修改前 `npm test` 672/672 通过；最终结果见下一条。
+- 全量：评审修改后 `npm test` 677/677 通过，无跳过；`npm run docs:check` 与 `git diff --check` 通过。

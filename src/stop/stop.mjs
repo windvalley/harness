@@ -137,7 +137,14 @@ function missingBranchOwed({ root, branch, status, escalations }) {
 /** 判断一个分支还欠什么。返回 null 表示不需要 Agent 接着做：已交付、要等人，或者已经上报；要人处理的事返回 { human }。 */
 function owedBy({ project, root, branch, escalations, worktrees, sessionBranches }) {
   const status = branchStatus({ cwd: root, branch });
-  if (status.codes.includes("branch_missing")) return missingBranchOwed({ root, branch, status, escalations });
+  if (status.codes.includes("branch_missing")) {
+    // 合并后清理掉的阶段分支：先看合并后验收，再看所属方案的下一阶段。
+    const pending = missingBranchOwed({ root, branch, status, escalations });
+    if (pending) return pending;
+    const mainCommit = gitOk(root, ["rev-parse", "--verify", `${status.mainRef}^{commit}`]);
+    const gone = { ...status, mainCommit };
+    return stageOwed({ project, root, branch, status: gone, sessionBranches, owed: (missing, next) => ({ branch, status: gone, dirty: [], missing, next }) });
+  }
   const worktree = worktrees.get(branch) ?? null;
   const dirty = dirtyPaths(worktree);
   // 方案交出后停下等用户同意实施，正是规则要求的；已经动了代码却没有授权，同样要等用户。
@@ -186,6 +193,8 @@ function stageOwed({ project, root, branch, status, sessionBranches, owed }) {
   if (!link) return null;
   const progress = stageProgress({ root, link, mainCommit: status.mainCommit });
   if (progress.invalid) return { branch, human: `${branch}：${formatProgress(progress)}` };
+  // 本阶段还没合入（例如没合并就删掉了分支）时，不提示后续阶段。
+  if (!progress.stages.find((item) => item.id === link.stage)?.landed) return null;
   const next = progress.next;
   if (!next) return null;
   if (next.open.length > 0) {
@@ -268,6 +277,11 @@ export function stopCheck({ cwd, client, session }) {
     .filter(Boolean);
   const owed = results.filter((item) => !item.human);
   const human = results.filter((item) => item.human).map((item) => item.human);
+  // 要人处理的问题消除后忘掉上一条提示，同一问题再出现时重新提示。
+  if (human.length === 0 && state.lastNotice !== undefined) {
+    delete state.lastNotice;
+    saveSession(root, state);
+  }
   if (owed.length === 0) {
     // 只差人来处理时放行；同一条提示只给一次，不在每次结束时重复。
     const text = human.join("；");

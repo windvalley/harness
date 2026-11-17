@@ -434,4 +434,69 @@ describe("多阶段方案的收尾检查", () => {
     assert.equal(changed?.decision, undefined);
     assert.match(changed.systemMessage, /主分支上的阶段文件与授权时不一致/);
   });
+
+  test("提示问题消除后再出现时重新提示", () => {
+    const repo = carrierLanded();
+    touch(repo, C1);
+    const [file] = grantFiles(repo);
+    const original = readFileSync(file, "utf8");
+    rmSync(file);
+    assert.match(stop(repo)?.systemMessage ?? "", /需要用户重新授权/);
+    assert.equal(stop(repo), null);
+    writeFileSync(file, original);
+    assert.equal(stop(repo)?.decision, "block", "授权恢复后回到下一阶段的欠项");
+    rmSync(file);
+    assert.match(stop(repo)?.systemMessage ?? "", /需要用户重新授权/, "同一问题再次出现时重新提示");
+  });
+
+  test("阶段分支合并后被删除，收尾检查仍给出下一阶段", () => {
+    const repo = setup();
+    repo.branch(C1, carrierFiles());
+    assert.equal(approveStages(repo, C1).status, 0);
+    touch(repo, C1);
+    landed(repo, C1);
+    git(repo.root, "branch", "-D", C1);
+    const owed = stop(repo);
+    assert.equal(owed?.decision, "block");
+    assert.match(owed.reason, /feat\/alpha-1：方案 docs\/changes\/alpha\/stages\.json 还有后续阶段 s2（响应）没有开始/);
+
+    repo.branch("feat/dropped", { [acc("feat/dropped")]: STAGE_TEXT.s2, "src/dropped.js": code(10, "z") });
+    assert.equal(derive(repo, "feat/dropped", "s2").status, 0);
+    touch(repo, "feat/dropped", "session-dropped");
+    git(repo.root, "branch", "-D", "feat/dropped");
+    assert.equal(stop(repo, "session-dropped"), null, "没合入就删掉的阶段分支不提示下一阶段");
+  });
+
+  test("全部阶段合入后主分支再改阶段文件，不再提示重新授权", () => {
+    const repo = carrierLanded();
+    for (const [branch, stage, name] of [[D2, "s2", "beta"], [D3, "s3", "gamma"]]) {
+      repo.branch(branch, stageFiles(branch, STAGE_TEXT[stage], name));
+      assert.equal(derive(repo, branch, stage).status, 0);
+      landed(repo, branch);
+    }
+    repo.branch("docs/alpha-done", { [FILE]: json({ ...STAGES, note: "全部完成" }) });
+    landed(repo, "docs/alpha-done");
+    touch(repo, C1);
+    assert.equal(stop(repo), null);
+    const text = status(repo, C1);
+    assert.match(text, /\[-\] stages: .*已合入 3\/3 个阶段，全部阶段已合入/);
+  });
+
+  test("阶段信息读取出错时，status 降级为一行提示，收尾检查记录诊断并照常核对其他分支", () => {
+    const repo = carrierLanded();
+    const dir = join(repo.env.HARNESS_DATA_DIR, "plan-stages");
+    rmSync(dir, { recursive: true, force: true });
+    writeFileSync(dir, "not a directory\n");
+    const result = repo.cli("status", "--branch", C1);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /\[!!\] stages: 无法读取方案 docs\/changes\/alpha\/stages\.json 的进度/);
+
+    repo.branch("feat/other", { "src/other.js": code(2, "o") });
+    touch(repo, C1);
+    touch(repo, "feat/other");
+    const owed = stop(repo);
+    assert.equal(owed?.decision, "block");
+    assert.match(owed.reason, /feat\/other：还差/);
+    assert.ok(ledger(repo).some((event) => event.event === "stop.error" && event.branch === C1), "出错的分支记诊断");
+  });
 });

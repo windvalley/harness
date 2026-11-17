@@ -150,17 +150,18 @@ export function stageLanding({ root, file, stages, mainCommit }) {
 
 /**
  * 某个阶段分支所属方案的进度：已合入几个阶段、下一个没合入的阶段。
- * 方案级授权失效，或主分支上的阶段文件与授权时不一致时，返回 invalid，由调用方提示用户重新授权。
+ * 方案级授权失效，或还有后续阶段时主分支上的阶段文件与授权时不一致，返回 invalid，由调用方提示用户重新授权；
+ * 全部阶段已合入后再改阶段文件不影响任何授权，不再提示。
  */
 export function stageProgress({ root, link, mainCommit }) {
   const found = readGrant(root, link.file);
   if (!found.ok) return { file: link.file, stage: link.stage, invalid: `的阶段授权记录无效（${found.reason}）` };
   const grant = found.record;
-  const onMain = showBlob(root, mainCommit, link.file);
-  if (onMain !== null && sha256(onMain) !== grant.stagesHash) return { file: link.file, stage: link.stage, invalid: "在主分支上的阶段文件与授权时不一致" };
   const stages = stageLanding({ root, file: link.file, stages: grant.stages, mainCommit });
   const index = stages.findIndex((item) => item.id === link.stage);
   const next = stages.slice(index + 1).find((item) => !item.landed) ?? null;
+  const onMain = showBlob(root, mainCommit, link.file);
+  if (next && onMain !== null && sha256(onMain) !== grant.stagesHash) return { file: link.file, stage: link.stage, invalid: "在主分支上的阶段文件与授权时不一致" };
   return { file: link.file, stage: link.stage, stages, landed: stages.filter((item) => item.landed).length, total: stages.length, next, grant };
 }
 

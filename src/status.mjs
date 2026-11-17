@@ -37,11 +37,17 @@ function legacyClosedBy({ project, root }) {
 
 const uniqueBy = (items, key) => [...new Map(items.map((item) => [key(item), item])).values()];
 
-/** 属于多阶段方案的分支多显示一行方案进度；授权失效时提示需要用户重新授权。 */
+/** 属于多阶段方案的分支多显示一行方案进度；授权失效时提示需要用户重新授权，读取出错时只降级为一行提示。 */
 function stageStep({ root, branch, mainCommit, add }) {
   const link = approvalRecord(root, branch)?.stages;
   if (!link) return;
-  const progress = stageProgress({ root, link, mainCommit });
+  let progress;
+  try {
+    progress = stageProgress({ root, link, mainCommit });
+  } catch (error) {
+    add("stages", "warn", `无法读取方案 ${link.file} 的进度：${error.message}`);
+    return;
+  }
   add("stages", progress.invalid ? "warn" : "info", formatProgress(progress));
 }
 
