@@ -50,7 +50,8 @@ function assertBranchNamingGuidance(repo) {
   assert.match(naming, /`\.harness\/policy\.json`.*`branch-name`/);
   assert.doesNotMatch(naming, /类型采用|项目已有明确的分支命名规则时优先遵循/, "规则正文不再单独维护命名要求或承诺自然语言优先");
   const agents = readFileSync(join(repo.root, "AGENTS.md"), "utf8");
-  assert.match(agents, /分支命名.*`\.harness\/policy\.json`.*`branch-name`/);
+  const block = agents.slice(agents.indexOf("<!-- harness:start -->"), agents.indexOf("<!-- harness:end -->"));
+  assert.doesNotMatch(block, /分支命名|branch-name/, "分支命名指引由 core.md 与 harness.md 承载");
   const workflow = readFileSync(join(repo.root, ".harness/rules/harness.md"), "utf8");
   assert.match(workflow, /`\.harness\/policy\.json`.*`branch-name`/);
 }
