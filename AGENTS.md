@@ -50,8 +50,10 @@ doctor 测试需在 PATH 中找到 `claude` 或 `codex`；离线占位方式见 
 
 ## Worktree 与自动交付
 
-每个开发任务必须使用独立的 Git worktree 和任务分支，分支命名为 `codex/<task>`；主工作区保持在 `main` 且洁净。
-例如：`git worktree add -b codex/<task> ../harness-worktrees/<task> main`。
+每个开发任务必须使用独立的 Git worktree 和任务分支，主工作区保持在 `main` 且洁净。
+分支采用 `<type>/<task>`，按变更类型使用 `feature`、`fix`、`docs`、`refactor`、`test`、`chore` 等通用前缀；任务描述使用简短的小写 kebab-case。
+分支前缀不得使用 Codex、Claude、dsh、Kimi 等客户端名称。
+例如：`git worktree add -b feature/add-policy-check ../harness-worktrees/add-policy-check main`。
 任务完成且必要验证通过后，自动提交当前任务改动，合并到本地 `main`，再普通推送 `origin main`。
 本项目逐项授权上述自动提交、合并 `main` 和 push，无需逐次征求确认；该授权不包含强推、远程 PR/MR、部署或发版。
 提交前确认暂存区仅包含当前任务改动，合并时不得混入其他分支尚未交付的变更。

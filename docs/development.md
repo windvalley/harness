@@ -25,9 +25,11 @@ npm test
 ## 开发与交付
 
 每个开发任务使用独立的 Git worktree 和任务分支，主工作区保持在 `main` 且洁净。
+分支采用 `<type>/<task>`，按变更类型使用 `feature`、`fix`、`docs`、`refactor`、`test`、`chore` 等通用前缀；任务描述使用简短的小写 kebab-case。
+分支前缀不得使用 Codex、Claude、dsh、Kimi 等客户端名称。
 
 ```bash
-git worktree add -b codex/<task> ../harness-worktrees/<task> main
+git worktree add -b feature/add-policy-check ../harness-worktrees/add-policy-check main
 ```
 
 任务完成且必要验证通过后，自动提交当前任务改动、合并到 `main`，再普通推送 `origin main`，无需逐次确认。
