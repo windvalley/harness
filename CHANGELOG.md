@@ -4,6 +4,20 @@
 
 ## [Unreleased]
 
+## [0.19.6] - 2026-11-17
+
+Linked Worktree 里运行 `doctor` 时，Codex 信任记录按 `hooks.json` 的绝对路径登记，新建的任务 Worktree 即使钩子内容与已信任的主 Worktree 完全一致，也会被报为 `[!!]` 尚未信任，容易被误读为钩子失效。
+
+### 修复
+
+- `doctor` 在 Linked Worktree 的路径未登记 Codex 信任、但主 Worktree 的 `.codex/hooks.json` 内容完全一致且已信任时，改报 `[?]`，说明随主 Worktree 的信任记录，不再误报失败。
+- `[?]` 只表示文件已就位、本 Worktree 里的 Codex 尚未实测；在该 Worktree 里使用 Codex 时仍需运行 `/hooks` 批准一次。`verified` 仍只看本 Worktree 自己的信任记录。
+
+### 兼容性
+
+- 主 Worktree 也未信任，或钩子内容与主 Worktree 不一致时，仍报 `尚未信任`，不放宽任何拦截。
+- 只影响 `doctor` 的提示，不改变钩子、门禁、配置或证据格式。
+
 ## [0.19.5] - 2026-11-17
 
 上一版本遇到代码变更过大时会拒绝独立评审，迫使任务拆成多个分支或手动放宽评审上限。本版新增自动分批评审，保留单任务分支的完整验收和合并门禁。
