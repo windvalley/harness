@@ -6,6 +6,7 @@ import { acceptancePath, loadGateProject, mainBranch, trustedMainRef } from "../
 import { matchAny } from "../lib/glob.mjs";
 import { changedPaths, git, mergeBase, refExists, resolveCommit, showBlob } from "../lib/git.mjs";
 import { appendLedger, readRecord, writeRecord } from "../lib/store.mjs";
+import { prepareGrant, readGrant, stageApprovalProblem, stageLanding, writeGrant } from "./stages.mjs";
 
 export const PLAN_KIND = "plan";
 export const PLAN_PRESET = "plan-first";
@@ -79,14 +80,25 @@ function recordKey(branch) {
 /**
  * 方案是否已有实施授权：用户在对话里表达开始实施的意思后，由 Agent 照录原话记录。
  * 记录绑定验收清单的内容，之后清单再改就要重新取得授权。
+ * 属于多阶段方案的记录还要通过阶段校验；at 是读取携带分支方案材料的提交，缺省用分支名。
  */
-export function approvalState({ root, branch, acceptanceText }) {
+export function approvalState({ root, branch, acceptanceText, at }) {
   const found = readRecord(root, PLAN_KIND, recordKey(branch));
   if (!found.ok) return { approved: false, reason: found.code === "missing" ? "还没有记录用户的实施授权" : found.reason };
   if (found.record.branch !== branch) return { approved: false, reason: `授权记录属于分支 ${found.record.branch}` };
   if (acceptanceText === null || acceptanceText === undefined) return { approved: false, reason: "缺少验收清单" };
   if (found.record.acceptanceHash !== sha(acceptanceText)) return { approved: false, reason: "授权之后验收清单又改过，需要向用户说明改动并重新取得同意" };
+  if (found.record.stages) {
+    const problem = stageApprovalProblem({ root, branch, link: found.record.stages, acceptanceText, at });
+    if (problem) return { approved: false, reason: problem };
+  }
   return { approved: true, record: found.record };
+}
+
+/** 分支的授权记录（只认能通过校验、属于这个分支的），没有时返回 null。 */
+export function approvalRecord(root, branch) {
+  const found = readRecord(root, PLAN_KIND, recordKey(branch));
+  return found.ok && found.record.branch === branch ? found.record : null;
 }
 
 /** 统计代码改动行数（新增加删除），测试、文档、锁文件与门禁文件不计。 */
@@ -221,8 +233,11 @@ export function planSummary({ cwd, branch }) {
 /**
  * 记录实施授权。授权来自用户在对话里的表态，命令只负责落档：note 必须照录用户原话，
  * 合并、status 与评审都会显示它，事后可以核对 Agent 是否真的得到了同意。
+ * stages 给出阶段文件时，同时记录覆盖全部阶段的方案级授权，本分支是携带它的分支；
+ * fromStages 给出阶段文件时，按已有的方案级授权为后续阶段记录授权，原话照搬，不接受新的 note。
  */
-export function approvePlan({ cwd, branch, note = "" }) {
+export function approvePlan({ cwd, branch, note = "", stages = null, fromStages = null, stage = null }) {
+  if (fromStages) return deriveStage({ cwd, branch, note, file: fromStages, stage });
   const quote = String(note).trim();
   if (!quote) {
     throw new Error("记录实施授权要用 --note 照录用户表示同意实施的原话，例如 --note \"可以，开始实施\"；用户还没有同意时停下等待");
@@ -231,17 +246,72 @@ export function approvePlan({ cwd, branch, note = "" }) {
   if (summary.acceptance === null) {
     throw new Error(`分支 ${branch} 上还没有提交验收清单 ${summary.acceptancePath}，先把方案提交到任务分支再记录授权`);
   }
+  const by = userInfo().username;
+  const approvedAt = new Date().toISOString();
+  let link = null;
+  let prepared = null;
+  if (stages) {
+    const project = loadGateProject(cwd, { branch });
+    prepared = prepareGrant({ project, root: summary.root, branch, at: summary.branchCommit, file: stages, stage });
+    link = { file: stages, stage: prepared.stage, role: "carrier" };
+    // 先写方案级授权再写分支记录：中途失败时分支记录还是旧的，不会指向一份不存在的方案级授权。
+    writeGrant(summary.root, { ...prepared.grant, note: quote, by, approvedAt, carrier: { branch, stage: prepared.stage } });
+  }
   const record = writeRecord(summary.root, PLAN_KIND, recordKey(branch), {
     branch,
     branchCommit: summary.branchCommit,
     acceptanceHash: sha(summary.acceptance),
     planFiles: summary.planFiles,
-    by: userInfo().username,
+    by,
     note: quote,
-    approvedAt: new Date().toISOString(),
+    approvedAt,
+    ...(link ? { stages: link } : {}),
   });
-  appendLedger(summary.root, { event: "plan.approve", branch, commit: summary.branchCommit });
-  return { record, summary };
+  appendLedger(summary.root, { event: "plan.approve", branch, commit: summary.branchCommit, ...(link ? { stages: link.file, stage: link.stage, role: link.role } : {}) });
+  return { record, summary, stages: prepared ? { total: prepared.grant.stages.length, stage: prepared.stage, hints: prepared.hints } : null };
+}
+
+/** 按方案级授权为后续阶段记录授权：主分支上的阶段文件、本分支清单都要与授权时一致，前序阶段都已合入。 */
+function deriveStage({ cwd, branch, note, file, stage }) {
+  if (String(note ?? "").trim()) throw new Error("--from-stages 不接受 --note：原话取自方案级授权记录；用户同意了新的方案时，用 --stages 重新记录方案级授权");
+  if (!stage) throw new Error("--from-stages 需要用 --stage 指定阶段");
+  const summary = planSummary({ cwd, branch });
+  if (summary.acceptance === null) {
+    throw new Error(`分支 ${branch} 上还没有提交验收清单 ${summary.acceptancePath}，先把阶段验收清单复制过来并提交`);
+  }
+  const root = summary.root;
+  const found = readGrant(root, file);
+  if (!found.ok) throw new Error(`没有可用的方案级授权（${found.reason}），需要向用户说明方案并用 --stages 记录授权`);
+  const grant = found.record;
+  const project = loadGateProject(cwd, { branch });
+  const mainCommit = resolveCommit(root, mainBranch(project));
+  const onMain = showBlob(root, mainCommit, file);
+  if (onMain === null || sha(onMain) !== grant.stagesHash) {
+    throw new Error(`主分支上的阶段文件 ${file} 与方案授权时不一致或不存在，需要向用户说明并重新授权`);
+  }
+  const index = grant.stages.findIndex((item) => item.id === stage);
+  if (index < 0) throw new Error(`方案 ${file} 的授权里没有阶段 ${stage}`);
+  const target = grant.stages[index];
+  if (sha(summary.acceptance) !== target.acceptanceHash) {
+    throw new Error(
+      `分支 ${branch} 的验收清单 ${summary.acceptancePath} 与阶段 ${stage} 授权时的清单 ${target.acceptance} 不一致；先把阶段清单原样复制过来，内容要改时向用户说明并重新授权`,
+    );
+  }
+  const landing = stageLanding({ root, file, stages: grant.stages, mainCommit });
+  const pending = landing.slice(0, index).find((item) => !item.landed);
+  if (pending) throw new Error(`前序阶段 ${pending.id} 还没有合入主分支，先交付它再开始阶段 ${stage}`);
+  const record = writeRecord(root, PLAN_KIND, recordKey(branch), {
+    branch,
+    branchCommit: summary.branchCommit,
+    acceptanceHash: sha(summary.acceptance),
+    planFiles: summary.planFiles,
+    by: userInfo().username,
+    note: grant.note,
+    approvedAt: new Date().toISOString(),
+    stages: { file, stage, role: "derived" },
+  });
+  appendLedger(root, { event: "plan.approve", branch, commit: summary.branchCommit, stages: file, stage, role: "derived" });
+  return { record, summary, derived: { file, stage } };
 }
 
 export function formatPlanSummary(summary) {

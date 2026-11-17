@@ -6,7 +6,8 @@ import { matchAny } from "../lib/glob.mjs";
 import { changedPaths, git, gitOk, showBlob, worktreeEntries } from "../lib/git.mjs";
 import { appendLedger } from "../lib/store.mjs";
 import { listEscalations } from "../escalate/escalate.mjs";
-import { approvalState, planSettings } from "../plan/plan.mjs";
+import { approvalRecord, approvalState, planSettings } from "../plan/plan.mjs";
+import { formatProgress, nextStageStep, stageProgress } from "../plan/stages.mjs";
 import { branchStatus } from "../status.mjs";
 import { bindingProblem, escalationBinding } from "../escalate/binding.mjs";
 import { readSession, saveSession } from "./session.mjs";
@@ -133,10 +134,17 @@ function missingBranchOwed({ root, branch, status, escalations }) {
   };
 }
 
-/** 判断一个分支还欠什么。返回 null 表示不需要 Agent 接着做：已交付、要等人，或者已经上报。 */
-function owedBy({ root, branch, escalations, worktrees }) {
+/** 判断一个分支还欠什么。返回 null 表示不需要 Agent 接着做：已交付、要等人，或者已经上报；要人处理的事返回 { human }。 */
+function owedBy({ project, root, branch, escalations, worktrees, sessionBranches }) {
   const status = branchStatus({ cwd: root, branch });
-  if (status.codes.includes("branch_missing")) return missingBranchOwed({ root, branch, status, escalations });
+  if (status.codes.includes("branch_missing")) {
+    // 合并后清理掉的阶段分支：先看合并后验收，再看所属方案的下一阶段。
+    const pending = missingBranchOwed({ root, branch, status, escalations });
+    if (pending) return pending;
+    const mainCommit = gitOk(root, ["rev-parse", "--verify", `${status.mainRef}^{commit}`]);
+    const gone = { ...status, mainCommit };
+    return stageOwed({ project, root, branch, status: gone, sessionBranches, owed: (missing, next) => ({ branch, status: gone, dirty: [], missing, next }) });
+  }
   const worktree = worktrees.get(branch) ?? null;
   const dirty = dirtyPaths(worktree);
   // 方案交出后停下等用户同意实施，正是规则要求的；已经动了代码却没有授权，同样要等用户。
@@ -153,9 +161,11 @@ function owedBy({ root, branch, escalations, worktrees }) {
       const item = status.postMerge.pending[0];
       return owed(`合并后验收待完成：${status.postMerge.pending.map((entry) => entry.id).join("、")}`, `${item.howToVerify}；成功后运行 harness attest --branch ${branch} --check ${item.id} --command "<实际命令>" --report <报告>`);
     }
-    if (dirty.length === 0) return null;
-    const sample = dirty.slice(0, 3).join("、") + (dirty.length > 3 ? " 等" : "");
-    return owed(`任务 Worktree 里有 ${dirty.length} 个文件没有提交（${sample}）`, "属于本任务的提交后 harness verify、harness review 并交付，不属于的清理掉或在回复里说明");
+    if (dirty.length > 0) {
+      const sample = dirty.slice(0, 3).join("、") + (dirty.length > 3 ? " 等" : "");
+      return owed(`任务 Worktree 里有 ${dirty.length} 个文件没有提交（${sample}）`, "属于本任务的提交后 harness verify、harness review 并交付，不属于的清理掉或在回复里说明");
+    }
+    return stageOwed({ project, root, branch, status, sessionBranches, owed });
   }
   const pending = AGENT_STEPS.filter((code) => status.codes.includes(code));
   if (pending.length > 0) {
@@ -174,9 +184,29 @@ function owedBy({ root, branch, escalations, worktrees }) {
   return owed("门禁已经齐备，还没有合并", `harness merge --branch ${branch}${hint}`);
 }
 
-/** 进展指纹：分支顶端、阻塞项与任务 Worktree 里未提交文件的内容。两次结束之间指纹没变，说明没有进展。 */
+/**
+ * 已合入的阶段分支：所属方案还有没开始或没交付的后续阶段时，Agent 要接着做；
+ * 方案级授权失效时不生成欠项，交给用户重新授权。下一阶段的分支本会话正在做时，由那条分支自己的核对负责。
+ */
+function stageOwed({ project, root, branch, status, sessionBranches, owed }) {
+  const link = approvalRecord(root, branch)?.stages;
+  if (!link) return null;
+  const progress = stageProgress({ root, link, mainCommit: status.mainCommit });
+  if (progress.invalid) return { branch, human: `${branch}：${formatProgress(progress)}` };
+  // 本阶段还没合入（例如没合并就删掉了分支）时，不提示后续阶段。
+  if (!progress.stages.find((item) => item.id === link.stage)?.landed) return null;
+  const next = progress.next;
+  if (!next) return null;
+  if (next.open.length > 0) {
+    if (next.open.some((name) => sessionBranches.has(name))) return null;
+    return owed(`方案 ${progress.file} 的下一阶段 ${next.id} 在分支 ${next.open[0]} 上还没有交付`, `接着完成分支 ${next.open[0]}：harness status --branch ${next.open[0]}`);
+  }
+  return owed(`方案 ${progress.file} 还有后续阶段 ${next.id}（${next.title}）没有开始`, nextStageStep({ project, progress, mainRef: status.mainRef }));
+}
+
+/** 进展指纹：分支顶端、阻塞项、欠项与任务 Worktree 里未提交文件的内容。两次结束之间指纹没变，说明没有进展。 */
 function fingerprint(owed, worktrees) {
-  const parts = owed.map(({ branch, status, dirty }) => {
+  const parts = owed.map(({ branch, status, dirty, missing }) => {
     const path = worktrees.get(branch);
     const hash = createHash("sha256");
     // 只改了文件还没提交时，内容变化同样算进展；未跟踪的文件 git diff 看不到，直接读内容。
@@ -190,14 +220,15 @@ function fingerprint(owed, worktrees) {
       }
     }
     const postMerge = (status.postMerge?.completed ?? []).join(",");
-    return [branch, status.branchCommit, status.codes.join(","), postMerge, hash.digest("hex")].join(":");
+    return [branch, status.branchCommit, status.codes.join(","), postMerge, missing, hash.digest("hex")].join(":");
   });
   return createHash("sha256").update(parts.sort().join("\n")).digest("hex");
 }
 
-export function formatStopReason(owed) {
+export function formatStopReason(owed, human = []) {
   const lines = ["[harness] 收尾检查：本会话推进过的任务还没有交付完成，接着做，不要结束这一轮。"];
   for (const { branch, missing, next } of owed) lines.push(`- ${branch}：${missing}；下一步 ${next}`);
+  if (human.length > 0) lines.push(`另外需要用户处理：${human.join("；")}；在回复里向用户说明。`);
   if (owed.some((item) => item.implementing)) {
     lines.push("验收清单还有未实现的条目时，先继续实现并提交，实现完成后再运行 harness verify；暂时不该验证不是结束这一轮的理由。");
   }
@@ -232,10 +263,11 @@ export function stopCheck({ cwd, client, session }) {
 
   const escalations = listEscalations(root, "open");
   const worktrees = new Map(worktreeEntries(root).map((entry) => [entry.branch, entry.path]));
-  const owed = Object.keys(state.branches)
+  const sessionBranches = new Set(Object.keys(state.branches));
+  const results = [...sessionBranches]
     .map((branch) => {
       try {
-        return owedBy({ root, branch, escalations, worktrees });
+        return owedBy({ project, root, branch, escalations, worktrees, sessionBranches });
       } catch (error) {
         // 判断不了的分支不困住会话，同时保留诊断并继续核对其他任务。
         appendLedger(root, { event: "stop.error", branch, error: bindingProblem(root, error), client });
@@ -243,12 +275,23 @@ export function stopCheck({ cwd, client, session }) {
       }
     })
     .filter(Boolean);
+  const owed = results.filter((item) => !item.human);
+  const human = results.filter((item) => item.human).map((item) => item.human);
+  // 要人处理的问题消除后忘掉上一条提示，同一问题再出现时重新提示。
+  if (human.length === 0 && state.lastNotice !== undefined) {
+    delete state.lastNotice;
+    saveSession(root, state);
+  }
   if (owed.length === 0) {
-    if (state.lastBlock) {
+    // 只差人来处理时放行；同一条提示只给一次，不在每次结束时重复。
+    const text = human.join("；");
+    const notice = human.length > 0 && state.lastNotice !== text ? `${text}。` : undefined;
+    if (state.lastBlock || notice) {
       delete state.lastBlock;
+      if (notice) state.lastNotice = text;
       saveSession(root, state);
     }
-    return { decision: "allow", owed };
+    return { decision: "allow", owed, notice };
   }
 
   const print = fingerprint(owed, worktrees);
@@ -262,7 +305,7 @@ export function stopCheck({ cwd, client, session }) {
       state.lastBlock.blocks = blocks + 1;
       saveSession(root, state);
       appendLedger(root, { event: "stop.block", branches: owed.map((item) => item.branch), client });
-      return { decision: "block", reason: formatStopReason(owed), owed };
+      return { decision: "block", reason: formatStopReason(owed, human), owed };
     }
     for (const { branch, status, missing } of owed) {
       appendLedger(root, { event: "stop.unresolved", branch, head: status.branchCommit, missing, blocks, client });
@@ -275,5 +318,5 @@ export function stopCheck({ cwd, client, session }) {
   state.lastBlock = { fingerprint: print, at: new Date().toISOString(), blocks: 1 };
   saveSession(root, state);
   appendLedger(root, { event: "stop.block", branches: owed.map((item) => item.branch), client });
-  return { decision: "block", reason: formatStopReason(owed), owed };
+  return { decision: "block", reason: formatStopReason(owed, human), owed };
 }

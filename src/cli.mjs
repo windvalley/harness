@@ -60,6 +60,8 @@ const USAGE = `harness <命令> [参数]    任一命令加 --help 查看该命�
   status   --post-merge [--branch <名称>]            列出到期而未登记的合并后验收义务；有待办时退出码为 1
   confirm  --branch <名称> [--yes]                   查看门禁改动；--yes 记录人工确认
   approve  --branch <名称> [--yes --note <原话>]     查看任务方案；用户同意实施后加 --yes，--note 照录用户原话
+           [--stages <阶段文件> [--stage <阶段>]]     用户同意覆盖全部阶段时，同时记录方案级授权
+           --yes --from-stages <阶段文件> --stage <阶段>  按方案级授权为后续阶段分支记录授权，原话照搬
   merge    --branch <名称> [--dry-run]               受控合并到主分支（本地交付）
   submit   --branch <名称>                           推送核对过的提交并创建或更新 PR/MR（远程交付）
   sync     [--remote <远程>]                         把本地主分支快进到远程主分支；--remote 只在首次接入时使用
@@ -491,10 +493,19 @@ async function cmdConfirm(argv) {
 function cmdApprove(argv) {
   const { values } = parseArgs({
     args: argv,
-    options: { branch: { type: "string" }, yes: { type: "boolean", default: false }, note: { type: "string" } },
+    options: {
+      branch: { type: "string" },
+      yes: { type: "boolean", default: false },
+      note: { type: "string" },
+      stages: { type: "string" },
+      "from-stages": { type: "string" },
+      stage: { type: "string" },
+    },
   });
-  if (!values.branch) {
-    process.stderr.write("用法: harness approve --branch <名称> [--yes --note <用户同意实施的原话>]\n");
+  const usage = "用法: harness approve --branch <名称> [--yes --note <用户同意实施的原话> [--stages <阶段文件> [--stage <阶段>]]]\n" +
+    "      harness approve --branch <名称> --yes --from-stages <阶段文件> --stage <阶段>\n";
+  if (!values.branch || (values.stages && values["from-stages"]) || (values.stage && !values.stages && !values["from-stages"])) {
+    process.stderr.write(usage);
     return 2;
   }
   if (!values.yes) {
@@ -502,8 +513,21 @@ function cmdApprove(argv) {
     print("\n以上为只读摘要。用户表达开始实施的意思后，加 --yes --note \"<用户原话>\" 记录授权；验收清单之后再改，要重新取得同意。");
     return 0;
   }
-  const { summary } = approvePlan({ cwd: process.cwd(), branch: values.branch, note: values.note ?? "" });
-  print(`已记录 ${values.branch} 的实施授权（依据：${values.note.trim()}；验收清单 ${summary.acceptancePath}，方案文件 ${summary.planFiles.length} 个）。`);
+  const outcome = approvePlan({
+    cwd: process.cwd(),
+    branch: values.branch,
+    note: values.note ?? "",
+    stages: values.stages ?? null,
+    fromStages: values["from-stages"] ?? null,
+    stage: values.stage ?? null,
+  });
+  if (outcome.derived) {
+    print(`已按方案 ${outcome.derived.file} 的授权记录 ${values.branch} 的阶段 ${outcome.derived.stage} 授权（依据：${outcome.record.note}；验收清单 ${outcome.summary.acceptancePath}）。`);
+    return 0;
+  }
+  const stagesText = outcome.stages ? `，并记录方案 ${values.stages} 全部 ${outcome.stages.total} 个阶段的授权，本分支对应阶段 ${outcome.stages.stage}` : "";
+  print(`已记录 ${values.branch} 的实施授权（依据：${outcome.record.note}；验收清单 ${outcome.summary.acceptancePath}，方案文件 ${outcome.summary.planFiles.length} 个）${stagesText}。`);
+  for (const hint of outcome.stages?.hints ?? []) process.stderr.write(`注意：${hint}\n`);
   return 0;
 }
 

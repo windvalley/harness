@@ -20,7 +20,7 @@
 
 <script src="assets/docs.js?v=acdbbf2b96" defer></script>
 </head>
-<body data-page="principles" data-index="8f473503ad">
+<body data-page="principles" data-index="d1f346721d">
 <a class="skip-link" href="#main-content">跳到主要内容</a>
 <header class="topbar">
   <div class="topbar-inner">
@@ -415,6 +415,7 @@
       <li>你在对话里说“开始实施”之类的话就是授权，不需要执行命令。Agent 会运行 <code>harness approve --branch &lt;分支&gt; --yes --note "&lt;你的原话&gt;"</code> 照录原话。</li>
       <li>写了方案、改了库表相关文件或代码改动超过阈值的分支，没有授权记录不能合并（<code>plan_unapproved</code>）。</li>
       <li>合并输出与 <code>harness status</code> 会显示记录下来的原话，你可以随时核对。</li>
+      <li>一个分支交付不完的需求可以写成多阶段方案：方案目录里的 <code>stages.json</code> 按顺序列出阶段。你同意授权覆盖全部阶段时，Agent 用 <code>approve --stages</code> 记下方案级授权；一个阶段合并后，收尾检查提示下一阶段，Agent 用 <code>approve --from-stages</code> 照搬你的原话为新分支记录授权。阶段文件或某个阶段的清单改了，相关授权自动失效，要你重新同意。</li>
     </ul>
     <p>实施默认<strong>先红后绿</strong>：先把每条验收写成测试并确认失败，再实现到全部通过。</p><nav class="pagination" aria-label="文档分页"><a class="previous" href="architecture.html"><span>上一篇</span><strong>架构总览</strong></a><a class="next" href="limits.html"><span>下一篇</span><strong>信任模型与限制</strong></a></nav></main>
   <aside class="page-toc"><nav aria-label="本页内容"><div class="page-toc-title">本页内容</div><ol><li class="toc-level-2"><a href="#pretooluse">实时拦截：一次工具调用怎么被判定</a></li><li class="toc-level-2"><a href="#stop-check">收尾检查：Agent 想结束时</a></li><li class="toc-level-2"><a href="#githooks">git 钩子：提交与主分支更新怎么被判定</a></li><li class="toc-level-2"><a href="#lifecycle">一次任务的生命周期</a></li><li class="toc-level-2"><a href="#selection">按改动选检查</a></li><li class="toc-level-2"><a href="#external-evidence">外部验证与合并后验收</a></li><li class="toc-level-2"><a href="#test-evidence">测试证据：先红后绿与改动行覆盖率</a></li><li class="toc-level-2"><a href="#review">独立评审</a></li><li class="toc-level-2"><a href="#plan-first">任务分级与实施授权</a></li></ol></nav><div class="related-links"><h2>相关链接</h2><a href="https://github.com/windvalley/harness/blob/main/docs/reference.md">参考手册</a><a href="https://github.com/windvalley/harness">GitHub 仓库</a></div></aside>
