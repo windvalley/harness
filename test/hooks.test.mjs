@@ -485,6 +485,24 @@ describe("安装与自检", () => {
     assert.match(result.stdout, /尚未信任/);
   });
 
+  test("Linked Worktree 的 Codex 钩子未登记但主 Worktree 已信任且钩子内容一致时，doctor 不报失败", () => {
+    const repo = setup();
+    const linked = join(repo.root, "..", "linked-task");
+    git(repo.root, "worktree", "add", "-q", "-b", "task/codex-trust", linked, "main");
+    const result = sh(linked, join(linked, ".harness/bin/harness"), ["doctor"], repo.env);
+    assert.equal(result.status, 0, result.stdout);
+    assert.match(result.stdout, /\[\?\] client:codex: .*随主 Worktree/);
+    assert.doesNotMatch(result.stdout, /\[!!\] client:codex/);
+  });
+
+  test("Linked Worktree 与主 Worktree 的 Codex 钩子都未信任时，doctor 仍报尚未信任", () => {
+    const repo = setup({ trustCodex: false });
+    const linked = join(repo.root, "..", "linked-task");
+    git(repo.root, "worktree", "add", "-q", "-b", "task/codex-trust", linked, "main");
+    const result = sh(linked, join(linked, ".harness/bin/harness"), ["doctor"], repo.env);
+    assert.match(result.stdout, /\[!!\] client:codex: 钩子已接入但尚未信任/);
+  });
+
   test("已安装版本内容被改动时 doctor 报错", () => {
     const repo = setup();
     const file = join(repo.env.HARNESS_STORE, `${currentVersion()}/src/policy/engine.mjs`);

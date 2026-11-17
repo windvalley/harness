@@ -2,7 +2,7 @@ import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { deliverySettings, loadCurrentProject, mainBranch } from "../lib/config.mjs";
-import { git, mainWorktreeRoot, repoRoot } from "../lib/git.mjs";
+import { git, isLinkedWorktree, mainWorktreeRoot, repoRoot } from "../lib/git.mjs";
 import { keyStatus } from "../lib/store.mjs";
 import { mainWorktreeProblems } from "../merge/merge.mjs";
 import { commandExists, describePlan, maxDiffChars, planReviewers, resolveBackend } from "../review/review.mjs";
@@ -50,6 +50,21 @@ export function codexTrustState(root, event = "pre_tool_use") {
     if (/trusted_hash\s*=\s*"sha256:/.test(section)) return true;
   }
   return false;
+}
+
+// Linked Worktree 的路径没登记过时，看主 Worktree 是否已信任同样内容的钩子；只用于 doctor 不误报，不放宽任何门禁。
+function mainCodexTrust(root, event) {
+  try {
+    if (!isLinkedWorktree(root)) return false;
+    const main = mainWorktreeRoot(root);
+    const own = join(root, ".codex", "hooks.json");
+    const base = join(main, ".codex", "hooks.json");
+    if (!existsSync(own) || !existsSync(base)) return false;
+    if (readFileSync(own, "utf8") !== readFileSync(base, "utf8")) return false;
+    return codexTrustState(main, event);
+  } catch {
+    return false;
+  }
 }
 
 function hookInstalled(file) {
@@ -227,21 +242,28 @@ export function doctor({ cwd = process.cwd() } = {}) {
 
   const codex = clientHookInstalled(join(root, ".codex", "hooks.json"));
   // Codex 要求每个钩子先被信任一次；信任记录写在工作目录的 config.toml 的 [hooks.state] 下。
-  const codexTrusted = codexTrustState(root);
-  const stopTrusted = codexTrustState(root, "stop");
+  const ownTrusted = codexTrustState(root);
+  const ownStopTrusted = codexTrustState(root, "stop");
+  const viaMain = (event, own) => !own && mainCodexTrust(root, event);
+  const viaMainPre = viaMain("pre_tool_use", ownTrusted);
+  const viaMainStop = viaMain("stop", ownStopTrusted);
+  const codexTrusted = ownTrusted || viaMainPre;
+  const stopTrusted = ownStopTrusted || viaMainStop;
   checks.push({
     id: "client:codex",
     ok: codex.guard && codex.stop && codexTrusted && stopTrusted,
-    verified: codexTrusted,
+    verified: ownTrusted,
     detail: !codex.guard
       ? "未接入 .codex/hooks.json"
       : !codexTrusted
         ? "钩子已接入但尚未信任：在 Codex 里运行 /hooks 批准一次，否则命令不会经过门禁"
         : !codex.stop
           ? `拦截钩子已接入且已信任；${STOP_MISSING}`
-          : stopTrusted
-            ? "钩子已接入且已信任：拦截在 CLI 与桌面版内置引擎均已实测，收尾检查（Stop）只做了静态确认"
-            : "拦截钩子已信任，收尾检查（Stop）尚未信任：在 Codex 里运行 /hooks 批准它",
+          : !stopTrusted
+            ? "拦截钩子已信任，收尾检查（Stop）尚未信任：在 Codex 里运行 /hooks 批准它"
+            : viaMainPre || viaMainStop
+              ? "钩子已接入，随主 Worktree 的信任记录（钩子内容一致）；Codex 按路径记录信任，在本 Worktree 里用 Codex 时仍需运行 /hooks 批准一次"
+              : "钩子已接入且已信任：拦截在 CLI 与桌面版内置引擎均已实测，收尾检查（Stop）只做了静态确认",
   });
 
   checks.push(dshCheck());
