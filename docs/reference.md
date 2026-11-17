@@ -1373,8 +1373,11 @@ Agent 做到一半、门禁没有拒绝也没有遇到阻塞，自己结束了�
 | 门禁齐备但还没有 `merge` 或 `submit` | 拦下，提示交付命令；用户明确要求暂不合并时 Agent 上报后结束 |
 | 分支没有新提交，但任务 Worktree 里有未提交的改动 | 拦下，提示提交后验证、评审 |
 
-拦下时 Agent 收到的信息列出每个分支还差什么和下一条命令，并说明轮次长短、耗时与上下文大小都不是停下的理由。
-为了不把会话困在循环里，两次结束之间没有任何进展（分支顶端、阻塞项与任务 Worktree 里未提交文件的内容都没变）时放行，同时在账本记 `stop.unresolved`。
+拦下时 Agent 收到的信息列出每个分支还差什么和下一条命令，并说明轮次长短、耗时与上下文大小都不是停下的理由，每一轮要以工具调用推进。
+下一步是 `verify` 或 `review` 时，信息还会说明：验收清单还有未实现的条目时，先继续实现并提交，实现完成后再验证。
+为了不把会话困在循环里，同一状态（分支顶端、阻塞项与任务 Worktree 里未提交文件的内容都没变）最多拦截 `stop.idleBlocks` 次，缺省 3 次，拦满后放行，同时在账本记 `stop.unresolved`（含连续拦截次数）。
+Claude Code 与 Codex 在第一次放行时会收到一条 `systemMessage`，写明分支、欠项、拦截次数与“发送继续即可恢复”；之后同一状态再结束不重复提示。
+DeepSeek Harness 的插件只读取拦截结果，不显示这条提示。
 `harness status` 与 `harness merge` 会把这次“没有上报阻塞就结束”展示出来，分支再有新提交后不再提示。
 分支状态或义务读取异常时，收尾检查按分支隔离错误，在账本记录包含分支与脱敏诊断的 `stop.error`，继续核对其他任务，不能让一个异常分支使其他任务一起免于检查。
 异常诊断不证明该分支已交付，也不豁免验证、独立评审、人工确认或其他交付门禁。
@@ -1490,6 +1493,7 @@ node ~/github/harness/bin/harness.mjs install --local   # 按新锁定的版本�
 | `risk.deps` | 新项目由 `init` 写入 `go.mod`、`requirements*.txt`、`Pipfile`、`Gemfile`，没有这一项则不启用 | 依赖清单 glob；命中的分支要实施授权，启用 `plan-first` 时生效，不套用 `intent.plan.exclude` |
 | `governance.confirmOnGateChange` | `true` | 门禁改动是否要人工确认；首次接入不受这个开关影响 |
 | `governance.gatePaths` | `[]` | 追加的门禁文件 glob |
+| `stop.idleBlocks` | `3` | 收尾检查对同一状态最多拦截的次数，拦满后放行并提示用户；必须是正整数，取 `1` 与旧版行为一致；不是正整数（包括 `stop` 不是对象）时按 `3` 处理，放行提示注明已回退 |
 | `escalate.triggers` | 四条 | 建议上报的情形，写给 Agent 看，harness 不据此自动触发；交付设置授权范围内的推送不在其中 |
 | `env` | `{}` | 执行检查时附加的环境变量 |
 | `worktree.cleanup` | `[]` | `harness worktree clean` 删除 Worktree 前在里面依次运行的命令，见“清理任务 Worktree” |
@@ -2075,7 +2079,7 @@ harness 防的是 Agent 的误操作，以及被提示注入后常见的绕过�
   钩子被删除或摘掉 harness 的块时，`harness doctor` 会报出来。
 - 路径规则只约束写文件、读文件类的工具调用，用 shell 命令读写同一个文件要靠 `shell-forbid` 一类的命令规则覆盖。
 - Codex 没有信任钩子时没有实时拦截；DeepSeek Harness 的本机插件尚未在运行中的客户端里端到端实测；Claude 桌面版只做了静态确认。
-- 收尾检查只能让 Agent 多做一轮，不能保证它做对：Agent 可以开一个上报再结束，或者在没有进展时第二次结束。
+- 收尾检查只能降低 Agent 提前停下的概率，不能保证它做完、做对：Agent 可以开一个上报再结束，或者在同一状态被拦满 `stop.idleBlocks` 次后结束。
   这两种情况都会留下记录（上报内容、`stop.unresolved`），由人在 `harness status`、合并输出或上报列表里核对。
   会话经手的分支靠实时拦截记录，客户端没有接上实时拦截、或者 Agent 用无法静态推算目录的命令改了别的 Worktree，收尾检查就不知道这个分支。
 - 本机共用的 DSH 插件和版本目录都在用户目录里，目前没有规则阻止 Agent 用命令改写它们。

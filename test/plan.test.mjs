@@ -146,6 +146,8 @@ describe("先方案后实施", () => {
     assert.match(text, /先判断任务分级/);
     assert.match(text, /用户表达开始实施的意思才算授权/);
     assert.match(text, /已授权的任务连续推进到交付/);
+    assert.match(text, /每一轮以工具调用推进/);
+    assert.match(text, /回应客户端的进度提醒后继续调用工具，不结束这一轮/);
     assert.match(text, /先红后绿/);
   });
 });

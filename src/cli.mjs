@@ -673,6 +673,7 @@ function cmdStopHook(adapter) {
   try {
     const outcome = stopCheck({ cwd: payload?.cwd || process.cwd(), client: adapter.name, session: payload?.session_id });
     if (outcome.decision === "block") process.stdout.write(`${JSON.stringify({ decision: "block", reason: outcome.reason })}\n`);
+    else if (outcome.notice) notice(outcome.notice);
   } catch (error) {
     notice(`收尾检查出错，本次放行: ${error.message}`);
   }
