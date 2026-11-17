@@ -39,6 +39,7 @@ import { unresolvedStop } from "../stop/session.mjs";
 import { entryTouched, followUps } from "../install/followups.mjs";
 import { ensureHooksPath } from "../install/install.mjs";
 import { REVIEW_KIND, reviewerSummary } from "../review/review.mjs";
+import { chunkedRecordProblem } from "../review/chunks.mjs";
 import { approvalState, assessRisk, planEnforced } from "../plan/plan.mjs";
 import { MERGE_TOKEN_ENV, mainUpdateToken } from "../githook.mjs";
 import { divergedGuidance, fetchRemoteMain, pushMain } from "../delivery/remote.mjs";
@@ -437,7 +438,8 @@ export async function checkGates({ project, root, branch, log = console.error, d
         review.ok &&
         review.record.verdict === "approve" &&
         review.record.reviewedCommit === branchCommit &&
-        blocking.length === 0;
+        blocking.length === 0 &&
+        !chunkedRecordProblem(review.record);
       if (reviewReusable) {
         const stale = reviewStaleFiles({ root, review: review.record, mainCommit, branchCommit });
         if (stale.length > 0) {
@@ -454,7 +456,7 @@ export async function checkGates({ project, root, branch, log = console.error, d
       } else {
         throw new MergeError(
           review.ok
-            ? `独立评审结论是 ${review.record.verdict}，不能继续。修复后重新运行 harness review --branch ${branch}`
+            ? `独立评审未通过：${chunkedRecordProblem(review.record) ?? review.record.verdict}，不能继续。修复后重新运行 harness review --branch ${branch}`
             : `缺少对该分支的独立评审: ${review.reason}。运行 harness review --branch ${branch}`,
           review.ok ? "review_blocked" : "review_missing",
         );

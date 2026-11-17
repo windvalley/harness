@@ -432,25 +432,24 @@ describe("评审的拆分提示", () => {
     assert.ok(log);
   });
 
-  test("diff 过大时给出按目录的分组建议", async () => {
-    const { splitSuggestion } = await import("../src/review/review.mjs");
+  test("超过上限的多文件 diff 自动分批并追加全局集成评审", () => {
     const repo = setup();
     repo.branch("task/big", {
       "backend/a.js": "x".repeat(160_000),
       "frontend/b.vue": "y".repeat(160_000),
     });
-    const base = git(repo.root, "merge-base", "main", "task/big");
-    const head = git(repo.root, "rev-parse", "task/big");
-    const suggestion = splitSuggestion(repo.root, base, head, 240_000, 50_000);
-    assert.match(suggestion, /backend/);
-    assert.match(suggestion, /frontend/);
-    assert.match(suggestion, /至少拆成 5 次/);
 
     fakeReviewer(repo, APPROVE);
     assert.equal(repo.cli("verify", "--branch", "task/big").status, 0);
     const review = repo.cli("review", "--branch", "task/big");
-    assert.equal(review.status, 1);
-    assert.match(review.stderr, /按目录拆分建议/);
+    assert.equal(review.status, 0, review.stderr);
+    assert.match(review.stderr, /diff 超限，自动分为 2 批/);
+    assert.match(review.stderr, /全局集成与验收评审/);
+
+    const promptLog = readFileSync(join(repo.root, "..", "prompt.log"), "utf8");
+    assert.match(promptLog, /批次 1\/2/);
+    assert.match(promptLog, /批次 2\/2/);
+    assert.match(promptLog, /全部批次评审发现和跨模块线索/);
   });
 });
 
