@@ -358,6 +358,8 @@ describe("提交信息规范只有一处定义，钩子、verify、review、stat
     const init = repo.rawCli("init");
     assert.equal(init.status, 0, init.stderr);
     const policy = JSON.parse(readFileSync(join(repo.root, ".harness/policy.json"), "utf8"));
+    policy.disabled = ["main-worktree-commit"];
+    write(repo.root, ".harness/policy.json", `${JSON.stringify(policy, null, 2)}\n`);
     const rule = policy.rules.find((item) => item.kind === "commit-message");
     assert.equal(rule.lang, "any");
     assert.deepEqual(rule.body, { required: true, leadingBlank: true, bullets: true });
@@ -397,6 +399,8 @@ describe("提交信息规范只有一处定义，钩子、verify、review、stat
     repos.push(repo);
     assert.equal(repo.rawCli("init").status, 0);
     const policy = JSON.parse(readFileSync(join(repo.root, ".harness/policy.json"), "utf8"));
+    policy.disabled = ["main-worktree-commit"];
+    write(repo.root, ".harness/policy.json", `${JSON.stringify(policy, null, 2)}\n`);
     const config = JSON.parse(readFileSync(join(repo.root, ".harness/config.json"), "utf8"));
     const spec = resolveCommitRule({ resolved: resolvePolicy(policy), config });
 

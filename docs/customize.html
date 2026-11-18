@@ -20,7 +20,7 @@
 
 <script src="assets/docs.js?v=acdbbf2b96" defer></script>
 </head>
-<body data-page="customize" data-index="f19dde8f7f">
+<body data-page="customize" data-index="6dca37b0de">
 <a class="skip-link" href="#main-content">跳到主要内容</a>
 <header class="topbar">
   <div class="topbar-inner">
@@ -41,7 +41,7 @@
     <p>可以直接对 Agent 说“请检查当前规则和检查配置，按项目实际情况提出调整方案，说明影响并按授权实施”。配置改动仍按门禁流程验证、评审和人工确认。</p>
     <p>四个文件决定门禁的行为，Agent 可以直接改，但它们都属于门禁改动，合并前要人确认，合入后才生效。</p>
     <div class="cards">
-      <div class="card"><h2 tabindex="-1" id="customize-section-1"><code>config.json</code></h2><p>主分支名、合并要求、提交格式、评审后端、验收清单模式、任务分级阈值、Worktree 清理命令。</p></div>
+      <div class="card"><h2 tabindex="-1" id="customize-section-1"><code>config.json</code></h2><p>主分支名、合并要求、提交格式、评审后端、验收清单模式、任务分级阈值、Worktree 自动清理开关与清理命令。</p></div>
       <div class="card"><h2 tabindex="-1" id="customize-section-2"><code>verify.json</code></h2><p>改了哪些路径跑哪些检查、检查的级别、执行目录与依赖，以及先红后绿与改动行覆盖率的复算配置。</p></div>
       <div class="card"><h2 tabindex="-1" id="customize-section-3"><code>policy.json</code></h2><p>启用哪些预设、关掉哪些规则、项目自己的拦截规则。</p></div>
       <div class="card"><h2 tabindex="-1" id="customize-section-4"><code>golden/tasks.json</code></h2><p>对规则本身的回归用例，改坏规则的分支在 verify 阶段就被拦下。</p></div>
@@ -62,7 +62,7 @@
         <tr><td><code>git-safety</code></td><td>拦截递归删除、丢弃改动、强删 Worktree、删分支、强推、<code>stash</code>、<code>--no-verify</code>，以及在主分支上合并、变基、重置</td></tr>
         <tr><td><code>gate-self</code></td><td>保护执行器入口与绕过开关；轮换密钥与人工确认只能由人执行</td></tr>
         <tr><td><code>plan-first</code></td><td>没有实施授权时只能写方案文件，大改动合并前必须有授权记录</td></tr>
-        <tr><td><code>main-worktree</code>（可选）</td><td>主 Worktree 只用来合并，多个会话并行时推荐启用</td></tr>
+        <tr><td><code>main-worktree</code>（新项目默认）</td><td>主 Worktree 只用来合并，任务在独立 Linked Worktree；已有项目升级不自动开启，可从 presets 删除来关闭</td></tr>
       </tbody>
     </table></div>
     <p>字段的完整说明见参考手册的<a href="https://github.com/windvalley/harness/blob/main/docs/reference.md#配置">配置</a>一节。</p><nav class="pagination" aria-label="文档分页"><a class="previous" href="limits.html"><span>上一篇</span><strong>信任模型与限制</strong></a><a class="next" href="team.html"><span>下一篇</span><strong>团队与多机</strong></a></nav></main>

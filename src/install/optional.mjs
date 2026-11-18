@@ -11,6 +11,11 @@ export const OPTIONS = [
   { path: "coverage", file: "verify.json", text: "coverage（observe 只记录改动行的覆盖率，不拦截）" },
   { path: "requiredPaths", file: "verify.json", text: "requiredPaths（没有 observe 模式，配置后无检查覆盖的改动路径会直接拦截，按项目目录结构评估后再加）" },
   {
+    path: "worktree.autoClean",
+    file: "config.json",
+    text: "worktree.autoClean（默认 false；开启后仅在本次交付、合并后义务完成且全部安全条件满足时清理任务 Worktree，远程交付等 sync 后才清理）",
+  },
+  {
     path: "delivery.push",
     file: "config.json",
     when: (config) => (config.delivery?.mode ?? "local") === "local",

@@ -128,8 +128,12 @@ describe("接入已有项目", () => {
     const repo = legacyProject();
     const init = onboard(repo, { takeOver: true });
     assert.match(init.stdout, /接管（--take-over）/);
-
     git(repo.root, "checkout", "-q", "chore/harness-onboard");
+    const policyFile = join(repo.root, ".harness/policy.json");
+    const policy = JSON.parse(readFileSync(policyFile, "utf8"));
+    policy.presets = policy.presets.filter((name) => name !== "main-worktree");
+    write(repo.root, ".harness/policy.json", `${JSON.stringify(policy, null, 2)}\n`);
+    commit(repo.root, "chore(harness): 允许主 Worktree 提交\n\n- 本测试只关注既有钩子接管", {});
     const guard = readFileSync(join(repo.root, "frontend/.husky/reference-transaction"), "utf8");
     assert.doesNotMatch(guard, /legacy guard/, "接管后原有主分支保护被移除");
     const pre = readFileSync(join(repo.root, "frontend/.husky/pre-commit"), "utf8");
@@ -145,7 +149,8 @@ describe("接入已有项目", () => {
     const plan = repo.rawCli("verify", "--plan", "--branch", branch);
     assert.equal(plan.status, 0, plan.stderr);
     fakeReviewer(repo, APPROVE);
-    assert.equal(repo.rawCli("verify", "--branch", branch).status, 0);
+    const verified = repo.rawCli("verify", "--branch", branch);
+    assert.equal(verified.status, 0, verified.stdout + verified.stderr);
     assert.equal(repo.rawCli("review", "--branch", branch).status, 0);
 
     const unconfirmed = repo.rawCli("merge", "--branch", branch);

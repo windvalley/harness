@@ -35,8 +35,8 @@ function defaultConfig({ mainBranch }) {
       triggers: ["需求有歧义且会改变行为或权限", "必要验证被既有问题阻塞", "交付设置授权范围之外的推送、远程 MR、部署或生产操作", "同一个问题连续三轮没有解决"],
     },
     env: {},
-    // 清理任务 Worktree 前在里面依次运行的命令，例如停服务、删隔离数据库；见 harness worktree clean。
-    worktree: { cleanup: [] },
+    // autoClean 默认关闭；cleanup 是删除前依次运行的命令，例如停服务、删隔离数据库。
+    worktree: { autoClean: false, cleanup: [] },
     // 交付方式：local 用 harness merge 合入本地主分支；remote 用 harness submit 推送任务分支并创建 PR/MR，由平台合并。
     delivery: { mode: "local" },
   };
@@ -46,7 +46,7 @@ function starterPolicy({ mainBranch }) {
   const hooks = git(process.cwd(), ["config", "--get", "core.hooksPath"]).stdout.trim();
   return {
     version: 1,
-    presets: ["secrets", "git-safety", "gate-self", "plan-first"],
+    presets: ["secrets", "git-safety", "gate-self", "main-worktree", "plan-first"],
     disabled: [],
     rules: [
       {

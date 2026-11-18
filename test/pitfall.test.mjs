@@ -247,6 +247,10 @@ describe("接入与门禁", () => {
     repos.push(repo);
     assert.equal(repo.rawCli("init").status, 0);
     assert.ok(existsSync(join(repo.root, FILE)));
+    const policyFile = join(repo.root, ".harness/policy.json");
+    const policy = JSON.parse(readFileSync(policyFile, "utf8"));
+    policy.presets = policy.presets.filter((name) => name !== "main-worktree");
+    write(repo.root, ".harness/policy.json", `${JSON.stringify(policy, null, 2)}\n`);
     assert.equal(repo.rawCli("pitfall", "add", "--signature", "keep", "--symptom", "s", "--fix", "f").status, 0);
     const before = readFileSync(join(repo.root, FILE), "utf8");
     assert.equal(repo.rawCli("init").status, 0);

@@ -30,7 +30,7 @@
 - 人完成确认后按交付方式继续：本地交付完成已获授权的本地合并；远程交付运行 `harness submit --branch <接入分支>`，平台合入后在主 Worktree 运行 `harness sync`。
   然后列出当前客户端所需的重启、信任或注册操作。
   用户完成后再运行诊断，区分配置就位和当前客户端实际调用已验证，不把初始化成功作为全部接入完成。
-- 合并后保留接入分支和任务 Worktree，清理遵循“收尾”。
+- 合并后默认保留接入分支和任务 Worktree；仅主分支明确配置 `worktree.autoClean: true` 时才按“收尾”的安全条件自动清理。
 
 ## 升级项目
 
@@ -80,7 +80,7 @@
    待验收义务由合入时写下的记录跟踪，不随分支后续提交或分支被删除而消失；`harness status --post-merge` 列出全仓库的待办。
    登记时用 `--at` 指定实际被测的主分支提交，一次登记关闭同一检查下已合入的全部义务，修复分支登记后原分支的义务一并关闭。
    只有依赖目标分支集成状态的检查才在 `verify.json` 标 `phase: "post-merge"`，纯本地项目不配置就没有额外步骤。
-   交付后任务 Worktree 保留，清理按下面的“收尾”由用户发起。
+   交付后默认保留任务 Worktree；自动清理只在主分支配置 `worktree.autoClean: true` 时按下面的“收尾”执行，也可由用户发起手工清理。
 6. 汇报结果入口、逐条验收证据、验证与评审结论和最终状态：本地交付是已合并、待用户同意合并或阻塞；远程交付是已提交 PR/MR 待平台合并、平台已合入并已同步或阻塞。
    同时说明任务分支、提交和工作区位置，未执行或未登记项不能算作通过。
    汇报里写一行代码评审的评审者，照抄 `harness status` 的“评审者”或 `harness merge`、`harness submit` 日志里“评审者:”之后的摘要，其中的 effort 是评审时的配置值，不是已验证的运行强度；不要自己拼，也不要省略“由备选完成”。
@@ -173,12 +173,14 @@ harness 保证它提交的 PR/MR 通过了本机门禁；平台上最终合入�
 - 平台命令（`gh`、`glab`）的安装与登录由人完成，harness 不读取、不保存也不传递平台令牌。
 - 本地交付下同样可以用 `harness sync` 把主分支快进到远程，取代由人用绕过开关手动快进的做法。
 
-## 收尾：任务 Worktree 由用户发起清理
+## 收尾：清理任务 Worktree
 
-合并后保留任务 Worktree 和任务分支，不要自行删除：会话常常还停在里面，合并后也可能要回来补改，删除时还会连带删掉被忽略的本机文件。
+默认保留任务 Worktree 和任务分支，不要自行删除：会话常常还停在里面，合并后也可能要回来补改，删除时还会连带删掉被忽略的本机文件。
+主分支配置 `worktree.autoClean: true` 时，本地合并后或远程平台合入并 `sync` 后，可以自动清理本次交付且满足全部安全条件的任务；`submit` 后不能清理。
 
+- 自动清理只处理本次任务分支，有未完成的合并后义务、未提交文件、本机文件、未合并提交、锁定或进程时保留；无法检查进程时也保留，清理失败不改变交付结果。
 - `harness merge` 的输出写明任务 Worktree 保留在哪里，以及已合并但还没清理的 Worktree 有几个；汇报时把这两点转告用户。
-- 用户要求清理时，先运行 `harness worktree clean` 把预览交给用户：哪些可以删、会连带删掉哪些被忽略的文件，哪些跳过以及原因。
+- 用户要求手工清理时，先运行 `harness worktree clean` 把预览交给用户：哪些可以删、会连带删掉哪些被忽略的文件，哪些跳过以及原因。
 - 用户确认后运行 `harness worktree clean --yes`。
   预览里有含 `.env` 这类本机文件的 Worktree 时，用户明确同意删除这些文件才加 `--with-local-files`。
 - 不要绕开这个命令自己删除：`git worktree remove --force` 与 `git branch -D` 会被拦截，它们会丢掉未提交的改动或未合并的提交。
@@ -283,7 +285,8 @@ git 钩子调用主 Worktree 的入口，任务分支改不了门禁代码自己
 `.harness/config.json` 配置了 `git.hooksDir` 时，钩子整份生成在那个目录，`core.hooksPath` 指向主 Worktree 里的这一份，所有 Worktree 执行同一份钩子。
 项目自己的检查写在 `git.projectHooks` 目录下的同名可执行脚本里，harness 检查通过后调用，Agent 可以直接维护；生成的钩子不手改，改配置后运行 `harness install` 重新生成。
 `harness merge` 在主 Worktree 里更新主分支，要求它停在主分支、洁净、没有进行中的 git 操作；`harness status` 与 `harness doctor` 会提前列出不满足的项。
-`.harness/policy.json` 的 `presets` 里有 `main-worktree` 时，主 Worktree 只用来合并：
+新项目的 `init` 默认在 `.harness/policy.json` 的 `presets` 里启用 `main-worktree`；已有项目升级不自动开启，可以从 presets 删除来关闭。
+启用后主 Worktree 只用来合并：
 
 - Agent 不能改主 Worktree 里被 git 跟踪或未忽略的文件，被 `.gitignore` 忽略的本机文件不受限。
 - Agent 不能在主 Worktree 里切离主分支。

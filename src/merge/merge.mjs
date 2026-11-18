@@ -46,7 +46,7 @@ import { divergedGuidance, fetchRemoteMain, pushMain } from "../delivery/remote.
 import { commitRangeProblems, commitRuleErrorAt } from "../policy/commit-message.mjs";
 import { assertBranchPolicy, branchRuleErrorAt } from "../policy/branch-name.mjs";
 import { resolvePolicy } from "../policy/resolve.mjs";
-import { leftoverWorktrees } from "../worktree/clean.mjs";
+import { autoCleanDelivered, leftoverWorktrees } from "../worktree/clean.mjs";
 
 export class MergeError extends Error {
   constructor(message, code = "merge_refused") {
@@ -736,7 +736,9 @@ export async function mergeTask({ cwd, branch, dryRun = false, log = console.err
 
     const push = pushPlan ? publishMain({ root, mainRef, newHead, plan: pushPlan, branch, log }) : null;
 
-    // 任务 Worktree 合并后保留：会话常常还停在里面，也可能要回来补改。需要时由用户运行 harness worktree clean 清理。
+    await autoCleanDelivered({ cwd: mainRoot, branch, mainRef, log });
+
+    // 默认保留任务 Worktree；启用 autoClean 时也只在本次任务的严格安全条件满足后清理。
     try {
       const own = worktreeEntries(mainRoot).find((entry) => entry.branch === branch);
       const leftover = leftoverWorktrees({ root: mainRoot, mainRef }).length;
