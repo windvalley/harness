@@ -109,12 +109,25 @@ Claude Code 此时触发 `StopFailure` 而不是 `Stop`，而 `StopFailure` 文�
   - 每个客户端一个触发器：Claude Code 用 `StopFailure`（已确认可用）；Codex 用 `stop` 加错误检测（实施时实测确认）；其他客户端用通用命令模板 `hook --client generic --event stop-failure`。
 - 通用命令模板配置放在本机 `~/.config/harness/continue.json`，支持 `${session}`、`${prompt}` 占位符与 `json`、`jsonl`、`text` 三种输出解析，第三方 Agent 不需要为它写代码。
 
-### 六、进度可见与通知
+### 六、进度可见与通知：静默记账不够
 
-- 用户在终端 `claude --resume <会话>` 或 `/resume` 能看到续跑写入的每一轮，因为续跑默认续同一会话。
-- `harness status` 增加一行：最近一次续跑记录的会话、轮次、停止原因与时间。
-- 停止时若配置了 `notify` 命令数组，执行一次，支持 `${reason}`、`${session}`、`${rounds}` 占位符；未配置就不执行任何外部命令。
-- 账本事件：`continue.notice`（未启用时的提示）、`continue.round`、`continue.stop`、`continue.skip`（锁、接管、无欠项、错误类型不匹配）。
+先说一个不能绕过的限制：`StopFailure` 钩子的输出与退出码都被客户端忽略，所以**钩子这一侧没有任何办法把字打到用户终端上**。
+只写账本的话，用户在下次运行 `harness status` 或打开 `audit` 之前根本不知道会话已经被续跑，这在“自动替你花钱跑模型”的场景下不可接受。
+
+所以方案要求四个通道同时存在，缺省全部开启，用户不需要配置任何东西就能知道：
+
+1. **会话内可见（主要通道）**：续跑默认续同一会话，每轮的提示由 harness 写成一条用户消息，内容是“自动续跑第 N 轮、上一轮因什么中断、当前欠项、下一步”。
+   用户下次 `/resume` 或 `claude --resume <会话>` 打开时，第一眼看到的就是这些轮次，和手动输入“继续”完全一样。
+2. **启动即通知（主动通道）**：`notify` 在**续跑开始时**触发一次，不是只在停止时。
+   内容含会话、中断错误类型、第 1 轮要做的欠项。
+   停止时再触发一次。两次都带 `${session}`、`${rounds}`、`${reason}`。
+   未配置 `notify` 时，退化为下一项的日志文件。
+3. **日志文件与 status 实时行（无需配置）**：续跑进程的 stdout 与 stderr 写到 `.git/harness/continue/<会话>.log`。
+   会话锁存在期间，`harness status` 显示一行 `continuation: 进行中 会话 <id> 第 N 轮 上一轮 <时间>`，并打印日志路径；锁释放后改为显示停止原因与总轮次。
+   这样即使没配通知，用户随手看 `status` 就能知道有没有东西在替他跑。
+4. **账本（事后核账）**：`continue.notice`（未启用时的提示）、`continue.dispatch`（派发成功，含轮次上限与错误类型）、`continue.round`、`continue.stop`、`continue.skip`。
+
+`sleep` 与退避期间的等待也写进日志与 status 的“上一轮时间”，让用户能看出是“在等”还是“卡住”。
 
 ## 与收尾检查的关系
 
@@ -160,7 +173,8 @@ Claude Code 此时触发 `StopFailure` 而不是 `Stop`，而 `StopFailure` 文�
 
 ## 待确认
 
-- `continuation.enabled` 打开时是否还需每轮在终端打印一次“自动续跑第 N 轮”，还是静默即可。
+- 通知通道缺省是否需要 `notify` 才算可用。当前设计是不配置也有会话内消息、日志文件与 `status` 实时行，`notify` 只是更主动的补充。
+- 每轮是否都在日志里写一条独立分隔行，便于人直接 `tail -f` 跟进度；当前设计是写，但未在验收里单独列出。
 
 ## 方案评审
 

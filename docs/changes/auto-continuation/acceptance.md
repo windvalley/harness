@@ -39,9 +39,11 @@
 
 ## 可见性与记录
 
-- 账本写 `continue.notice`、`continue.round`、`continue.stop`、`continue.skip`，内容含会话、轮次、欠项快照与原因。
-- `harness status` 显示最近一次续跑的会话、轮次、停止原因与时间。
-- 配置了 `notify` 命令时停止时执行一次并正确替换占位符；未配置时不执行外部命令。
+- 每轮续跑在会话记录里留下一条 harness 写的用户消息，含“自动续跑第 N 轮”、上一轮中断的错误类型、当前欠项与下一步；`/resume` 后能直接读到。
+- 配置了 `notify` 时，续跑**开始**触发一次、停止再触发一次，占位符替换正确；未配置时不执行外部命令。
+- 续跑进程的输出写到 `.git/harness/continue/<会话>.log`，日志路径可从 `status` 与账本取得。
+- 会话锁存在期间，`harness status` 显示 `continuation: 进行中`，含会话、轮次与上一轮时间；锁释放后显示停止原因与总轮次。
+- 账本写 `continue.notice`、`continue.dispatch`、`continue.round`、`continue.stop`、`continue.skip`，内容含会话、轮次、欠项快照与原因。
 
 ## 兼容性
 
