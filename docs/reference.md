@@ -431,6 +431,9 @@ Agent 开始任务前先判断分级，规则写在 `.harness/rules/core.md`，�
 - 直接实施：小优化、小迭代或缺陷修复，不改库表与迁移，不改对外接口契约与数据兼容性，代码改动不超过 `intent.plan.maxLines`（默认 500 行，测试、文档与锁文件不计）。
 - 先方案后实施：其余任务，以及拿不准的任务。
 
+两类实施任务都要先写验收清单。
+直接实施只写几条适用的正常结果、禁止行为与失败结果即可，不需要另写 `spec.md` 和 `plan.md`，也不新增实施授权；没有清单时独立评审的需求符合度仍只能是 `unknown`。
+
 先方案后实施的节奏：
 
 1. 探索：Agent 先读仓库，说明需求涉及的能力现在做到哪一步、相关定义在哪、有没有半成品，每条结论附 `文件:行号`。
@@ -678,9 +681,9 @@ SHA、tag、detached HEAD 可用于纯内容验证与评审，不会被认定为
 cd <项目>
 git worktree add -b feature/login ../<项目>-login main
 cd ../<项目>-login
-# 可选：写验收清单 .harness/acceptance/feature-login.md
+# 先写简短验收清单 .harness/acceptance/feature-login.md
 # 实现并提交
-# 提交后按 .harness/rules/method-review.md 自审，发现问题先改完再提交一次
+# 提交后按 .harness/rules/method-review.md 自审（含按 diff 核对适用安全项），发现问题先改完再提交一次
 harness verify --branch feature/login   # 选检查，在固定检出里执行，写签名证据
 harness review --branch feature/login   # 独立评审
 harness status --branch feature/login   # 只读：还差哪几步才能交付
@@ -699,6 +702,7 @@ harness merge  --branch feature/login   # 本地交付：核对证据与评审�
   这是启发式，认不出的写法（位置参数里的密码、短选项）仍可能漏掉，所以命令里不要直接写凭据，改用环境变量或配置文件。
   需要后置到合并之后的检查见“合并后验收：完整示例”。
 - 提交之后、`verify` 之前按 `.harness/rules/method-review.md` 自审：验收清单能逐条对上证据、提交说明与 diff 一致且格式合规、没有漏提交的文件与无关改动、diff 之外的调用方与文档已经一起改。
+  还要沿实际 diff、调用方和相关数据流核对适用的命令、SQL、路径、URL、反序列化、HTML、权限与敏感信息安全项；无关类别不用逐项填表，适用但未检查的标 `not_evaluated` 并说明影响与补验方式。
   自审不是门禁，不留记录，结论也不交给独立评审。
   自审改出的新提交会让证据与评审作废，所以它放在 `verify` 之前，不放在 `verify` 与 `review` 之间。
 - 分支上有新提交或改写过提交后，自动证据与评审随之失效，重新 verify、review；外部证据按检查覆盖文件判断，无关文档变化不会使其失效。
@@ -837,6 +841,7 @@ git -C <主 Worktree> worktree unlock <Worktree 路径>
 ### 验收清单
 
 清单放在 `.harness/acceptance/<分支名>.md`，分支名里字母、数字、`.`、`_`、`-` 以外的字符换成 `-`，例如 `feature/login` 对应 `.harness/acceptance/feature-login.md`。
+直接实施和先方案后实施的任务都要写；小任务只保留适用的几条，不需要因此另写 spec 与 plan，也不新增实施授权。
 每条写成能用测试或命令验证的结果。
 清单可以随任务分支提交，评审会标注它“尚未经人工确认”；也可以先合入主分支。
 从主分支继承、在任务分支上没有改过的清单，仍按主分支上确认过的清单对待。

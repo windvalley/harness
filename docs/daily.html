@@ -20,7 +20,7 @@
 
 <script src="assets/docs.js?v=acdbbf2b96" defer></script>
 </head>
-<body data-page="daily" data-index="d1f346721d">
+<body data-page="daily" data-index="7cc4e54085">
 <a class="skip-link" href="#main-content">跳到主要内容</a>
 <header class="topbar">
   <div class="topbar-inner">
@@ -51,7 +51,7 @@
 
     <h3>小需求：核实范围后可以直接实施</h3>
     <div class="code"><span class="label">描述希望的变化即可</span><pre class="prompt"><code>在创建用户的表单中增加邮箱格式校验，输入不合法时显示错误提示，并阻止提交。</code></pre></div>
-    <p>Agent 核实这只是现有表单的局部校验，不需要调整接口、数据结构或权限且满足小任务条件后，可以直接实施，并验证合法与不合法邮箱的提交行为。发现影响超出小任务范围时，应转入讨论、方案和授权流程。</p>
+    <p>Agent 核实这只是现有表单的局部校验，不需要调整接口、数据结构或权限且满足小任务条件后，先写一份简短验收清单再直接实施，并验证合法与不合法邮箱的提交行为。小任务不需要另写 spec/plan 或等待方案授权；发现影响超出小任务范围时，应转入讨论、方案和授权流程。</p>
     <p>用户当前只要求分析、评估或讨论时仍保持只读，不能因为需求看起来小就动手。用户也可以补充约束或调整节奏。</p>
 
     <h2 tabindex="-1" id="branch-naming">分支命名</h2>
@@ -103,7 +103,7 @@ docs/update-install-guide</code></pre></div>
     这不冒充用户答复，也不免除验证、评审与人工确认；详细诊断与命令见<a href="blocked.html#validation-blockers">被拦截时怎么办</a>。</p>
 
     <h2 tabindex="-1" id="acceptance">验收清单</h2>
-    <p>清单放在 <code>.harness/acceptance/&lt;分支名&gt;.md</code>，分支名里的 <code>/</code> 等字符换成 <code>-</code>，例如 <code>feature/login</code> 对应 <code>feature-login.md</code>。每条写成能用测试或命令验证的结果。没有清单时评审只评工程质量；<code>intent.mode</code> 设为 <code>required</code> 时没有清单不能合并。</p>
+    <p>直接实施和先方案后实施的任务都要写清单，放在 <code>.harness/acceptance/&lt;分支名&gt;.md</code>，分支名里的 <code>/</code> 等字符换成 <code>-</code>，例如 <code>feature/login</code> 对应 <code>feature-login.md</code>。小任务只写适用的几条即可，每条对应测试、命令或人工验证。没有清单时评审只评工程质量；<code>intent.mode</code> 设为 <code>required</code> 时没有清单不能合并。</p>
     <p>默认都是合并前验收。确实需要目标分支集成状态时，把条目写进“合并后验收”章节，并配置对应的 <code>post-merge</code> 检查；只写章节却没有对应检查时，验证会明确失败，不会让这条义务悄悄漏掉。</p>
 
     <h2 tabindex="-1" id="commit-msg">提交信息</h2>
