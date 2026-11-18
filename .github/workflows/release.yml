@@ -62,19 +62,36 @@ jobs:
         run: npm test
       - name: Documentation consistency
         run: npm run docs:check
-      - name: Publish tag and GitHub Release
+      - name: Publish or safely resume GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           tag="v${{ steps.version.outputs.version }}"
-          if gh release view "$tag" >/dev/null 2>&1; then
-            echo "::notice::Release $tag already exists; nothing to do"
-            exit 0
-          fi
-          if git ls-remote --tags origin "refs/tags/$tag" | grep -q .; then
-            echo "::error::Tag $tag exists without a release; refusing to overwrite"
-            exit 1
-          fi
-          gh release create "$tag" --target "$GITHUB_SHA" --title "$tag" \
-            --notes-file "$RUNNER_TEMP/harness-release-notes.md" --latest
+          node scripts/release.mjs ensure --tag "$tag" --commit "$GITHUB_SHA" \
+            --notes-file "$RUNNER_TEMP/harness-release-notes.md" --repository "$GITHUB_REPOSITORY"
+      - name: Read-only publication audit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          tag="v${{ steps.version.outputs.version }}"
+          node scripts/release.mjs audit --tag "$tag" --commit "$GITHUB_SHA" \
+            --notes-file "$RUNNER_TEMP/harness-release-notes.md" --repository "$GITHUB_REPOSITORY"
+      - name: Verify fresh install from published tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        shell: bash
+        run: |
+          tag="v${RELEASE_VERSION}"
+          source="$RUNNER_TEMP/harness-release-source-${RELEASE_VERSION}"
+          store="$RUNNER_TEMP/harness-release-store-${RELEASE_VERSION}"
+          gh repo clone "$GITHUB_REPOSITORY" "$source" -- --depth 1 --branch "$tag"
+          HARNESS_STORE="$store" node "$source/bin/harness.mjs" install --version "$RELEASE_VERSION"
+          HARNESS_STORE="$store" RELEASE_SOURCE="$source" node --input-type=module <<'NODE'
+          import { verifyVersion } from `${process.env.RELEASE_SOURCE}/src/install/install.mjs`;
+          const result = verifyVersion({ version: process.env.RELEASE_VERSION });
+          console.log(JSON.stringify({ version: process.env.RELEASE_VERSION, installed: result }, null, 2));
+          if (!result.ok) throw new Error(result.reason);
+          NODE

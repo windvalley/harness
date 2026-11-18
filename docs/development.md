@@ -58,6 +58,16 @@ git worktree add -b feature/add-policy-check ../harness-worktrees/add-policy-che
 
 手动触发示例：`gh workflow run release.yml --ref main -f version=<已确认版本号>`，版本号不含 `v` 前缀。
 工作流只允许从 `main` 发布，并校验输入版本与 `package.json` 一致、CHANGELOG 条目非空、测试及文档检查通过。
+`scripts/release.mjs ensure` 对身份与正文一致的已有 Release 直接审计通过，不重复创建；有匹配 tag 但缺 Release 时允许补建，tag 指向其他提交、Release 正文不一致或查询失败时停止，不覆盖既有内容。
+发布后的 `audit` 只读核对 tag、目标提交、Release 正文及正式发布状态；工作流再从远端 tag 全新克隆，使用隔离版本目录执行 `install --version` 并校验安装内容。
+
+可用下面的命令单独执行只读审计，发布说明文件必须与该版本 CHANGELOG 正文一致：
+
+```bash
+node scripts/release.mjs audit --tag v<版本> --commit <发布提交完整SHA> \
+  --notes-file <该版本发布说明文件> --repository windvalley/harness
+```
+
 普通 merge、push 或 `package.json` 变更不会自动触发发布工作流。
 发布后确认 package 版本、CHANGELOG 和本机分发内容一致，tag 与 GitHub Release 指向同一个发布提交。
 
