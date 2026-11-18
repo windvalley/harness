@@ -10,6 +10,12 @@ node ~/github/harness/bin/harness.mjs install --local
 .harness/bin/harness doctor</code></pre></div>
     <p><code>install --local</code> 按项目锁定的版本安装代码（必要时从对应的 <code>v&lt;版本&gt;</code> 标签导出），再写入本机的钩子与插件目录，不改任何入库文件。装好之前，Claude Code 与 Codex 的实时拦截会拒绝一切调用并提示这条命令。</p>
 
+    <h3 id="handoff">跨会话交接</h3>
+    <p>需要换会话、换执行者或把任务上下文贴到 PR/MR 时，从现有状态生成 Markdown 交接视图：</p>
+    <div class="code"><span class="label">只读生成交接</span><pre><code>harness status --handoff --branch feature/login</code></pre></div>
+    <p>视图汇总分支与主分支完整提交、方案文件、有效实施授权、验收清单、Worktree 未提交改动、验证与评审证据、阻塞、相关上报、下一步命令和恢复入口。缺省分支是当前分支，退出语义与普通 <code>status</code> 相同。</p>
+    <p>它不运行验证或评审，不写交接文件、账本或新的状态真源。外部副作用与恢复点没有结构化记录时会明确提示，接手者仍须核对实际环境。动态正文会遮盖常见凭据，但粘贴到外部系统前仍须人工检查。</p>
+
     <h3 id="upgrade">升级</h3>
     <div class="code"><span class="label">升级需求示例</span><pre class="prompt"><code>请从 GitHub 获取 harness 最新版本：https://github.com/windvalley/harness
 

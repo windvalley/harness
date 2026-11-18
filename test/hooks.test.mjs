@@ -335,6 +335,21 @@ describe("安装与自检", () => {
     }
   });
 
+  test("澄清先查证，仅对无法自行获得的关键信息提问，不扩大授权", () => {
+    const core = readFileSync(join(PACKAGE_ROOT_TEST, "assets/rules/core.md"), "utf8");
+    const method = readFileSync(join(PACKAGE_ROOT_TEST, "assets/rules/method-requirements.md"), "utf8");
+    assert.match(core, /明确.*契约.*技术实现.*兼容性.*失败处理/);
+    assert.match(core, /无法自行获得.*影响结果.*才询问/);
+    assert.doesNotMatch(core, /行为、权限、兼容性或失败语义的未决问题须经用户确认/);
+    assert.match(method, /可用资料、工具和相关入口/);
+    assert.match(method, /推断和假设/);
+    for (const text of [core, method]) {
+      assert.match(text, /产品语义/);
+      assert.match(text, /权限/);
+      assert.match(text, /不.*扩大.*授权/);
+    }
+  });
+
   test("授权内的步骤不向用户征询是否继续，压缩或续接后沿用已有分级与授权", () => {
     // 压缩后托管块仍在上下文里，core.md 不一定会重读，所以约束同时写进托管块。
     const block = managedBlockBody();
