@@ -7,9 +7,12 @@
 ## 触发器
 
 - `hook --client claude --event stop-failure` 能接收 `{session_id, error, error_details?, last_assistant_message?}` 载荷，钩子入口退出码为 0 且不向客户端输出拦截结果。
-- `error` 不在 `continuation.errors` 里时只记 `continue.skip`，不派发进程。
 - `continuation.enabled` 为 `false` 时只记 `continue.notice`，并在 `harness status` 里显示可续跑提示，不派发进程。
-- `enabled` 为 `true` 且存在 Agent 能接着做的欠项时，派发一个 detach 的续跑进程并立即返回。
+- 缺省不对错误类型做白名单：任何 `StopFailure` 错误在启用后都会派发一次续跑。
+- `continuation.skipErrors` 命中时只记 `continue.skip`，不派发进程。
+- 同一错误连续 `maxSameErrors` 轮出现且进展指纹不变时停止，原因为需要人处理，并写明错误类型。
+- `rate_limit` 与 `overloaded` 续跑前有退避等待，等待时间逐轮增长且有上限；其他错误不等待。
+- 启用后存在 Agent 能接着做的欠项时，派发一个 detach 的续跑进程并立即返回。
 - 无欠项或只差人来做时不派发，记录原因。
 
 ## 续跑进程
@@ -17,6 +20,7 @@
 - 每轮拼出的命令包含原会话 ID、权限模式与 harness 生成的欠项提示。
 - 一轮结束后重新计算欠项，仍有欠项则继续下一轮。
 - 达到 `maxRounds`、连续 `maxIdleRounds` 轮指纹不变、连续 `maxFailures` 轮失败、被判定为用户接管时停止，并写明原因。
+- 每轮提示包含该错误类型对应的恢复建议。
 - 环境变量 `HARNESS_CONTINUATION=1` 存在时，派生的钩子不再派发新进程。
 - 同一会话同时只有一个续跑进程；第二个进程检测到锁后退出并记 `continue.skip`。
 - 会话被其他客户端进程占用时不续跑，记录“已由用户接管”。

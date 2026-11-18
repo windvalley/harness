@@ -18,8 +18,10 @@ Claude Code 此时触发 `StopFailure` 而不是 `Stop`，而 `StopFailure` 文�
 
 - Claude Code 2.1.326 的 `StopFailure` 输入是 `{hook_event_name, error, error_details?, last_assistant_message?}` 加通用字段，**包含 `session_id`**，与 `Stop` 共用同一套会话标识。
 - 钩子执行是 `await` 的，不是纯后台；但输出与退出码被忽略，因此钩子能做的只有“自己去做事”，不能“要求客户端继续”。
-- `error` 的匹配值是 `rate_limit`、`overloaded`、`authentication_failed`、`model_not_found`、`server_error`、`unknown` 等。
-- 本次中断的错误正是 `unknown`（`Upstream request failed`），不是可自动恢复的容量类错误。
+- 它**替代** `Stop` 触发：一轮以 API 错误结束时只发 `StopFailure`，不发 `Stop`。
+  这解释了本次中断为什么收尾检查完全没发声：那一轮根本没有走到收尾检查。
+- 全部错误类型：`rate_limit`、`overloaded`、`server_error`、`max_output_tokens`、`invalid_request`、`model_not_found`、`verification_required`、`unknown`、`authentication_failed`、`oauth_org_not_allowed`、`account_on_hold`、`billing_error`、`cloud_credential_error`。
+- 本次中断的错误是 `unknown`（`Upstream request failed`）。
 
 因此可行的做法是：`StopFailure` 钩子在同进程内**拉起一个新的无头续跑进程**去接着做欠项，而钩子自己正常退出。
 续跑进程是一次新的客户端调用，必然要消耗一次新的会话轮次，这正是“自动续跑”的代价与含义。
@@ -56,12 +58,36 @@ Claude Code 此时触发 `StopFailure` 而不是 `Stop`，而 `StopFailure` 文�
 
 - `.harness/config.json` 新增 `continuation`：
   - `enabled`：缺省 `false`。为 `false` 时 `StopFailure` 钩子只记一条 `continue.notice`，在账本与 `status` 里显示“这一轮因 X 中断，仍有欠项，可运行 harness continue 续跑”，不做任何自动动作。
-  - `errors`：缺省只对可恢复错误自动续跑，即 `rate_limit`、`overloaded`、`server_error`、`model_not_found`；`unknown`、`authentication_failed`、`billing_error` 缺省不自动续跑，因为这几类自动重试通常无意义或会在错误的方向上烧钱。
-  - `maxRounds` 缺省 20，`maxIdleRounds` 缺省 3，`maxFailures` 缺省 3，`permissionMode` 缺省 `bypassPermissions`（按用户此前的选择）。
-  - `client` 缺省 `claude`。
+  - `maxRounds` 缺省 20，`maxIdleRounds` 缺省 3，`maxFailures` 缺省 3，`maxSameErrors` 缺省 2。
+  - `permissionMode` 缺省 `bypassPermissions`（按用户此前的选择），`client` 缺省 `claude`。
+  - `skipErrors` 缺省空数组，见下一节。
 - 打开 `enabled` 是门禁改动，需要人确认；Agent 不能自行打开。
-- 新增门禁规则：`harness continue` 与改动 `continuation` 配置都只能由人发起。Agent 在自己的会话里运行 `harness continue` 会被拒绝，理由是它会在当前会话之外再开一个无人监督的执行者，Agent 既看不到结果也无法对后果负责；需要续跑时由钩子派发或由人运行。
+- 新增门禁规则：`harness continue` 与改动 `continuation` 配置都只能由人发起。
+  Agent 在自己的会话里运行 `harness continue` 会被拒绝，理由是它会在当前会话之外再开一个无人监督的执行者，Agent 既看不到结果也无法对后果负责；需要续跑时由钩子派发或由人运行。
 - 续跑进程里的 Agent 拿不到任何新增权限：`harness approve`、`harness confirm --yes`、`harness escalate resolve` 仍由既有人工规则拦截。
+
+### 四、错误分类：缺省全部续跑，靠兜底停下
+
+不按错误类型做白名单。理由是白名单本身要猜，而绝大多数错误都能靠新的一轮改变请求而恢复：
+
+| 错误 | 新的一轮能否推进 | 做法 |
+| --- | --- | --- |
+| `rate_limit`、`overloaded`、`server_error`、`unknown` | 通常能，等一等或重发即可 | 续跑，先退避等待 |
+| `max_output_tokens` | 能，让模型接着写并缩短单次输出 | 续跑，提示里说明上一轮被截断，从断点继续并控制输出长度 |
+| `invalid_request` | 常能，多是工具参数或上下文形态问题 | 续跑，提示里要求先读回失败点、修正参数后重试 |
+| `model_not_found`、`cloud_credential_error` | 能，换备选模型或另一凭据 | 续跑，提示里说明模型或凭据不可用，按配置换用备选 |
+| `verification_required`、`authentication_failed`、`oauth_org_not_allowed`、`account_on_hold`、`billing_error` | 通常靠人处理，但重试代价几乎为零 | 仍续跑一次，连续出现即停 |
+
+- 缺省行为：`StopFailure` 一到就续跑，不判断错误类型。
+  最后一行那几种错误通常在请求发出前就失败，不消耗额度，所以“先试一次”比“预先判定不可恢复”更省事。
+- 兜底判据比错误类型更可靠：
+  - 同一错误连续 `maxSameErrors` 轮（缺省 2）出现且指纹没变，立即停，判为人处理并写明错误类型。
+  - 连续 `maxFailures` 轮（缺省 3）失败停。
+  - 指纹连续 `maxIdleRounds` 轮（缺省 3）不变停。
+  这三条同时覆盖偶发抖动与稳定失败，不需要事先知道哪些错误是稳定的。
+- 每轮的提示按错误类型附带恢复建议（上表右列），由 harness 生成，不指望模型自己推断上一轮为什么断。
+- `continuation.skipErrors` 是减法项：用户确实不想为某类错误续跑时填进去，例如在有计费告警的环境里填 `billing_error`。
+  它不是缺省策略。
 
 ### 四、防递归与防并发
 
@@ -69,7 +95,9 @@ Claude Code 此时触发 `StopFailure` 而不是 `Stop`，而 `StopFailure` 文�
 - 会话级锁：同一 `session_id` 同时只允许一个续跑进程，第二个进程检测到锁后退出并记账。
 - 客户端进程探测：续跑前若发现该会话正被另一个客户端进程占用（用户重新打开了终端），不续跑并记账“已由用户接管”。
 - `-p` 模式下若无头会话本身也触发 `StopFailure`，由第 1 条阻断递归；由 `maxFailures` 兜底停下。
-- 退出条件：完成、要人、连续 `maxIdleRounds` 轮指纹不变、连续 `maxFailures` 轮失败、到达 `maxRounds`、被用户接管。
+- 退避：续跑前按错误类型等待，`rate_limit` 与 `overloaded` 等待时间较长（缺省 60 秒起，逐轮翻倍，上限 10 分钟），其余类型不等待。
+  等待期间保持会话锁，用户随时可以打断。
+- 退出条件：完成、要人、同一错误连续 `maxSameErrors` 轮且指纹不变、连续 `maxFailures` 轮失败、指纹连续 `maxIdleRounds` 轮不变、到达 `maxRounds`、被用户接管。
 
 ### 五、Codex 与其他客户端
 
@@ -107,13 +135,13 @@ Claude Code 此时触发 `StopFailure` 而不是 `Stop`，而 `StopFailure` 文�
 
 | 步骤 | 改动 | 验证方式 |
 | --- | --- | --- |
-| 1 | 写出失败用例：`stop-failure` 载荷被接收、错误类型过滤、未启用时只记账、启用后派发、递归阻断、会话锁、接管检测、退出条件 | `node --test` 定向运行，记录失败输出 |
+| 1 | 写出失败用例：`stop-failure` 载荷被接收、未启用时只记账、`skipErrors` 生效、启用后派发、递归阻断、会话锁、接管检测、退避与各停止条件 | `node --test` 定向运行，记录失败输出 |
 | 2 | 新增 `src/continue/`：欠项判定复用、派发、锁、进程模板与输出解析 | 派发与退出条件用例转绿 |
 | 3 | `hook` 增加 `--event stop-failure`，`install` 为 Claude Code 写入 `StopFailure` 钩子 | 安装与钩子用例转绿 |
 | 4 | 新增 `harness continue` 命令与 `status` 的续跑一行 | 命令级用例转绿 |
 | 5 | 门禁规则、规则文档、参考手册与文档站 | `npm run docs:build` 并审查生成差异 |
 | 6 | 用假客户端做端到端：模拟一轮 `unknown` 错误后自动续跑并推进到完成 | 端到端用例与日志 |
-| 7 | 真实客户端最少验证一条：制造一次可恢复的失败（或临时把 `errors` 加上 `unknown`），确认钩子真的派发且续跑轮次落在同一会话 | 实测记录 |
+| 7 | 真实客户端最少验证一条：制造一次可恢复的失败（或临时把 `skipErrors` 之外的错误都放开），确认钩子真的派发且续跑轮次落在同一会话 | 实测记录 |
 | 8 | Codex 的 `stop` 失败触发实测，确认后可接入或不接入 | 实测记录与结论 |
 | 9 | 全量回归 | `npm test`、`npm run docs:check`、`git diff --check` |
 | 10 | 独立评审，合并本地 `main`，推送 `origin main`，删除任务分支 | 评审结论与合并记录 |
@@ -123,14 +151,14 @@ Claude Code 此时触发 `StopFailure` 而不是 `Stop`，而 `StopFailure` 文�
 ## 已知限制
 
 - `StopFailure` 是 fire-and-forget：钩子无法“让这一轮继续”，只能另起一轮；每续一次都是一次新的模型调用。
-- 缺省不自动处理 `unknown` 与 `authentication_failed`。本次的中断恰是 `unknown`，如果希望这类也自动续跑，需要显式把 `unknown` 加进 `errors`。
+- 缺省对所有错误都续跑一次，包括需要人处理的鉴权、计费类错误。
+  它们靠“同一错误连续 `maxSameErrors` 轮即停”兜底，最坏是多跑一两轮；这几类通常在请求发出前失败，实际代价很低。
 - 续跑进程与用户终端会话并发写同一会话时，客户端行为未被规范，靠会话锁与进程探测尽量避免；探测不到的极端情况仍可能两边同时续跑。
 - 客户端不支持落盘会话时无法续跑，只能退化为“记一条提示”。
 - `bypassPermissions` 下任何客户端本身允许、而 harness 规则没覆盖的动作都会被真正执行。
 
 ## 待确认
 
-- `errors` 缺省是否加入 `unknown`。加入后本次这类上游错误可自动续跑，代价是无法区分“偶发上游抖动”与“稳定失败”，后者会白跑几轮直到 `maxFailures`。
 - `continuation.enabled` 打开时是否还需每轮在终端打印一次“自动续跑第 N 轮”，还是静默即可。
 
 ## 方案评审
