@@ -7,6 +7,7 @@ harness 是本地研发流程与交付门禁 CLI，使用 Node.js 原生 ESM，�
 - `bin/harness.mjs` 是命令入口，`src/cli.mjs` 负责命令分发。
 - `src/` 按职责划分为 `adapters/`、`policy/`、`verify/`、`review/`、`delivery/` 等模块；通用工具放在 `src/lib/`。
 - `assets/` 保存规则、预设、模板和黄金任务数据。
+- `scripts/release.mjs` 提供 GitHub Release 的只读审计与安全续跑。
 - `test/` 保存单元与集成测试，`test/helpers.mjs` 提供临时仓库夹具。
 - `docs/content/` 保存文档站正文，`docs/assets/` 保存共享样式和脚本；维护说明见 `docs/development.md`。
 
