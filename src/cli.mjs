@@ -70,7 +70,7 @@ const USAGE = `harness <命令> [参数]    任一命令加 --help 查看该命�
   worktree clean [--yes] [--with-local-files]       预览已合并的任务 Worktree；--yes 才删除，含 .env 这类本机文件的要再加 --with-local-files
 
 体检与度量
-  doctor                                             安装与接入自检
+  doctor  [--check-remote]                            安装与接入自检；指定时只读查询远程仓库的 PR/MR
   conformance                                        检查 L3 判据
   metrics  [--days <n>]                              按周度量
   golden   [--worktree]                              重放黄金任务；--worktree 按工作区配置而不是主分支
@@ -1190,7 +1190,8 @@ export async function main(argv) {
       case "upgrade":
         return cmdUpgrade(rest);
       case "doctor": {
-        const report = doctor({});
+        const { values } = parseArgs({ args: rest, options: { "check-remote": { type: "boolean" } } });
+        const report = doctor({ checkRemote: values["check-remote"] });
         print(formatDoctor(report));
         return report.ok ? 0 : 1;
       }

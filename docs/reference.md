@@ -441,10 +441,18 @@ Agent 开始任务前先判断分级，规则写在 `.harness/rules/core.md`，�
 2. 澄清：先查已有需求、契约、代码和可用资料；有明确契约支撑的技术实现、兼容性和失败处理取舍由 Agent 记录依据后继续。
    只有仍无法自行获得且影响结果的关键信息才询问，一次问一个问题并给出推荐答案；你说“待定”的问题会原样列进方案，不会被替你填上。
    产品语义、权限边界和用户可见承诺没有明确依据时仍须由你确认，主动判断不扩大实施授权、危险操作或外部副作用的权限。
-3. 方案：验收清单 `.harness/acceptance/<分支名>.md`、行为说明 `docs/changes/<change-id>/spec.md` 与实施方案 `docs/changes/<change-id>/plan.md`，提交到任务分支后停下；只在本机配置了评审者（`reviewers.json`）时，停下之前先跑一轮方案评审，见“方案评审”。
+3. 验收清单 `.harness/acceptance/<分支名>.md` 写清交付结果和边界，`docs/changes/<change-id>/spec.md` 写明行为，`docs/changes/<change-id>/plan.md` 说明实现、验证与可采用的备选路径。
+   交方案前核对适用的测试入口、依赖和评审者，提前说明已知阻塞和必须由人完成的操作。
+   远程交付可用 `harness doctor --check-remote` 只读核对平台访问。
+   本机配置了评审者（`reviewers.json`）时，交出前先跑一轮方案评审。
+   把三份材料提交到任务分支后停下。
 4. 授权：方案交付后，你在对话里明确表示同意实施该方案即可，不要求固定用语，也不需要执行命令。
    最初提出需求不能替代这一阶段的授权，对某个澄清答案或方案细节的认可也不等于同意实施。
-5. 实施：Agent 连续做到完成，先把每条验收写成测试并确认全部失败，再实现到全部通过，最后按验收清单逐条给出结果与证据；中途只在缺权限、需要业务拍板、范围明显超出方案或同一个问题连续三轮没解决时停下。
+5. Agent 连续实施到完成，先把每条验收写成测试并确认全部失败，再实现到全部通过，最后按验收清单逐条给出结果与证据。
+   已批准的验收、对外契约和权限边界未变时，可以调整技术路径或步骤，在方案里记录依据与验证结果。
+   新发现且独立于交付的工作留待以后。
+   确需改变已批准的验收、业务承诺或扩大权限时，只暂停依赖该决定的部分。
+   同一个问题连续三轮没有解决时停止重复尝试，说明阻塞及已尝试路径，并继续独立的已授权工作。
    实现、提交、验证、按评审意见修改和交付不需要你逐步确认；上下文压缩或续接会话后，Agent 沿用已确定的分级与授权。
 
 改变行为的实施默认先红后绿，直接实施的任务同样如此。
@@ -736,13 +744,15 @@ harness merge  --branch feature/login   # 本地交付：核对证据与评审�
 - 验证失败、评审拒绝、`review_stale`、合并冲突、`branch_name_rule_invalid`、`bad_commit_message`、`branch_commit_rule_invalid`、`branch_moved`、`main_moved` 这类拒绝，由 Agent 按原因修改后重新 verify、review，再交付，不需要你安排。
   `branch_name_rule_invalid` 只有在任务分支提议的规则有误时才由 Agent 修正；主分支上已生效的规则有误时，需要人修正主分支配置。
 - 修复只能改实现、测试或提交本身：任务分支放宽不了门禁，删测试、弱化断言、跳过检查也被项目规范禁止。
-- 常见的需要人的情况只有两种：改动涉及门禁本身（`merge` 与 `sync` 的拒绝码是 `gate_change_unconfirmed`，`status` 里同一件事显示为 `gate_unconfirmed`），由人看过摘要后亲自确认；同一个问题连续三轮没有解决，Agent 说明情况后由人决定。
-- 其余需要人的拒绝少见，出现时 Agent 停下说明对象和做法：
-  - `plan_unapproved`：大任务被当成小任务直接实施，交付时按改动行数或库表文件识别出来，需要补方案并取得同意；按流程先出方案、获同意再实施的任务不会遇到。
-  - `platform_missing`、`platform_failed`：远程交付时本机的 `gh` 或 `glab` 没安装或登录已失效，由人安装或运行 `gh auth login`、`glab auth login`；本地交付不会遇到。
+- 涉及门禁或风险改动时由人核对合并结果后确认。
+- 其他需要人处理的情况如下。
+  - `plan_unapproved` 表示需要有效的实施授权，例如大改动缺方案授权或已授权的验收清单有变化。
+  - `platform_missing` 需要安装并登录对应的 CLI。
+  - `platform_failed` 只有确认为登录或权限问题时才请人处理。
   - `version_missing`：同步来的主分支锁定的 harness 版本本机没装，由人运行 `install --version`。
-  - `push_rejected`、`not_fast_forward`：远程任务分支或本地主分支上有来源不明的提交，由人判断怎么处理。
-- 实施中发现需求有歧义、缺权限或改动范围明显超出方案时，Agent 同样停下说明，这和门禁拒绝无关，见“任务分级与实施授权”。
+  - `push_rejected`、`not_fast_forward` 或 `request_changed` 需要核对远端任务分支、本地主分支或原 PR/MR 的状态。
+- 暂时故障先核对远端状态，按 `submit` 的阶段记录接续。
+  如果平台尚未恢复，`status`、交接视图和收尾检查会提示同一条后续操作。
 
 交付时用户检查：
 
@@ -1265,11 +1275,18 @@ Agent 运行 `harness confirm --branch <分支>` 并展示只读摘要：涉及�
 
 1. 校验源是本地任务分支，主分支、远程跟踪引用、提交号都以 `invalid_source` 拒绝。
 2. 预检平台命令在 PATH 里，没装时在推送之前以 `platform_missing` 拒绝，给出由人安装并登录的命令。
-3. 取得远程主分支，要求本地主分支等于它，否则以 `base_stale` 拒绝并提示先 `sync`。
+3. 取得远程主分支，要求本地主分支等于它，否则以 `base_stale` 拒绝。
+   本地主分支可快进时先运行 `sync`。
+   有额外提交或已分叉时先核对来源。
 4. 按与 `merge` 相同的代码核对提交信息、门禁改动确认、实施授权、验收清单、验证证据、独立评审与 `review_stale`。
 5. 把核对过的那个提交普通推送到远程同名分支，不按分支名推，不强推；核对后分支顶端移动时以 `branch_moved` 拒绝。
 6. 创建或更新指向主分支的 PR/MR，描述里 harness 只维护 `<!-- harness:submit:start -->` 与 `<!-- harness:submit:end -->` 之间的区块，标题只在创建时确定。
-7. 写签名提交记录，按提交索引，分“已推送”与“PR/MR 已就绪”两个阶段；推送之后创建 PR/MR 失败时重跑只补 PR/MR。
+7. 按任务提交保存签名记录，区分推送前失败、已推送与 PR/MR 已就绪。
+   推送后平台请求发生明确临时故障时，回读 PR/MR、远端任务提交和目标主分支，至多补做一次请求操作。
+   回读发现请求已经包含本次门禁结果时直接登记就绪。
+   重跑未完成的提交时，远端任务分支仍指向原提交才会续跑。
+   已经记录的 PR/MR 消失或远端分支移动时，交给人核对。
+   同一仓库的交付写入阶段与 `merge`、`sync` 共用锁。
 
 对外保证是：某个时刻，这个提交相对目标主分支通过了本机门禁。
 不保证平台最终合入的内容，也不保证此后别人推到这个分支的提交。
@@ -2132,7 +2149,7 @@ Agent 完成任务后的汇报里要带一行代码评审的评审者，方案�
 | `submit --branch <分支>` | 推送核对过的提交并创建或更新 PR/MR（远程交付） |
 | `sync [--remote <远程>]` | 把本地主分支快进到远程主分支，核对门禁改动并刷新本机安装；`--remote` 只在首次接入时使用 |
 | `worktree clean [--yes] [--with-local-files]` | 预览已合并的任务 Worktree；`--yes` 删除 Worktree 与分支 |
-| `doctor` | 安装与接入自检 |
+| `doctor [--check-remote]` | 安装与接入自检。远程交付可指定参数只读核对目标仓库的 PR/MR 查询，写权限在交付时核对 |
 | `rules` | 列出解析后的生效规则 |
 | `check --kind <shell\|write\|read\|search\|commit> ...` | 手工判定一次调用：`shell` 用 `--command <命令>`，其余用 `--path <路径>`，可加 `--content`、`--glob`，以及 `--on-main`、`--linked-worktree`、`--ignored` 指定位置 |
 | `golden [--worktree]` | 重放黄金任务 |
@@ -2219,11 +2236,13 @@ harness 防的是 Agent 的误操作，以及被提示注入后常见的绕过�
 | `main_moved` | 合并或同步过程中主分支前进了，重新运行同一条命令，已有证据会复用 |
 | `delivery_remote` | 远程交付下不能用 `merge`，改用 `harness submit --branch <分支>` |
 | `delivery_local` | 主分支与分支都没有开启远程交付，`submit` 用不上；本地交付由 `harness merge` 合入 |
-| `base_stale` | 本地主分支与远程主分支不一致，先运行 `harness sync` |
+| `base_stale` | 本地主分支与远程主分支不一致。可快进时先运行 `harness sync`，有额外提交或已分叉时先核对来源 |
 | `branch_moved` | 核对期间任务分支顶端移动了，重新运行 `harness submit` |
 | `push_rejected` | 远程同名分支已有别的提交，harness 不强推；先弄清是谁推的 |
 | `not_fast_forward` | 本地主分支有远程没有的提交，`sync` 不改写历史；先由人判断这些提交的来源 |
-| `platform_missing`、`platform_failed` | 平台命令没装或调用失败；由人安装并运行 `gh auth login` 或 `glab auth login` |
+| `platform_missing` | 由人安装并登录对应的 CLI |
+| `platform_failed` | 先看命令和 `status` 的下一步。平台恢复后接续提交，确认为认证或权限问题时交给人 |
+| `request_changed` | 原 PR/MR 已不在回读结果中，由人核对其状态 |
 | `version_missing` | 目标提交锁定的 harness 版本本机没装，由人运行 `install --version <版本>` |
 | `version_mismatch` | 目标提交里 `.harness/VERSION` 与入口 shim 锁定的版本不一致，先在任务分支 `upgrade` 后合入 |
 | `platform_repo_unknown` | 远程地址识别不出平台仓库（例如本地路径），`submit` 无法确定要操作哪个仓库 |

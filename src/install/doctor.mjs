@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { deliverySettings, loadCurrentProject, mainBranch } from "../lib/config.mjs";
+import { deliverySettings, loadCurrentProject, mainBranch, trustedMainRef } from "../lib/config.mjs";
 import { git, isLinkedWorktree, mainWorktreeRoot, repoRoot } from "../lib/git.mjs";
 import { keyStatus } from "../lib/store.mjs";
 import { mainWorktreeProblems } from "../merge/merge.mjs";
@@ -13,7 +13,7 @@ import { resolveBranchRule } from "../policy/branch-name.mjs";
 import { extendedChecks, verifyConfigProblems } from "../verify/verify.mjs";
 import { packageVersion, MARK_START } from "./managed.mjs";
 import { leftoverWorktrees } from "../worktree/clean.mjs";
-import { platformStatus } from "../delivery/platform.mjs";
+import { findOpen, platformRepo, platformStatus } from "../delivery/platform.mjs";
 import { describeRegistration, dshRegistrations } from "./dsh.mjs";
 import {
   currentHooksConfig,
@@ -188,7 +188,7 @@ export function commitMessageCheck(project) {
  * codex 的钩子是否需要宿主信任，由宿主自己决定；这里只报“文件已就位、执行未验证”，
  * 不把没验证过的接入算成通过。
  */
-export function doctor({ cwd = process.cwd() } = {}) {
+export function doctor({ cwd = process.cwd(), checkRemote = false } = {}) {
   const root = repoRoot(cwd);
   const checks = [];
 
@@ -228,7 +228,7 @@ export function doctor({ cwd = process.cwd() } = {}) {
   });
 
   checks.push(...gitHookChecks(root));
-  checks.push(deliveryCheck(root));
+  checks.push(deliveryCheck(root, { checkRemote }));
 
   const claude = clientHookInstalled(join(root, ".claude", "settings.json"));
   checks.push({
@@ -383,13 +383,13 @@ export function doctor({ cwd = process.cwd() } = {}) {
 }
 
 /**
- * 交付方式的检查：远程交付要确认远程存在、平台命令已装。
- * 平台是否已登录不在 doctor 里验证，认证失败会在 submit 的 list 阶段报出来。
+ * 默认只查本机。显式请求时用与 submit 相同的只读查询检查目标仓库的访问。
  */
-export function deliveryCheck(root) {
+export function deliveryCheck(root, { checkRemote = false } = {}) {
+  const config = readConfigAt(root);
   let settings;
   try {
-    settings = deliverySettings(readConfigAt(root));
+    settings = deliverySettings(config);
   } catch (error) {
     return { id: "delivery", ok: false, detail: error.message };
   }
@@ -420,11 +420,22 @@ export function deliveryCheck(root) {
       detail: `远程交付（${describeProvider(settings)}）：远程 ${settings.remote} 已配置，但平台命令 ${platform.bin} 不在 PATH 里，由人安装并运行 ${platform.login}`,
     };
   }
-  // 本地仓库不代表平台侧可用，认证与权限要到 submit 时才知道，但不能因此把“命令已就位”报成未验证。
+  if (checkRemote) {
+    const repo = platformRepo({ root, remote: settings.remote });
+    if (!repo) return { id: "delivery", ok: false, detail: `无法从远程 ${settings.remote} 识别要检查的 GitHub/GitLab 仓库` };
+    try {
+      const base = config.mainBranch ?? trustedMainRef(root);
+      const branch = git(root, ["symbolic-ref", "--quiet", "--short", "HEAD"]).stdout.trim() || base;
+      findOpen({ provider: settings.provider, branch, base, repo, cwd: root, timeout: 15000 });
+      return { id: "delivery", ok: true, detail: `已只读验证 ${repo} 的 ${platform.label} 查询可用` };
+    } catch (error) {
+      return { id: "delivery", ok: false, detail: `查询 ${repo} 失败：${error.message}` };
+    }
+  }
   return {
     id: "delivery",
     ok: true,
-    detail: `远程交付（${describeProvider(settings)}）：远程 ${settings.remote} 已配置，平台命令 ${platform.bin} 已安装；认证状态在 submit 时确认`,
+    detail: `远程交付（${describeProvider(settings)}）：远程 ${settings.remote} 已配置，平台命令 ${platform.bin} 已安装；可用 harness doctor --check-remote 提前验证认证状态`,
   };
 }
 

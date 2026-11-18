@@ -11,7 +11,8 @@ import { CONFIRM_KIND } from "./confirm/confirm.mjs";
 import { mainWorktreeProblems, mergePushTarget, planMergeResult, reuseDecision, reviewStaleFiles } from "./merge/merge.mjs";
 import { approvalRecord, approvalState, assessRisk, planEnforced } from "./plan/plan.mjs";
 import { formatProgress, stageProgress } from "./plan/stages.mjs";
-import { latestSubmit } from "./delivery/submit.mjs";
+import { latestSubmit, sameSubmitTarget, submitContinuation } from "./delivery/submit.mjs";
+import { platformRepo } from "./delivery/platform.mjs";
 import { unresolvedStop } from "./stop/session.mjs";
 import { commitRangeProblems, commitRuleErrorAt } from "./policy/commit-message.mjs";
 import { assertBranchPolicy, branchRuleErrorAt } from "./policy/branch-name.mjs";
@@ -271,7 +272,7 @@ export function branchStatus({ cwd, branch }) {
       add("gate", "fail", `首次接入，${when}需要人确认这份门禁配置：harness confirm --branch ${branch}`);
       block("bootstrap_unconfirmed", "首次接入待确认");
     }
-    if (delivery.mode === "remote") submitStep({ result, add, root, branch, branchCommit });
+    if (delivery.mode === "remote") submitStep({ result, add, block, root });
     result.ready = result.blockers.length === 0;
     return result;
   }
@@ -330,7 +331,7 @@ export function branchStatus({ cwd, branch }) {
   const unresolved = unresolvedStop(root, branch, branchCommit);
   if (unresolved) add("stop", "warn", `有会话在 ${unresolved.at} 没有上报阻塞就结束了（当时${unresolved.missing}），核对它是否向你说明了原因`);
 
-  if (delivery.mode === "remote") submitStep({ result, add, root, branch, branchCommit });
+  if (delivery.mode === "remote") submitStep({ result, add, block, root });
 
   // 本地交付下这次合并会不会顺带推送：与 merge 用同一份判定，让 Agent 不必翻 config.json 也知道推送已在授权内。
   if (delivery.mode === "local") {
@@ -352,20 +353,29 @@ export function branchStatus({ cwd, branch }) {
  * 远程交付下还要看本机有没有把核对过的提交推上去；平台是否合入不查，只看本机记录。
  * current 表示记录的就是当前分支顶端，formatStatus 据此决定最后一行提示提交、补 PR/MR 还是等平台合并。
  */
-function submitStep({ result, add, root, branch, branchCommit }) {
-  const submitted = latestSubmit({ root, branch });
+function submitStep({ result, add, block, root }) {
+  const { branch, branchCommit, mainCommit, mainRef, delivery } = result;
+  const submitted = latestSubmit({ root, branch, commit: branchCommit });
   if (!submitted.ok) {
     add("submit", "info", `还没有提交记录：门禁齐备后运行 harness submit --branch ${branch}`);
     return;
   }
-  const { head, stage, url, remote, createdAt } = submitted.record;
-  result.submitted = { stage, url, current: head === branchCommit };
+  const record = submitted.record;
+  const { head, stage, url, createdAt } = record;
+  const target = { ...delivery, repo: platformRepo({ root, remote: delivery.remote }), baseRef: `${delivery.remote}/${mainRef}` };
+  result.submitted = { stage, url, current: head === branchCommit && sameSubmitTarget(record, target) };
   if (head !== branchCommit) {
     add("submit", "warn", `提交记录已过期：记录的是 ${head.slice(0, 10)}${url ? `（${url}）` : ""}，当前分支顶端是 ${branchCommit.slice(0, 10)}，需要重新 submit`);
+  } else if (!result.submitted.current) {
+    add("submit", "warn", "交付目标已变化，先核对当前设置，再重新 submit");
   } else if (stage === "ready") {
     add("submit", "ok", `${url}（提交于 ${createdAt}）`);
   } else {
-    add("submit", "warn", `已推送，PR/MR 还没有就绪（${head.slice(0, 10)} 到 ${remote}），重跑 harness submit 补上`);
+    const failure = record.failure === "base_stale" && record.base !== mainCommit ? undefined : record.failure;
+    const continuation = submitContinuation({ ...record, failure });
+    result.submitted.continuation = continuation;
+    add("submit", continuation.human ? "fail" : "warn", `${continuation.summary}，${continuation.next}`);
+    if (continuation.human) block("submit_waiting_user", "待人工处理远端提交问题");
   }
 }
 
@@ -382,7 +392,7 @@ export function formatStatus(status) {
     const submitted = status.submitted?.current ? status.submitted : null;
     if (!status.ready) lines.push(`还差 ${status.blockers.length} 步：${status.blockers.join("、")}`);
     else if (submitted?.stage === "ready") lines.push(`已提交：${submitted.url}，等平台合并；合入后运行 harness sync 更新本地主分支`);
-    else if (submitted) lines.push(`已推送，PR/MR 还没有就绪：重跑 harness submit --branch ${status.branch} 补上`);
+    else if (submitted?.continuation) lines.push(`${submitted.continuation.summary}：${submitted.continuation.next}`);
     else lines.push(`可以提交：harness submit --branch ${status.branch}`);
   } else if (status.ready) {
     const target = status.pushTarget ? `（合并后推送到 ${status.pushTarget.remote}/${status.pushTarget.mainRef}，属于已确认的交付授权，不需要另行请示）` : "";

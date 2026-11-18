@@ -174,10 +174,13 @@ function owedBy({ project, root, branch, escalations, worktrees, sessionBranches
     if (IMPLEMENTING_STEPS.has(pending[0])) result.implementing = true;
     return result;
   }
+  const continuation = status.submitted?.current ? status.submitted.continuation : null;
+  if (continuation?.human) return { branch, human: `${branch}：${continuation.next}` };
   // 剩下的都要人来做（门禁改动确认、主 Worktree 不洁净），交给 Agent 的汇报说明。
   if (status.blockers.length > 0) return null;
   if (status.delivery.mode === "remote") {
     if (status.submitted?.current && status.submitted.stage === "ready") return null;
+    if (continuation) return owed(continuation.summary, continuation.next);
     return owed("门禁已经齐备，还没有提交 PR/MR", `harness submit --branch ${branch}`);
   }
   const hint = status.pushTarget ? `（合并后会推送到 ${status.pushTarget.remote}/${status.pushTarget.mainRef}，属于已确认的交付授权，不需要另行请示）` : "";
@@ -206,7 +209,7 @@ function stageOwed({ project, root, branch, status, sessionBranches, owed }) {
 
 /** 进展指纹：分支顶端、阻塞项、欠项与任务 Worktree 里未提交文件的内容。两次结束之间指纹没变，说明没有进展。 */
 function fingerprint(owed, worktrees) {
-  const parts = owed.map(({ branch, status, dirty, missing }) => {
+  const parts = owed.map(({ branch, status, dirty, missing, next }) => {
     const path = worktrees.get(branch);
     const hash = createHash("sha256");
     // 只改了文件还没提交时，内容变化同样算进展；未跟踪的文件 git diff 看不到，直接读内容。
@@ -220,7 +223,7 @@ function fingerprint(owed, worktrees) {
       }
     }
     const postMerge = (status.postMerge?.completed ?? []).join(",");
-    return [branch, status.branchCommit, status.codes.join(","), postMerge, missing, hash.digest("hex")].join(":");
+    return [branch, status.branchCommit, status.codes.join(","), postMerge, missing, next, hash.digest("hex")].join(":");
   });
   return createHash("sha256").update(parts.sort().join("\n")).digest("hex");
 }
