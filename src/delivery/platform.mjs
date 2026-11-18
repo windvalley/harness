@@ -102,8 +102,7 @@ export function platformOf(provider) {
 }
 
 /**
- * 平台命令是否可用。只判是否存在，不额外调 --version：认证状态在 list 时才知道，
- * 而 list 本来就在推送之前执行，失败时按 platform_failed 处理。
+ * 平台命令是否在 PATH 中。认证由实际的只读列表查询验证。
  */
 export function platformStatus(provider) {
   const platform = platformOf(provider);
@@ -114,7 +113,7 @@ export function platformStatus(provider) {
  * 查找已打开、以任务分支为源、以主分支为目标的 PR/MR。
  * 返回 { id, url, body } 或 null；调用方用 id 决定创建还是更新。
  */
-export function findOpen({ provider, branch, base, repo = null, cwd, env = process.env }) {
+export function findOpen({ provider, branch, base, repo = null, cwd, env = process.env, timeout }) {
   const platform = platformOf(provider);
   const args =
     provider === "github"
@@ -143,23 +142,27 @@ export function findOpen({ provider, branch, base, repo = null, cwd, env = proce
           "json",
           ...repoFlag(repo),
         ];
-  const result = run(platform.bin, args, { cwd, env });
+  const result = run(platform.bin, args, { cwd, env, timeout });
   if (result.status !== 0) throw platformFailure(provider, "list", result);
-  let parsed;
+  let list;
   try {
-    parsed = JSON.parse(result.stdout.trim() || "[]");
+    list = JSON.parse(result.stdout);
   } catch {
-    throw new Error(
-      `无法解析 ${platform.bin} ${platform.group} list 的输出: ${tail(result.stdout, 4).slice(0, 300)}\n` +
-        `可能需要更新 ${platform.bin}，或者该子命令不支持 JSON 输出。`,
-    );
+    list = null;
   }
-  const list = Array.isArray(parsed) ? parsed : [];
+  const invalid = (stderr) => platformFailure(provider, "list", { status: result.status, stderr });
+  if (!Array.isArray(list) || list.some((item) => !item || typeof item !== "object" || Array.isArray(item))) {
+    throw invalid("平台没有返回有效的 JSON 请求列表，请核对 CLI 和仓库访问。");
+  }
   const first = list.find((item) => isOwnOpen(provider, item, { branch }));
   if (!first) return null;
-  return provider === "github"
+  const request = provider === "github"
     ? { id: first.number, url: first.url, body: first.body ?? "" }
     : { id: first.iid, url: first.web_url, body: first.description ?? "" };
+  if (!Number.isInteger(request.id) || request.id < 1 || typeof request.url !== "string" || !request.url || typeof request.body !== "string") {
+    throw invalid("匹配的 PR/MR 缺少有效编号、地址或正文，请核对平台返回。");
+  }
+  return request;
 }
 
 /**
@@ -203,17 +206,51 @@ export function updateRequest({ provider, id, body, repo = null, cwd, env = proc
   return { id, url: result.stdout.trim().split("\n").filter(Boolean).at(-1) ?? "" };
 }
 
+/** 只对有明确诊断的失败作判断，其他非零退出留给调用方核对。 */
+function platformFailureReason(result) {
+  const message = `${result.stderr ?? ""}\n${result.stdout ?? ""}`;
+  const status = message.match(/\b(?:HTTP(?:\/[\d.]+)?|status(?: code)?)[:=\s]+(\d{3})\b/i)?.[1] ??
+    message.match(/\b(?:GET|HEAD|POST|PUT|PATCH|DELETE) https?:\/\/\S+: (\d{3})\b/)?.[1];
+  if (status === "429" || /rate limit|too many requests/i.test(message)) return "rate_limit";
+  if (status === "401" || /bad credentials|authentication failed|not (?:logged in|authenticated)|(?:gh|glab) auth login/i.test(message)) return "login";
+  if (status === "403" || /permission denied|access denied|insufficient permissions?/i.test(message)) return "permission";
+  if (["500", "502", "503", "504"].includes(status) ||
+      result.error?.code === "ETIMEDOUT" ||
+      /connection (?:reset|refused|timed out)|network is unreachable|i\/o timeout|TLS handshake timeout|context deadline exceeded/i.test(message)) {
+    return "temporary";
+  }
+  return "unknown";
+}
+
+export function platformFailureAdvice(provider, reason) {
+  const { login } = platformOf(provider);
+  switch (reason) {
+    case "login":
+      return { human: true, detail: `平台登录不可用，请由人运行 ${login} 并核对目标仓库的访问权限` };
+    case "permission":
+      return { human: true, detail: "平台拒绝访问，请由人核对目标仓库的账号、权限或保护规则" };
+    case "rate_limit":
+      return { human: false, detail: "平台限流，等限流解除后再继续" };
+    case "temporary":
+      return { human: false, detail: "平台暂时不可用，先确认平台恢复" };
+    default:
+      return { human: false, detail: "无法判定平台错误的原因，先根据命令报错核对平台状态" };
+  }
+}
+
 function platformFailure(provider, action, result) {
   const platform = platformOf(provider);
+  const reason = platformFailureReason(result);
   const detail = tail(result.stderr || result.stdout);
   const error = new Error(
     [
       `${platform.bin} ${platform.group} ${action} 失败(exit ${result.status})`,
       detail,
-      `认证或网络问题由人处理: 运行 ${platform.login} 登录，确认可以访问远程仓库后重试。`,
+      platformFailureAdvice(provider, reason).detail,
       "harness 不读取、不保存也不传递平台令牌，全部由上面的命令自己管理。",
     ].join("\n"),
   );
   error.code = "platform_failed";
+  error.platformReason = reason;
   return error;
 }

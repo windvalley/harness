@@ -93,7 +93,9 @@ function addNextSteps(handoff, lines) {
   for (const id of ["gate", "risk"]) {
     if (steps.get(id)?.state === "fail") lines.push(`运行 ${command("confirm", branch)} 展示摘要，由人核对后在自己的终端带 --yes 确认。`);
   }
-  if (status.ready) {
+  const continuation = status.submitted?.current ? status.submitted.continuation : null;
+  if (continuation && (status.ready || continuation.human)) lines.push(continuation.next);
+  else if (status.ready) {
     if (status.delivery?.mode === "remote") {
       lines.push(status.submitted?.current && status.submitted.stage === "ready"
         ? "等待平台合并；合入后运行 harness sync 更新本地主分支。"

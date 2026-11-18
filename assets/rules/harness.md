@@ -101,8 +101,14 @@
 `branch_name_rule_invalid` 只有在任务分支提议的规则有误时才由 Agent 修正；主分支上已生效的规则有误时，需要人修正主分支配置。
 `bad_branch_name` 先修正分支名称并核对验收清单路径，再查看 `status` 判断已有验证与评审是否仍有效，不因只改分支名而重复执行内容检查。
 修复只能改实现、测试或提交本身：任务分支放宽不了门禁，删测试、弱化断言、跳过检查同样不允许。
-需要人的拒绝停下来说明对象和做法：`gate_change_unconfirmed`（人确认门禁改动）、`risk_unconfirmed`（人确认高风险改动）、`plan_unapproved`（用户同意实施）、`platform_missing` 与 `platform_failed`（人安装或登录平台命令）、`version_missing`（人安装版本）、`push_rejected` 与 `not_fast_forward`（远程或本地主分支有来源不明的提交，由人判断）、`push_failed` 与 `push_skipped`（本地交付开启 `push` 后合并已完成但推送没有成功，由人推送）。
-另外按 `core.md` 的停下条件处理：缺权限、需要业务拍板、改动范围明显超出方案、同一个问题连续三轮没有解决。
+平台返回 `platform_failed` 时按实际原因继续。
+提交分支已推送、创建或更新 PR/MR 发生明确的临时故障时，`submit` 回读平台请求、远端基线和任务提交，至多补做一次缺失的请求操作。
+若仍失败，查看 `status` 的下一步，平台恢复后接续提交。
+原因无法判定时先清楚地核对返回和远端状态，同一故障不盲目重试。
+
+需要本人操作时说明对象和做法，常见情况包括 `gate_change_unconfirmed`、`risk_unconfirmed`、`plan_unapproved`、`platform_missing`、平台确实缺少登录或权限、`version_missing`、`push_rejected`、`request_changed`、`not_fast_forward`。
+本地交付已经合并、普通推送报 `push_failed` 或 `push_skipped` 时，按命令结果核对远端并交给人处理，避免重复合并。
+按 `core.md` 判断哪些部分依赖人的决定，继续其余已授权的工作。
 
 ## 交付方式
 
@@ -162,13 +168,16 @@ harness 保证它提交的 PR/MR 通过了本机门禁；平台上最终合入�
 1. 第 1 到第 3 步与本地交付相同：在任务分支实现、提交、`harness verify`、`harness review`。
 2. `harness submit --branch <任务分支>`：核对与 `merge` 相同的条件，把核对过的那个提交普通推送到远程同名分支，并创建或更新指向主分支的 PR/MR。
    描述里 harness 只维护 `<!-- harness:submit:start -->` 与 `<!-- harness:submit:end -->` 之间的区块，团队写在区块外的说明不会被覆盖。
-   提交记录分“已推送”与“PR/MR 已就绪”两个阶段；推送之后创建 PR/MR 失败时重跑只会补 PR/MR，不会重复推送。
+   提交记录区分推送前失败、已推送与 PR/MR 已就绪。
+   重跑未完成的提交时，`submit` 先核对目标仓库、远端分支及已有请求，远端仍指向已核对提交时从请求步骤续跑。
+   远端任务分支变化或已知请求消失时，交给人核对。
 3. 之后由人在平台上合并。harness 不在平台上合并，也不强推；远程同名分支已分叉时以 `push_rejected` 拒绝。
 4. 平台合入后运行 `harness sync`：把本地主分支快进到远程主分支，同步主 Worktree 的文件，需要时刷新本机安装并执行 `merge.postMergeCommand`。
    远程带来的普通代码改动按“信任平台主分支”导入，不在本机重复验证与评审；远程带来的门禁改动、交付设置变化或首次接入仍然要人确认，确认命令是 `harness confirm --branch <远程>/<主分支>`。
 5. 汇报时区分“已提交到平台”“平台已合入”“本地已同步”，不把提交成功说成已合并。
 
-- `harness submit` 要求本地主分支等于远程主分支，不一致时先 `harness sync`，否则以 `base_stale` 拒绝。
+- `harness submit` 要求本地主分支等于远程主分支，不一致时报 `base_stale`。
+  只在本地主分支可快进时运行 `harness sync`，本地主分支有额外提交或已分叉时先弄清来源。
 - `harness submit` 只接受本地任务分支，不接受主分支、远程跟踪引用或提交号。
 - 平台命令（`gh`、`glab`）的安装与登录由人完成，harness 不读取、不保存也不传递平台令牌。
 - 本地交付下同样可以用 `harness sync` 把主分支快进到远程，取代由人用绕过开关手动快进的做法。

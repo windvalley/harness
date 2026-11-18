@@ -47,6 +47,17 @@ function landed(repo, branch) {
 }
 
 describe("先方案后实施", () => {
+  test("已授权任务更换实现路径和更新计划后按原验收直接交付", () => {
+    const repo = setup();
+    const linked = linkedTask(repo);
+    commit(linked, "docs(login): 方案\n\n- 写明验收与实施路径", { [PLAN]: "# 方案\n\n用组件 A。\n", [ACCEPTANCE]: "- 登录成功后进入首页\n" });
+    assert.equal(repo.cli("approve", "--branch", BRANCH, "--yes", "--note", QUOTE).status, 0);
+    commit(linked, "feat(login): 完成登录\n\n- 复用组件 B\n- 按同一验收交付", { [PLAN]: "# 方案\n\n实测后改用组件 B。\n", "src/app.js": code(10) });
+    const result = landed(repo, BRANCH);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stderr, /已有实施授权/);
+  });
+
   test("写了实施方案后，记录授权前只能写方案文件；记录后放行，清单再改又要重新记录", () => {
     const repo = setup();
     const linked = linkedTask(repo);

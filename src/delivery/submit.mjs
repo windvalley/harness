@@ -4,13 +4,13 @@ import { tail } from "../lib/redact.mjs";
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { appendLedger, dataDir, readRecord, writeRecord } from "../lib/store.mjs";
-import { MergeError, checkGates } from "../merge/merge.mjs";
+import { MergeError, acquireLock, checkGates } from "../merge/merge.mjs";
 import { writeObligations } from "../verify/obligation.mjs";
 import { reviewerSummary } from "../review/review.mjs";
 import { fetchRemoteMain, pushCommit, remoteBranchTip } from "./remote.mjs";
-import { createRequest, findOpen, managedSection, platformRepo, platformStatus, replaceManagedSection, updateRequest } from "./platform.mjs";
+import { createRequest, findOpen, managedSection, platformFailureAdvice, platformOf, platformRepo, platformStatus, replaceManagedSection, updateRequest } from "./platform.mjs";
 
-/** 提交记录：按任务提交索引，分“已推送”与“MR 已就绪”两个阶段，重试时据此跳过已完成的步骤。 */
+/** 提交记录按任务提交索引。失败时区分推送前与已推送，成功时记为 PR/MR 已就绪。 */
 export const SUBMIT_KIND = "submit";
 
 export function submitKey(commit) {
@@ -21,14 +21,14 @@ export function readSubmit({ root, branch, commit }) {
   const record = readRecord(root, SUBMIT_KIND, submitKey(commit));
   if (!record.ok) return { ok: false, reason: record.reason };
   if (record.record.branch !== branch) return { ok: false, reason: `提交记录属于分支 ${record.record.branch}` };
+  if (record.record.head !== commit) return { ok: false, reason: "提交记录与任务顶端不一致" };
   return { ok: true, record: record.record };
 }
 
 /**
- * 分支最近一次提交记录，不管它是不是当前顶端：status 要据此区分“没有提交过”与“提交后分支又前进了”。
- * 记录按提交索引，这里取该分支里时间最新的那条。
+ * 优先返回当前顶端的记录，否则返回该分支最近一条，供 status 判断顶端是否变化。
  */
-export function latestSubmit({ root, branch }) {
+export function latestSubmit({ root, branch, commit }) {
   const dir = join(dataDir(root), SUBMIT_KIND);
   if (!existsSync(dir)) return { ok: false, reason: "没有提交记录" };
   let best = null;
@@ -36,9 +36,41 @@ export function latestSubmit({ root, branch }) {
     if (!name.endsWith(".json")) continue;
     const record = readRecord(root, SUBMIT_KIND, name.slice(0, -".json".length));
     if (!record.ok || record.record.branch !== branch) continue;
+    if (commit && record.record.head === commit) return record;
     if (!best || String(record.record.createdAt ?? "") > String(best.record.createdAt ?? "")) best = record;
   }
   return best ?? { ok: false, reason: "没有提交记录" };
+}
+
+export function sameSubmitTarget(record, { provider, remote, repo, baseRef }) {
+  return record.provider === provider && record.remote === remote && record.repo === repo && record.baseRef === baseRef;
+}
+
+/** 由命令、status、交接与 Stop 共用的后续动作。 */
+export function submitContinuation(record) {
+  const { branch, provider, stage, failure } = record;
+  const command = `harness submit --branch ${branch}`;
+  if (failure === "remote_changed" || failure === "request_changed") {
+    const object = failure === "remote_changed" ? "远端任务分支" : "原 PR/MR 的状态";
+    return { human: true, summary: "远端状态已变化", next: `由人核对${object}，确认后再运行 ${command}` };
+  }
+  const summary = stage === "pushed" ? "已推送，PR/MR 还没有就绪" : "PR/MR 提交未完成";
+  if (failure === "base_stale") {
+    return { human: false, summary, next: `核对主分支的远端基线，可快进时运行 harness sync，再运行 ${command}` };
+  }
+  if (failure === "temporary" || failure === "rate_limit") {
+    const condition = failure === "temporary" ? "平台恢复后" : "限流解除后";
+    const action = stage === "pushed" ? "回读远端并补 PR/MR" : "继续提交";
+    return { human: false, summary, next: `${condition}运行 ${command} ${action}` };
+  }
+  if (failure === "readback_failed") {
+    return { human: false, summary, next: `先恢复远端的只读查询，再运行 ${command} 核对并接续提交` };
+  }
+  if (failure) {
+    const { human, detail } = platformFailureAdvice(provider, failure);
+    return { human, summary, next: `${detail}，解决后运行 ${command}` };
+  }
+  return { human: false, summary, next: `重跑 ${command}，核对远端后补 PR/MR` };
 }
 
 function deliveryForSubmit({ project, root, branchCommit, mainRef }) {
@@ -127,6 +159,112 @@ function titleFor({ root, branchCommit }) {
   return subject || `harness submit ${branchCommit.slice(0, 10)}`;
 }
 
+function applyRequest(options, open, section, title) {
+  if (!open) return createRequest({ ...options, title, body: section });
+  const body = replaceManagedSection(open.body, section);
+  if (body === open.body) return open;
+  return updateRequest({ ...options, id: open.id, body });
+}
+
+function finishSubmit({ root, progress, mainRef, gates, checkLocal, log }) {
+  const { head, branch, provider, remote, repo, base } = progress;
+  const options = { provider, branch, base: mainRef, repo, cwd: root };
+  const label = platformOf(provider).label;
+  const release = acquireLock(root);
+  try {
+    checkLocal();
+    const prior = readSubmit({ root, branch, commit: head });
+    const previous = prior.ok && sameSubmitTarget(prior.record, progress) ? prior.record : null;
+    const save = (stage, fields = {}) => writeRecord(root, SUBMIT_KIND, submitKey(head), {
+      ...progress, stage, ...fields, createdAt: new Date().toISOString(),
+    });
+    let stage = previous?.stage === "pushed" ? "pushed" : "pending";
+    let requestId = stage === "pushed" ? previous.requestId : null;
+    let pushed = false;
+
+    const readRequest = () => {
+      const request = findOpen(options);
+      if (requestId != null && request?.id !== requestId) {
+        throw new MergeError(`续跑时已找不到原 ${label} #${requestId}。`, "request_changed");
+      }
+      requestId = request?.id ?? null;
+      return request;
+    };
+
+    const checkPushedHead = () => {
+      const actual = remoteBranchTip({ root, remote, branch, run });
+      if (actual !== head) {
+        throw new MergeError(
+          `续跑时远端 ${remote}/${branch} 不再指向已核对的提交 ${head.slice(0, 10)}（当前 ${actual?.slice(0, 10) ?? "不存在"}）。`,
+          "push_rejected",
+        );
+      }
+    };
+
+    try {
+      // 合入后验收义务先记录。平台请求无法回读时，在任何远程写入前停止。
+      writeObligations({ root, branch, tip: head, items: gates.postMergeChecks });
+      const open = readRequest();
+      if (stage === "pushed") {
+        checkLocal();
+        checkPushedHead();
+        log(`[submit] ${branch} 已经在远程，跳过推送，只补 ${label}`);
+      } else {
+        checkLocal();
+        pushCommit({ root, remote, branch, commit: head, run });
+        stage = "pushed";
+        pushed = true;
+        save(stage, { requestId });
+        appendLedger(root, { event: "submit.push", branch, head, remote });
+      }
+      const section = sectionBody({
+        ...gates, branch, branchCommit: head, baseCommit: base, baseRef: progress.baseRef,
+        previous: previous?.stage === "pending" ? null : previous,
+      });
+      const title = titleFor({ root, branchCommit: head });
+      checkLocal();
+      let request;
+      try {
+        request = applyRequest(options, open, section, title);
+      } catch (error) {
+        if (error.platformReason !== "temporary") throw error;
+        log(`[submit] 平台临时失败，回读远端并最多补做一次 ${label}`);
+        checkLocal();
+        const current = readRequest();
+        if (remoteBranchTip({ root, remote, branch: mainRef, run }) !== base) {
+          throw new MergeError(`重试时远端 ${remote}/${mainRef} 已变化，需要重新核对交付门禁。`, "base_stale");
+        }
+        checkPushedHead();
+        checkLocal();
+        request = applyRequest(options, current, section, title);
+      }
+      const record = save("ready", { url: request.url, requestId: request.id });
+      appendLedger(root, { event: "submit.ready", branch, head, url: request.url, pushed, riskObserved: gates.risk.observed });
+      return { record, pushed };
+    } catch (error) {
+      const failure = error.platformReason ?? {
+        push_rejected: "remote_changed",
+        request_changed: "request_changed",
+        base_stale: "base_stale",
+        fetch_failed: "readback_failed",
+      }[error.code];
+      if (!failure) throw error;
+      if (stage !== "pending" || previous?.stage !== "ready") save(stage, { failure, requestId });
+      const action = submitContinuation({ branch, provider, stage, failure });
+      throw new MergeError(
+        [
+          stage === "pushed" ? `已推送过 ${branch} 到 ${remote}（${head.slice(0, 10)}），${label} 尚未就绪。` : null,
+          error.message,
+          `下一步：${action.next}`,
+        ].filter(Boolean).join("\n"),
+        error.code,
+      );
+    }
+  } finally {
+    release();
+  }
+}
+
 /**
  * 把核对过的任务提交推送到远程，并创建或更新指向主分支的 PR/MR。
  * 顺序：校验源 -> 预检平台命令 -> 取得远程主分支 -> 要求本地主分支等于远程 -> 门禁核对 -> 推送 -> 创建或更新。
@@ -182,10 +320,9 @@ export async function submitTask({ cwd, branch, log = console.error }) {
     throw new MergeError(
       [
         `本地 ${mainRef}(${localMain.slice(0, 10)}) 与 ${settings.remote}/${mainRef}(${remoteBase.slice(0, 10)}) 不一致，不能提交。`,
-        `先运行 harness sync 把本地 ${mainRef} 快进到远程，再重新 submit。`,
-        isAncestor(root, remoteBase, localMain)
-          ? "本地主分支有远程没有的提交：远程交付下主分支只由平台合并产生，本地多出的提交需要先弄清来源。"
-          : "本地主分支落后或已分叉，sync 会核对门禁改动后再更新。",
+        isAncestor(root, localMain, remoteBase)
+          ? `本地主分支可以快进，先运行 harness sync，再重新 submit。`
+          : "本地主分支有远程没有的提交，需要由人核对来源后决定怎样处理。",
       ].join("\n"),
       "base_stale",
     );
@@ -194,83 +331,22 @@ export async function submitTask({ cwd, branch, log = console.error }) {
   // 门禁核对与 merge 共用：本地主分支此刻等于远程主分支，核对结果对两者都成立。
   const gates = await checkGates({ project, root, branch, log, label: "submit" });
   const { resultTree, newHead } = gates;
-  if (gates.mainCommit !== localMain || resolveCommit(root, sourceRef) !== pinnedMain) {
-    throw new MergeError(
-      `${mainRef} 在核对过程中前进了，核对用的配置与基线不再是同一个提交；先 harness sync，再重新运行 harness submit --branch ${branch}`,
-      "main_moved",
-    );
-  }
-
-  // 平台合入之前就写下合并后验收义务：合入并 sync 后到期，不依赖 submit 之后还有没有机会再运行。
-  writeObligations({ root, branch, tip: branchCommit, items: gates.postMergeChecks });
-
-  // 先查有没有已存在的 PR/MR：查询失败时还没推送，远程保持原样；推送之后再查会把失败留在半路。
-  const open = findOpen({ provider: settings.provider, branch, base: mainRef, repo, cwd: root, env: process.env });
-
-  if (resolveCommit(root, branch) !== branchCommit) {
-    throw new MergeError(`核对期间任务分支顶端移动了，重新运行 harness submit --branch ${branch}`, "branch_moved");
-  }
-
-  // 已有提交记录且停在“已推送”、顶端没变、远程仍是那个提交时，跳过推送只补 PR/MR。
-  const prior = readSubmit({ root, branch, commit: branchCommit });
-  // 只在有“已推送”记录时才去问远程：没记录时一定要推，不必多一次网络往返。
-  const remoteBranch = prior.ok && prior.record.stage === "pushed" ? remoteBranchTip({ root, remote: settings.remote, branch, run }) : null;
-  let pushed = false;
-  if (prior.ok && prior.record.stage === "pushed" && remoteBranch === branchCommit) {
-    log(`[submit] ${branch} 已经在远程，跳过推送，只补 ${platform.label}`);
-  } else {
-    pushCommit({ root, remote: settings.remote, branch, commit: branchCommit, run });
-    pushed = true;
-    writeRecord(root, SUBMIT_KIND, submitKey(branchCommit), {
-      branch,
-      stage: "pushed",
-      head: branchCommit,
-      base: remoteBase,
-      baseRef: `${settings.remote}/${mainRef}`,
-      resultTree,
-      mergedHead: newHead,
-      provider: settings.provider,
-      remote: settings.remote,
-      repo,
-      createdAt: new Date().toISOString(),
-    });
-    appendLedger(root, { event: "submit.push", branch, head: branchCommit, remote: settings.remote });
-  }
-
-  const section = sectionBody({
+  const checkLocal = () => {
+    if (gates.mainCommit !== localMain || resolveCommit(root, sourceRef) !== pinnedMain || resolveCommit(root, mainRef) !== localMain) {
+      throw new MergeError(
+        `${mainRef} 在核对过程中已变化，核对用的配置与基线不再是同一个提交；先 harness sync，再重新运行 harness submit --branch ${branch}`,
+        "main_moved",
+      );
+    }
+    if (gates.branchCommit !== branchCommit || resolveCommit(root, branch) !== branchCommit) {
+      throw new MergeError(`核对期间任务分支顶端移动了，重新运行 harness submit --branch ${branch}`, "branch_moved");
+    }
+    if (platformRepo({ root, remote: settings.remote }) !== repo) {
+      throw new MergeError(`核对期间远程 ${settings.remote} 的平台仓库已变化，先核对交付目标。`, "delivery_target_changed");
+    }
+  };
+  const progress = {
     branch,
-    branchCommit,
-    baseCommit: remoteBase,
-    baseRef: `${settings.remote}/${mainRef}`,
-    resultTree,
-    gateTouched: gates.gateTouched,
-    evidence: gates.evidence,
-    review: gates.review,
-    approval: gates.approval,
-    risk: gates.risk,
-    previous: prior.ok ? prior.record : null,
-  });
-
-  let request;
-  try {
-    request = open
-      ? updateRequest({ provider: settings.provider, id: open.id, body: replaceManagedSection(open.body, section), repo, cwd: root, env: process.env })
-      : createRequest({ provider: settings.provider, branch, base: mainRef, title: titleFor({ root, branchCommit }), body: section, repo, cwd: root, env: process.env });
-  } catch (error) {
-    if (error.code !== "platform_failed") throw error;
-    throw new MergeError(
-      [
-        `已推送 ${branch} 到 ${settings.remote}(${branchCommit.slice(0, 10)})，但创建或更新 ${platform.label} 失败。`,
-        error.message,
-        `远程分支已经是核对过的提交；修好 ${platform.bin} 后重新运行 harness submit --branch ${branch}，会跳过推送只补 ${platform.label}。`,
-      ].join("\n"),
-      "platform_failed",
-    );
-  }
-
-  const record = writeRecord(root, SUBMIT_KIND, submitKey(branchCommit), {
-    branch,
-    stage: "ready",
     head: branchCommit,
     base: remoteBase,
     baseRef: `${settings.remote}/${mainRef}`,
@@ -279,11 +355,8 @@ export async function submitTask({ cwd, branch, log = console.error }) {
     provider: settings.provider,
     remote: settings.remote,
     repo,
-    url: request.url,
-    requestId: request.id,
-    createdAt: new Date().toISOString(),
-  });
-  appendLedger(root, { event: "submit.ready", branch, head: branchCommit, url: request.url, pushed, riskObserved: gates.risk.observed });
+  };
+  const { record, pushed } = finishSubmit({ root, progress, mainRef, gates, checkLocal, log });
   if (openedByBranch) log(`[submit] 本分支开启了远程交付（${describeDelivery(settings)}），确认记录已存在`);
   // 放在日志末尾：Agent 常用 tail 截取输出，开头那行评审者摘要会被截掉。
   if (gates.review) log(`[submit] 汇报时写一行代码评审的评审者: ${reviewerSummary(gates.review)}`);
@@ -295,7 +368,7 @@ export async function submitTask({ cwd, branch, log = console.error }) {
     baseRef: `${settings.remote}/${mainRef}`,
     resultTree,
     pushed,
-    url: request.url,
+    url: record.url,
     provider: settings.provider,
     remote: settings.remote,
     delivery: settings,

@@ -20,7 +20,7 @@
 
 <script src="assets/docs.js?v=acdbbf2b96" defer></script>
 </head>
-<body data-page="blocked" data-index="607726c9c2">
+<body data-page="blocked" data-index="1173346546">
 <a class="skip-link" href="#main-content">跳到主要内容</a>
 <header class="topbar">
   <div class="topbar-inner">
@@ -95,8 +95,9 @@
         <tr><td><code>conflict</code></td><td>在任务分支上 <code>git merge main</code> 解决冲突，再重新验证与评审</td></tr>
         <tr><td><code>main_moved</code></td><td>合并或同步过程中主分支前进了，重新运行同一条命令，已有证据会复用</td></tr>
         <tr><td><code>delivery_remote</code>、<code>delivery_local</code></td><td>交付方式和当前命令不匹配：远程模式下用 <code>harness submit</code>，本地模式下用 <code>harness merge</code></td></tr>
-        <tr><td><code>base_stale</code>、<code>not_fast_forward</code></td><td>本地主分支与远程不一致：先 <code>harness sync</code>；本地有远程没有的提交时 <code>sync</code> 拒绝，不改写历史</td></tr>
-        <tr><td><code>platform_missing</code>、<code>platform_failed</code></td><td>平台命令没装或调用失败，由人安装并运行 <code>gh auth login</code> 或 <code>glab auth login</code></td></tr>
+        <tr><td><code>base_stale</code>、<code>not_fast_forward</code></td><td>本地主分支可快进时先 <code>harness sync</code>。本地有远程没有的提交时先核对来源。</td></tr>
+        <tr><td><code>platform_missing</code>、<code>platform_failed</code></td><td>临时故障按 <code>status</code> 的提示接续。缺少平台命令、登录或权限时交给人。</td></tr>
+        <tr><td><code>push_rejected</code>、<code>request_changed</code></td><td>接续时远端任务分支已变化或原 PR/MR 消失，由人核对当前状态。</td></tr>
         <tr><td><code>review_stale</code></td><td>主分支在评审之后改了本分支也改过的文件；在任务分支上 <code>git merge main</code> 并提交，再重新验证与评审</td></tr>
         <tr><td>验证结果 <code>incomplete</code></td><td>先看每项 <code>reasonCode</code> 与 <code>blockedBy</code>，补齐依赖或修正必验路径映射后重跑受影响检查</td></tr>
         <tr><td>主 Worktree 不在 main 或不洁净</td><td>Agent 先核对状态并保留已有改动，按项目规则准备主 Worktree；需要处置用户改动时先说明具体对象并取得授权</td></tr>
