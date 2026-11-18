@@ -11,7 +11,8 @@ import { CONFIRM_KIND } from "./confirm/confirm.mjs";
 import { mainWorktreeProblems, mergePushTarget, planMergeResult, reuseDecision, reviewStaleFiles } from "./merge/merge.mjs";
 import { approvalRecord, approvalState, assessRisk, planEnforced } from "./plan/plan.mjs";
 import { formatProgress, stageProgress } from "./plan/stages.mjs";
-import { latestSubmit, sameSubmitTarget, submitContinuation } from "./delivery/submit.mjs";
+import { latestSubmit, sameSubmitTarget } from "./delivery/record.mjs";
+import { deliveryForSubmit, submitContinuation } from "./delivery/submit.mjs";
 import { platformRepo } from "./delivery/platform.mjs";
 import { unresolvedStop } from "./stop/session.mjs";
 import { commitRangeProblems, commitRuleErrorAt } from "./policy/commit-message.mjs";
@@ -97,11 +98,8 @@ export function branchStatus({ cwd, branch }) {
   const project = loadGateProject(cwd, { branch });
   const root = project.root;
   const mainRef = mainBranch(project);
-  const delivery = deliverySettings(project.config);
-  // 远程交付下门禁在 submit 时核对，提示里说“提交前”；本地交付说“合并前”。
-  const when = delivery.mode === "remote" ? "提交前" : "合并前";
   // blockers 给人看，codes 给程序判断（例如收尾检查区分 Agent 能接着做的与要等人的）。
-  const result = { branch, mainRef, delivery, steps: [], ready: false, blockers: [], codes: [] };
+  const result = { branch, mainRef, delivery: deliverySettings(project.config), steps: [], ready: false, blockers: [], codes: [] };
   const add = (id, state, detail) => result.steps.push({ id, state, detail });
   const block = (code, label) => {
     result.codes.push(code);
@@ -127,6 +125,22 @@ export function branchStatus({ cwd, branch }) {
     return result;
   }
   add("branch", "ok", `待合入 ${branchCommit.slice(0, 10)} -> ${mainRef}`);
+
+  let openingRemote = false;
+  let deliveryConfirmed = false;
+  try {
+    const { settings, openedByBranch, resultTree } = deliveryForSubmit({ project, root, branch, branchCommit });
+    openingRemote = openedByBranch;
+    if (openingRemote) {
+      deliveryConfirmed = readRecord(root, CONFIRM_KIND, resultTree).ok;
+      if (deliveryConfirmed) result.delivery = settings;
+    }
+  } catch (error) {
+    add("delivery", "fail", error.message);
+    block(error.code ?? "delivery_invalid", "无法确定交付设置");
+  }
+  const { delivery } = result;
+  const when = delivery.mode === "remote" || openingRemote ? "提交前" : "合并前";
 
   try {
     const { spec, source } = assertBranchPolicy({ project, root, branch, requireBranch: true });
@@ -281,7 +295,13 @@ export function branchStatus({ cwd, branch }) {
   const branchPaths = changedPaths(root, evidence.ok ? evidence.record.base : gitOk(root, ["merge-base", mainCommit, branchCommit]), branchCommit);
   const gate = gatePaths(project);
   const gateTouched = branchPaths.filter((path) => matchAny(path, gate));
-  if (gateTouched.length === 0) {
+  if (openingRemote) {
+    if (deliveryConfirmed) add("gate", "ok", "切换远程交付已确认");
+    else {
+      add("gate", "fail", `切换远程交付，提交前需要人工确认：harness confirm --branch ${branch}`);
+      block("gate_unconfirmed", "远程交付设置待确认");
+    }
+  } else if (gateTouched.length === 0) {
     add("gate", "ok", "本次没有改动门禁配置与规则");
   } else {
     const confirms = confirmFor(project, root, branch);
@@ -355,23 +375,28 @@ export function branchStatus({ cwd, branch }) {
  */
 function submitStep({ result, add, block, root }) {
   const { branch, branchCommit, mainCommit, mainRef, delivery } = result;
-  const submitted = latestSubmit({ root, branch, commit: branchCommit });
-  if (!submitted.ok) {
+  const target = { ...delivery, branch, head: branchCommit, repo: platformRepo({ root, remote: delivery.remote }), baseRef: `${delivery.remote}/${mainRef}` };
+  const record = latestSubmit(root, target);
+  if (!record) {
     add("submit", "info", `还没有提交记录：门禁齐备后运行 harness submit --branch ${branch}`);
     return;
   }
-  const record = submitted.record;
   const { head, stage, url, createdAt } = record;
-  const target = { ...delivery, repo: platformRepo({ root, remote: delivery.remote }), baseRef: `${delivery.remote}/${mainRef}` };
-  result.submitted = { stage, url, current: head === branchCommit && sameSubmitTarget(record, target) };
+  const sameTarget = sameSubmitTarget(record, target);
+  const needsReadback = stage === "ready" && (record.base !== mainCommit || record.requestHead !== head);
+  result.submitted = { stage, url, current: head === branchCommit && sameTarget && !needsReadback };
   if (head !== branchCommit) {
     add("submit", "warn", `提交记录已过期：记录的是 ${head.slice(0, 10)}${url ? `（${url}）` : ""}，当前分支顶端是 ${branchCommit.slice(0, 10)}，需要重新 submit`);
-  } else if (!result.submitted.current) {
+  } else if (!sameTarget) {
     add("submit", "warn", "交付目标已变化，先核对当前设置，再重新 submit");
+  } else if (needsReadback) {
+    const cause = record.base !== mainCommit ? "主分支基线已变化" : "旧提交记录缺少平台源提交回读";
+    add("submit", "warn", `${cause}，重新运行 harness submit --branch ${branch} 核对`);
   } else if (stage === "ready") {
     add("submit", "ok", `${url}（提交于 ${createdAt}）`);
   } else {
-    const failure = record.failure === "base_stale" && record.base !== mainCommit ? undefined : record.failure;
+    const oldBase = record.failure === "base_stale" || record.failure === "base_diverged";
+    const failure = oldBase && record.base !== mainCommit ? undefined : record.failure;
     const continuation = submitContinuation({ ...record, failure });
     result.submitted.continuation = continuation;
     add("submit", continuation.human ? "fail" : "warn", `${continuation.summary}，${continuation.next}`);

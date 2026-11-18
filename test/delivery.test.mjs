@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
 import { APPROVE, CONFIG, PACKAGE_ROOT, commit, fakeReviewer, git, makeRepo, sh, write, writeReview } from "./helpers.mjs";
@@ -65,8 +65,9 @@ function remoteCommit(repo, remote, files, message = "feat(other): 平台合入\
 }
 
 const FAKE_PLATFORM = (stateFile, logFile) => `#!/usr/bin/env node
+import { execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
-import { basename } from "node:path";
+import { basename, resolve } from "node:path";
 const bin = basename(process.argv[1]);
 const args = process.argv.slice(2);
 appendFileSync(${JSON.stringify(logFile)}, JSON.stringify({ bin, args }) + "\\n");
@@ -76,6 +77,15 @@ const opt = (name) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1
 const stdin = () => readFileSync(0, "utf8");
 const action = args[1];
 const transient = action === "create" && !state.transientSeen && process.env.FAKE_PLATFORM_TRANSIENT;
+const actualHead = (item) => {
+  if (item.sha) return item.sha;
+  const remote = resolve("../remote.git");
+  try {
+    return execFileSync("git", ["--git-dir", remote, "rev-parse", "--verify", "--quiet", "refs/heads/" + item.head], { encoding: "utf8" }).trim();
+  } catch {
+    return null;
+  }
+};
 function unavailable() {
   process.stderr.write(bin === "glab" ? "POST https://code.example.com/api/v4/projects/7/merge_requests: 503\\n" : "HTTP 503: Service Unavailable\\n");
   process.exit(1);
@@ -85,6 +95,15 @@ if (transient) {
   save();
   if (transient === "before") unavailable();
 }
+if (action === "list" && state.transientSeen && process.env.FAKE_PLATFORM_TRANSIENT === "unread" && !state.readbackFailed) {
+  state.readbackFailed = true;
+  save();
+  unavailable();
+}
+if (action === "list" && state.transientSeen && process.env.FAKE_PLATFORM_TRANSIENT === "hidden") {
+  process.stdout.write("[]");
+  process.exit(0);
+}
 if ((process.env.FAKE_PLATFORM_FAIL || "").split(",").includes(action)) {
   process.stderr.write((process.env.FAKE_PLATFORM_ERROR || bin + " " + action + ": 平台调用失败") + "\\n");
   process.exit(1);
@@ -92,13 +111,16 @@ if ((process.env.FAKE_PLATFORM_FAIL || "").split(",").includes(action)) {
 if (bin === "gh" && args[0] === "pr") {
   if (action === "list") {
     const items = state.items.filter((i) => i.state === "open" && i.head === opt("--head") && i.base === opt("--base"));
-    process.stdout.write(JSON.stringify(items.map((i) => ({ number: i.id, url: i.url, body: i.body, state: "OPEN", headRefName: i.head, isCrossRepository: Boolean(i.fork) }))));
+    process.stdout.write(JSON.stringify(items.map((i) => ({ number: i.id, url: i.url, body: i.body, state: "OPEN", headRefName: i.head, headRefOid: actualHead(i), baseRefName: i.base, isCrossRepository: Boolean(i.fork) }))));
   } else if (action === "create") {
     const id = state.next++;
     const url = "https://github.example/acme/demo/pull/" + id;
-    state.items.push({ id, url, repo: opt("--repo"), head: opt("--head"), base: opt("--base"), title: opt("--title"), body: opt("--body-file") === "-" ? stdin() : "", state: "open" });
+    state.items.push({ id, url, repo: opt("--repo"), head: opt("--head"), base: opt("--base"), sha: process.env.FAKE_PLATFORM_CREATE_HEAD, title: opt("--title"), body: opt("--body-file") === "-" ? stdin() : "", state: "open" });
     save();
-    if (transient === "after") unavailable();
+    if (process.env.FAKE_PLATFORM_MOVE_BASE) {
+      execFileSync("git", ["--git-dir", resolve("../remote.git"), "update-ref", "refs/heads/" + opt("--base"), process.env.FAKE_PLATFORM_MOVE_BASE]);
+    }
+    if (transient === "after" || transient === "unread") unavailable();
     process.stdout.write(url + "\\n");
   } else if (action === "edit") {
     const item = state.items.find((i) => String(i.id) === args[2]);
@@ -114,7 +136,7 @@ if (bin === "gh" && args[0] === "pr") {
       process.exit(0);
     }
     const items = state.items.filter((i) => i.state === "open" && i.head === opt("--source-branch") && i.base === opt("--target-branch"));
-    process.stdout.write(JSON.stringify(items.map((i) => ({ iid: i.id, web_url: i.url, description: i.body, state: "opened", source_branch: i.head, source_project_id: i.fork ? 99 : 7, target_project_id: 7 }))));
+    process.stdout.write(JSON.stringify(items.map((i) => ({ iid: i.id, web_url: i.url, description: i.body, state: "opened", source_branch: i.head, target_branch: i.base, sha: actualHead(i), source_project_id: i.fork ? 99 : 7, target_project_id: 7 }))));
   } else if (action === "create") {
     const id = state.next++;
     const url = "https://gitlab.example/acme/demo/-/merge_requests/" + id;
@@ -195,15 +217,63 @@ function setDelivery(repo, branch, delivery, extra = {}) {
 
 const output = (result) => `${result.stdout}\n${result.stderr}`;
 
-function submitStop(repo) {
+function submitStop(repo, branch = "task/a") {
   const session_id = "submit-recovery";
   const entry = join(repo.root, ".harness/bin/harness");
-  const input = { session_id, cwd: repo.root, tool_name: "Bash", tool_input: { command: `${entry} submit --branch task/a` } };
+  const input = { session_id, cwd: repo.root, tool_name: "Bash", tool_input: { command: `${entry} submit --branch ${branch}` } };
   const noted = sh(repo.root, entry, ["hook", "--client", "claude"], repo.env, JSON.stringify(input));
   assert.equal(noted.status, 0, noted.stderr);
   const stopped = sh(repo.root, entry, ["hook", "--client", "claude", "--event", "stop"], repo.env, JSON.stringify({ session_id, cwd: repo.root }));
   assert.equal(stopped.status, 0, stopped.stderr);
   return JSON.parse(stopped.stdout);
+}
+
+function submitRecord(repo, head) {
+  const dir = join(repo.env.HARNESS_DATA_DIR, "submit");
+  const records = readdirSync(dir).filter((name) => name.startsWith(`${head}.`) && name.endsWith(".json"));
+  assert.equal(records.length, 1);
+  return JSON.parse(readFileSync(join(dir, records[0]), "utf8"));
+}
+
+// 真实 Git 操作仍访问本地裸仓库，仅在指定阶段注入远端故障。
+function faultGit(repo, remote) {
+  const dir = join(repo.root, "..", "git-proxy");
+  mkdirSync(dir);
+  const gitBin = sh(repo.root, "sh", ["-c", "command -v git"]).stdout.trim();
+  const log = join(dir, "push.log");
+  const path = join(dir, "git");
+  writeFileSync(path, `#!/bin/sh
+if [ "$1" = "ls-remote" ] && [ "$FAKE_GIT_READ" = "login" ]; then
+  echo "fatal: Authentication failed for 'https://code.example.com/acme/demo.git'" >&2
+  exit 128
+fi
+if [ "$1" = "fetch" ] && [ "$FAKE_GIT_READ" = "permission" ]; then
+  echo "fatal: unable to access repository: The requested URL returned error: 403" >&2
+  exit 128
+fi
+if [ "$1" = "push" ] && [ "$2" = "--porcelain" ]; then
+  first=
+  if [ ! -e ${JSON.stringify(log)} ]; then first=1; fi
+  echo push >> ${JSON.stringify(log)}
+  if [ "$FAKE_GIT_PUSH" = "always" ] || { [ -n "$first" ] && [ "$FAKE_GIT_PUSH" = "before" ]; }; then
+    echo "fatal: Connection reset by peer" >&2
+    exit 128
+  fi
+  ${JSON.stringify(gitBin)} "$@" || exit $?
+  if [ -n "$first" ] && [ "$FAKE_GIT_PUSH" = "after" ]; then
+    echo "fatal: the remote end hung up unexpectedly" >&2
+    exit 128
+  fi
+  if [ -n "$FAKE_GIT_MOVE_TO" ]; then
+    exec ${JSON.stringify(gitBin)} --git-dir ${JSON.stringify(remote)} update-ref refs/heads/task/a "$FAKE_GIT_MOVE_TO"
+  fi
+  exit 0
+fi
+exec ${JSON.stringify(gitBin)} "$@"
+`);
+  chmodSync(path, 0o755);
+  repo.env.PATH = `${dir}:${repo.env.PATH}`;
+  return () => existsSync(log) ? readFileSync(log, "utf8").trim().split("\n").length : 0;
 }
 
 describe("配置与默认行为", () => {
@@ -438,13 +508,14 @@ describe("harness submit", () => {
     assert.match(items[0].body, /^团队说明：上线前通知运维/);
     assert.match(items[0].body, /尾注保留$/);
     assert.ok(items[0].body.includes(next));
+    assert.equal(submitRecord(repo, next).requestHead, next);
     assert.equal(items[0].body.split("<!-- harness:submit:start -->").length, 2, "只有一个管理区块");
     const actions = platform.calls().map((call) => `${call.args[0]} ${call.args[1]}`);
     assert.deepEqual(actions.filter((item) => item !== "mr list"), ["mr create", "mr update"]);
   });
 
   test("R5 管理区块替换保留区块外的文字", async () => {
-    const { replaceManagedSection } = await import("../src/delivery/platform.mjs");
+    const { matchesManagedSection, replaceManagedSection } = await import("../src/delivery/platform.mjs");
     const section = "<!-- harness:submit:start -->\n新\n<!-- harness:submit:end -->";
     assert.equal(replaceManagedSection("", section), section);
     assert.equal(replaceManagedSection("团队说明", section), `团队说明\n\n${section}`);
@@ -452,6 +523,9 @@ describe("harness submit", () => {
       replaceManagedSection("前\n<!-- harness:submit:start -->\n旧\n<!-- harness:submit:end -->\n后", section),
       `前\n${section}\n后`,
     );
+    assert.equal(matchesManagedSection(`前\n\n${section}\n\n后`, section), true);
+    const legacy = section.replace("\n<!-- harness:submit:end -->", "\n\n上次提交时间: 2026-11-18T12:34:56.789Z\n<!-- harness:submit:end -->");
+    assert.equal(matchesManagedSection(legacy, section), true);
   });
 
   test("远程地址里的凭据不会出现在仓库标识里", async () => {
@@ -553,6 +627,7 @@ describe("harness submit", () => {
     const result = ahead.cli("submit", "--branch", "task/a");
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /base_stale/);
+    assert.match(result.stderr, /由人核对本地主分支多出的提交/);
     assert.equal(remoteRef(aheadRemote, "refs/heads/task/a"), null);
   });
 
@@ -639,6 +714,243 @@ describe("harness submit", () => {
     assert.equal(platform.items().length, 1);
   });
 
+  test("首次推送后远端任务分支已变化时，不创建 PR", () => {
+    const repo = setup({ delivery: GITHUB });
+    const remote = withRemote(repo);
+    const platform = fakePlatform(repo);
+    const head = task(repo);
+    const pushes = faultGit(repo, remote);
+    const other = remoteRef(remote, "refs/heads/main");
+    repo.env.FAKE_GIT_MOVE_TO = other;
+
+    const result = repo.cli("submit", "--branch", "task/a");
+    assert.match(result.stderr, /push_rejected/);
+    assert.equal(result.status, 1);
+    assert.equal(pushes(), 1);
+    assert.equal(remoteRef(remote, "refs/heads/task/a"), other);
+    assert.deepEqual(platform.calls().map(({ args }) => args[1]), ["list"]);
+    assert.equal(submitRecord(repo, head).stage, "pushed");
+  });
+
+  test("远端回读可能包含同后缀的引用，只核对完整的任务与主分支引用", () => {
+    const repo = setup({ delivery: GITHUB });
+    const remote = withRemote(repo);
+    fakePlatform(repo);
+    const head = task(repo);
+    const archive = "refs/heads/archive/refs/heads/task/a";
+    const base = remoteRef(remote, "refs/heads/main");
+    const created = sh(remote, "git", ["update-ref", archive, base]);
+    assert.equal(created.status, 0, created.stderr);
+
+    const result = repo.cli("submit", "--branch", "task/a");
+    assert.equal(result.status, 0, output(result));
+    assert.equal(remoteRef(remote, archive), base);
+    assert.equal(remoteRef(remote, "refs/heads/task/a"), head);
+  });
+
+  test("同一提交的不同分支和目标分别保留交付进度", () => {
+    const repo = setup({ delivery: GITHUB });
+    const remote = withRemote(repo);
+    const platform = fakePlatform(repo);
+    const head = task(repo);
+    const ready = repo.cli("submit", "--branch", "task/a");
+    assert.equal(ready.status, 0, output(ready));
+    git(repo.root, "branch", "task/b", head);
+    repo.env.FAKE_PLATFORM_FAIL = "create";
+    assert.match(repo.cli("submit", "--branch", "task/b").stderr, /platform_failed/);
+    assert.equal(remoteRef(remote, "refs/heads/task/b"), head);
+    assert.match(repo.cli("status", "--branch", "task/b").stdout, /已推送，PR\/MR 还没有就绪/);
+    assert.match(repo.cli("status", "--branch", "task/a").stdout, /已提交：.*pull\/1/);
+
+    const alternate = "https://code.example.com/acme/other.git";
+    git(repo.root, "config", "--add", `url.${remote}.insteadOf`, alternate);
+    git(repo.root, "remote", "set-url", "origin", alternate);
+    repo.env.FAKE_PLATFORM_FAIL = "list";
+    repo.env.FAKE_PLATFORM_ERROR = "HTTP 401: Unauthorized";
+    assert.match(repo.cli("submit", "--branch", "task/a").stderr, /gh auth login/);
+    assert.match(repo.cli("status", "--branch", "task/a").stdout, /gh auth login/);
+    git(repo.root, "remote", "set-url", "origin", PLATFORM_URL);
+    assert.match(repo.cli("status", "--branch", "task/a").stdout, /已提交：.*pull\/1/);
+    assert.equal(platform.items().length, 1);
+  });
+
+  test("旧版按提交索引的已推送记录仍可接续", () => {
+    const repo = setup({ delivery: GITHUB });
+    const remote = withRemote(repo);
+    const platform = fakePlatform(repo);
+    const head = task(repo);
+    const pushes = faultGit(repo, remote);
+    repo.env.FAKE_PLATFORM_FAIL = "create";
+    assert.match(repo.cli("submit", "--branch", "task/a").stderr, /platform_failed/);
+    const { schema, kind, key, keyId, signature, ...payload } = submitRecord(repo, head);
+    const migration = sh(repo.root, process.execPath, ["--input-type=module", "-e", `
+      import { readFileSync } from "node:fs";
+      import { writeRecord } from ${JSON.stringify(join(PACKAGE_ROOT, "src/lib/store.mjs"))};
+      writeRecord(process.cwd(), "submit", process.argv[1], JSON.parse(readFileSync(0, "utf8")));
+    `, head], repo.env, JSON.stringify(payload));
+    assert.equal(migration.status, 0, migration.stderr);
+    rmSync(join(repo.env.HARNESS_DATA_DIR, "submit", `${key}.json`));
+    assert.match(repo.cli("status", "--branch", "task/a").stdout, /已推送，PR\/MR 还没有就绪/);
+
+    delete repo.env.FAKE_PLATFORM_FAIL;
+    const resumed = repo.cli("submit", "--branch", "task/a");
+    assert.equal(resumed.status, 0, output(resumed));
+    assert.equal(pushes(), 1);
+    assert.equal(platform.items().length, 1);
+    assert.match(repo.cli("status", "--branch", "task/a").stdout, /已提交：.*pull\/1/);
+  });
+
+  test("首次创建后平台报告的 PR 源提交不符时，回读后保留已推送阶段", () => {
+    const repo = setup({ delivery: GITHUB });
+    const remote = withRemote(repo);
+    const platform = fakePlatform(repo);
+    const head = task(repo);
+    repo.env.FAKE_PLATFORM_CREATE_HEAD = remoteRef(remote, "refs/heads/main");
+
+    const result = repo.cli("submit", "--branch", "task/a");
+    assert.match(result.stderr, /request_unconfirmed/);
+    assert.equal(result.status, 1);
+    assert.equal(remoteRef(remote, "refs/heads/task/a"), head);
+    assert.deepEqual(platform.calls().map(({ args }) => args[1]), ["list", "create", "list"]);
+    assert.equal(submitRecord(repo, head).stage, "pushed");
+    assert.doesNotMatch(repo.cli("status", "--branch", "task/a").stdout, /等平台合并/);
+
+    platform.edit((state) => { delete state.items[0].sha; });
+    const recovered = repo.cli("submit", "--branch", "task/a");
+    assert.equal(recovered.status, 0, output(recovered));
+    assert.deepEqual(platform.calls().map(({ args }) => args[1]), ["list", "create", "list", "list"]);
+    assert.equal(submitRecord(repo, head).stage, "ready");
+    assert.equal(submitRecord(repo, head).requestId, 1);
+    assert.equal(submitRecord(repo, head).requestHead, head);
+  });
+
+  test("Git 推送断线后先回读，已到达时不再推送，未到达时最多补推一次", () => {
+    for (const when of ["after", "before", "always"]) {
+      const repo = setup({ delivery: GITHUB });
+      const remote = withRemote(repo);
+      const platform = fakePlatform(repo);
+      const head = task(repo);
+      const pushes = faultGit(repo, remote);
+      repo.env.FAKE_GIT_PUSH = when;
+      const result = repo.cli("submit", "--branch", "task/a");
+      assert.equal(pushes(), when === "after" ? 1 : 2);
+      if (when === "always") {
+        assert.equal(result.status, 1, output(result));
+        assert.match(result.stderr, /Git 远程恢复后/);
+        assert.equal(remoteRef(remote, "refs/heads/task/a"), null);
+        assert.deepEqual(platform.calls().map(({ args }) => args[1]), ["list"]);
+        assert.equal(submitRecord(repo, head).stage, "pending");
+        continue;
+      }
+      assert.equal(result.status, 0, output(result));
+      assert.equal(remoteRef(remote, "refs/heads/task/a"), head);
+      assert.deepEqual(platform.calls().map(({ args }) => args[1]), ["list", "create", "list"]);
+      assert.equal(submitRecord(repo, head).stage, "ready");
+    }
+  });
+
+  test("Git 回读认证失败时保留已推送阶段并交给人，避免 Agent 再次请求", () => {
+    const repo = setup({ delivery: GITHUB });
+    const remote = withRemote(repo);
+    const platform = fakePlatform(repo);
+    const head = task(repo);
+    const pushes = faultGit(repo, remote);
+    repo.env.FAKE_PLATFORM_FAIL = "create";
+    assert.equal(repo.cli("submit", "--branch", "task/a").status, 1);
+    delete repo.env.FAKE_PLATFORM_FAIL;
+    repo.env.FAKE_GIT_READ = "login";
+
+    const failed = repo.cli("submit", "--branch", "task/a");
+    const guidance = /由人核对 Git 远程 origin 的认证/;
+    assert.equal(failed.status, 1);
+    assert.match(failed.stderr, guidance);
+    assert.equal(remoteRef(remote, "refs/heads/task/a"), head);
+    assert.equal(submitRecord(repo, head).stage, "pushed");
+    assert.equal(pushes(), 1);
+    assert.deepEqual(platform.calls().map(({ args }) => args[1]), ["list", "create", "list"]);
+    assert.match(repo.cli("status", "--branch", "task/a").stdout, guidance);
+    const stop = submitStop(repo);
+    assert.equal(stop.decision, undefined);
+    assert.match(stop.systemMessage, guidance);
+
+    repo.env.FAKE_GIT_READ = "permission";
+    const forbidden = repo.cli("submit", "--branch", "task/a");
+    const permissions = /由人核对 Git 远程 origin 的仓库权限与分支保护/;
+    assert.equal(forbidden.status, 1);
+    assert.match(forbidden.stderr, permissions);
+    assert.equal(submitRecord(repo, head).stage, "pushed");
+    assert.match(repo.cli("status", "--branch", "task/a").stdout, permissions);
+    assert.match(submitStop(repo).systemMessage, permissions);
+    assert.equal(pushes(), 1);
+  });
+
+  test("上次创建已成功而回读失败时，续跑只回读并登记现有请求", () => {
+    const repo = setup({ delivery: GITHUB });
+    const remote = withRemote(repo);
+    const platform = fakePlatform(repo);
+    const head = task(repo);
+    const pushes = faultGit(repo, remote);
+    repo.env.FAKE_PLATFORM_TRANSIENT = "unread";
+
+    assert.equal(repo.cli("submit", "--branch", "task/a").status, 1);
+    assert.equal(submitRecord(repo, head).stage, "pushed");
+    assert.equal(platform.items().length, 1);
+    const existing = platform.items()[0].body;
+    const resumed = repo.cli("submit", "--branch", "task/a");
+    assert.equal(resumed.status, 0, output(resumed));
+    assert.equal(remoteRef(remote, "refs/heads/task/a"), head);
+    assert.equal(pushes(), 1);
+    assert.equal(submitRecord(repo, head).stage, "ready");
+    assert.deepEqual(platform.calls().map(({ args }) => args[1]), ["list", "create", "list", "list"]);
+    assert.equal(platform.items()[0].body, existing);
+    assert.doesNotMatch(existing, /上次提交时间/);
+  });
+
+  test("平台确认创建而列表仍看不到时，续跑等待回读且不创建第二个请求", () => {
+    const repo = setup({ delivery: GITHUB });
+    const remote = withRemote(repo);
+    const platform = fakePlatform(repo);
+    const head = task(repo);
+    repo.env.FAKE_PLATFORM_TRANSIENT = "hidden";
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const result = repo.cli("submit", "--branch", "task/a");
+      assert.match(result.stderr, /request_unconfirmed/);
+      assert.equal(submitRecord(repo, head).stage, "pushed");
+    }
+    assert.equal(remoteRef(remote, "refs/heads/task/a"), head);
+    assert.deepEqual(platform.calls().map(({ args }) => args[1]), ["list", "create", "list", "list"]);
+    delete repo.env.FAKE_PLATFORM_TRANSIENT;
+    const result = repo.cli("submit", "--branch", "task/a");
+    assert.equal(result.status, 0, output(result));
+    assert.equal(submitRecord(repo, head).requestId, 1);
+    assert.equal(submitRecord(repo, head).stage, "ready");
+  });
+
+  test("写入请求期间目标基线前进时，快进同步后按新基线核对并续跑", () => {
+    const repo = setup({ delivery: GITHUB });
+    const remote = withRemote(repo);
+    const platform = fakePlatform(repo);
+    const head = task(repo);
+    const other = repo.branch("other/base", { "src/base.js": "base\n" });
+    git(repo.root, "push", "-q", "origin", "other/base");
+    const pushes = faultGit(repo, remote);
+    repo.env.FAKE_PLATFORM_MOVE_BASE = other;
+
+    const changed = repo.cli("submit", "--branch", "task/a");
+    assert.match(changed.stderr, /base_stale/);
+    assert.equal(submitRecord(repo, head).stage, "pushed");
+    assert.equal(remoteRef(remote, "refs/heads/main"), other);
+    assert.equal(remoteRef(remote, "refs/heads/task/a"), head);
+    assert.equal(repo.cli("sync").status, 0);
+
+    const resumed = repo.cli("submit", "--branch", "task/a");
+    assert.equal(resumed.status, 0, output(resumed));
+    assert.equal(pushes(), 1);
+    assert.equal(submitRecord(repo, head).stage, "ready");
+    assert.equal(submitRecord(repo, head).base, other);
+    assert.deepEqual(platform.calls().map(({ args }) => args[1]), ["list", "create", "list", "list", "edit", "list"]);
+  });
+
   test("补提 PR 前发现远端分支已移动时保留远端现状并交给人", () => {
     const repo = setup({ delivery: GITHUB });
     const remote = withRemote(repo);
@@ -670,7 +982,7 @@ describe("harness submit", () => {
       const result = repo.cli("submit", "--branch", "task/a");
       assert.equal(result.status, 0, output(result));
       assert.equal(remoteRef(remote, "refs/heads/task/a"), head);
-      assert.deepEqual(platform.calls().map(({ args }) => args[1]), when === "before" ? ["list", "create", "list", "create"] : ["list", "create", "list"]);
+      assert.deepEqual(platform.calls().map(({ args }) => args[1]), when === "before" ? ["list", "create", "list", "create", "list"] : ["list", "create", "list"]);
       assert.equal(platform.items().length, 1);
       assert.match(repo.cli("status", "--branch", "task/a").stdout, /已提交：.*等平台合并/);
     }
@@ -685,7 +997,7 @@ describe("harness submit", () => {
     repo.env.FAKE_PLATFORM_ERROR = "HTTP 503: Service Unavailable";
     const result = repo.cli("submit", "--branch", "task/a");
     assert.notEqual(result.status, 0);
-    assert.deepEqual(platform.calls().map(({ args }) => args[1]), ["list", "create", "list", "create"]);
+    assert.deepEqual(platform.calls().map(({ args }) => args[1]), ["list", "create", "list", "create", "list"]);
     assert.equal(remoteRef(remote, "refs/heads/task/a"), head);
     const guidance = /平台恢复后.*harness submit --branch task\/a/;
     assert.match(repo.cli("status", "--branch", "task/a").stdout, guidance);
@@ -710,7 +1022,7 @@ describe("harness submit", () => {
     const paused = repo.cli("submit", "--branch", "task/a");
     assert.equal(paused.status, 1);
     assert.match(paused.stderr, /request_changed/);
-    assert.deepEqual(platform.calls().map(({ args }) => args[1]), ["list", "edit", "list"]);
+    assert.deepEqual(platform.calls().map(({ args }) => args[1]), ["list", "list", "edit", "list"]);
     assert.match(repo.cli("status", "--branch", "task/a").stdout, /由人核对原 PR\/MR 的状态/);
     assert.match(submitStop(repo).systemMessage, /由人核对原 PR\/MR 的状态/);
   });
@@ -793,11 +1105,14 @@ describe("harness sync", () => {
     assert.equal(submitted.status, 0, output(submitted));
     const path = join(repo.root, "..", "auto-clean-task");
     git(repo.root, "worktree", "add", "-q", path, "task/auto-clean");
+    const other = join(repo.root, "..", "auto-clean-other");
+    git(repo.root, "worktree", "add", "-q", "-b", "task/same-head", other, head);
     assert.ok(existsSync(path), "submit 后不自动清理");
     platformFastForward(remote, head);
     const synced = repo.cli("sync");
     assert.equal(synced.status, 0, output(synced));
     assert.equal(existsSync(path), false, `平台合入并 sync 后才自动清理\n${output(synced)}`);
+    assert.ok(existsSync(other), "同一提交上没有交付记录的任务分支仍保留");
   });
 
   test("远程交付在平台合入并 sync 后跟踪合并后证据", () => {
@@ -1145,6 +1460,62 @@ describe("独立评审发现的问题", () => {
 });
 
 describe("开启、关闭与首次接入", () => {
+  test("切换远程交付时，提交目标来自人工确认的合并结果", () => {
+    const repo = setup({ delivery: { mode: "local", provider: "github", push: false, remote: "origin" } });
+    const remote = withRemote(repo);
+    const platform = fakePlatform(repo);
+    const config = readFileSync(join(repo.root, ".harness/config.json"), "utf8");
+    const branch = "chore/enable-remote";
+    const proposal = config.replace('"mode": "local"', '"mode": "remote"');
+    const head = task(repo, branch, { ".harness/config.json": proposal });
+    const base = commit(repo.root, "chore(harness): 更新同步远程\n\n- 改用 upstream\n- 保留本地交付", {
+      ".harness/config.json": config.replace('"remote": "origin"', '"remote": "upstream"'),
+    });
+    git(repo.root, "remote", "rename", "origin", "upstream");
+    git(repo.root, "push", "-q", "upstream", "main");
+    writeReview(repo, head, "approve", { baseCommit: base });
+    const confirmation = repo.cli("confirm", "--branch", branch);
+    assert.equal(confirmation.status, 0, output(confirmation));
+    assert.match(confirmation.stdout, /远程交付（github，远程 upstream）/);
+    assert.equal(repo.cli("confirm", "--branch", branch, "--yes").status, 0);
+
+    const submitted = repo.cli("submit", "--branch", branch);
+    assert.equal(submitted.status, 0, output(submitted));
+    assert.equal(remoteRef(remote, `refs/heads/${branch}`), head);
+    assert.equal(submitRecord(repo, head).remote, "upstream");
+    assert.equal(platform.items().length, 1);
+    assert.match(repo.cli("status", "--branch", branch).stdout, /已提交：.*等平台合并/);
+  });
+
+  test("已确认切换远程交付的分支失败后，status、交接与 Stop 均续跑 submit", () => {
+    const repo = setup({ config: { governance: { confirmOnGateChange: false, gatePaths: [] } } });
+    const remote = withRemote(repo);
+    const platform = fakePlatform(repo);
+    const branch = "chore/enable-remote";
+    const head = setDelivery(repo, branch, GITHUB);
+    const refused = repo.cli("submit", "--branch", branch);
+    assert.match(refused.stderr, /gate_change_unconfirmed/);
+    assert.match(repo.cli("status", "--branch", branch).stdout, /需要人工确认/);
+    assert.equal(remoteRef(remote, `refs/heads/${branch}`), null);
+    assert.equal(repo.cli("confirm", "--branch", branch, "--yes").status, 0);
+
+    repo.env.FAKE_PLATFORM_FAIL = "create";
+    repo.env.FAKE_PLATFORM_ERROR = "HTTP 503: Service Unavailable";
+    assert.equal(repo.cli("submit", "--branch", branch).status, 1);
+    assert.equal(remoteRef(remote, `refs/heads/${branch}`), head);
+    assert.equal(submitRecord(repo, head).stage, "pushed");
+    const next = /平台恢复后.*harness submit --branch chore\/enable-remote/;
+    for (const surface of [
+      repo.cli("status", "--branch", branch).stdout,
+      repo.cli("status", "--handoff", "--branch", branch).stdout,
+      submitStop(repo, branch).reason,
+    ]) {
+      assert.match(surface, next);
+      assert.doesNotMatch(surface, /harness merge --branch/);
+    }
+    assert.deepEqual(platform.calls().map(({ args }) => args[1]).filter((action) => action !== "list"), ["create", "create"]);
+  });
+
   test("R16 X10 本地交付模式下开启远程交付的分支，确认后提交，平台合入后同步，此后 merge 拒绝", () => {
     const repo = setup({ config: { governance: { confirmOnGateChange: false, gatePaths: [] } } });
     const remote = withRemote(repo);
@@ -1561,7 +1932,12 @@ describe("平台以 squash 或 rebase 合入", () => {
 
   test("squash 合入并 sync 后，status 识别为已合入，不再误报 review_stale", () => {
     const { repo, remote, head } = submitted();
+    const readyAt = submitRecord(repo, head).createdAt;
     platformSquash(repo, remote, "task/a");
+    const retry = repo.cli("submit", "--branch", "task/a");
+    assert.match(retry.stderr, /base_stale/);
+    assert.equal(submitRecord(repo, head).stage, "pushed");
+    assert.equal(submitRecord(repo, head).lastReadyAt, readyAt);
     const synced = repo.cli("sync");
     assert.equal(synced.status, 0, output(synced));
     assert.notEqual(sh(repo.root, "git", ["merge-base", "--is-ancestor", head, "main"]).status, 0, "夹具：确实不是祖先关系");

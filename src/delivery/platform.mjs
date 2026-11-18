@@ -1,6 +1,7 @@
 import { commandExists } from "../review/review.mjs";
 import { run, git } from "../lib/git.mjs";
 import { tail } from "../lib/redact.mjs";
+import { remoteFailureReason } from "./remote.mjs";
 
 /**
  * harness 在 PR/MR 描述里维护的区块。区块外的文字由团队自己写，重跑 submit 时原样保留。
@@ -11,6 +12,16 @@ export const SECTION_END = "<!-- harness:submit:end -->";
 
 export function managedSection(body) {
   return `${SECTION_START}\n${body.trim()}\n${SECTION_END}`;
+}
+
+/** 团队正文和旧版本写入的本地时间戳不参与门禁内容比较。 */
+export function matchesManagedSection(existing, section) {
+  const text = existing.replace(/\r\n/g, "\n");
+  const start = text.indexOf(SECTION_START);
+  const end = text.indexOf(SECTION_END);
+  if (start < 0 || end <= start) return false;
+  const current = text.slice(start, end + SECTION_END.length);
+  return current.replace(/\n\n上次提交时间: \d{4}-\d{2}-\d{2}T[\d:.]+Z(?=\n)/, "") === section;
 }
 
 /** 用新区块替换描述里的旧区块；没有区块时追加在末尾，区块外内容不动。 */
@@ -111,7 +122,7 @@ export function platformStatus(provider) {
 
 /**
  * 查找已打开、以任务分支为源、以主分支为目标的 PR/MR。
- * 返回 { id, url, body } 或 null；调用方用 id 决定创建还是更新。
+ * 返回 { id, url, body, head } 或 null；head 由平台报告，用于核对实际源提交。
  */
 export function findOpen({ provider, branch, base, repo = null, cwd, env = process.env, timeout }) {
   const platform = platformOf(provider);
@@ -128,7 +139,7 @@ export function findOpen({ provider, branch, base, repo = null, cwd, env = proce
           "--state",
           "open",
           "--json",
-          "number,url,body,state,headRefName,isCrossRepository",
+          "number,url,body,state,headRefName,headRefOid,baseRefName,isCrossRepository",
           ...repoFlag(repo),
         ]
       : [
@@ -156,11 +167,12 @@ export function findOpen({ provider, branch, base, repo = null, cwd, env = proce
   }
   const first = list.find((item) => isOwnOpen(provider, item, { branch }));
   if (!first) return null;
+  const target = provider === "github" ? first.baseRefName : first.target_branch;
   const request = provider === "github"
-    ? { id: first.number, url: first.url, body: first.body ?? "" }
-    : { id: first.iid, url: first.web_url, body: first.description ?? "" };
-  if (!Number.isInteger(request.id) || request.id < 1 || typeof request.url !== "string" || !request.url || typeof request.body !== "string") {
-    throw invalid("匹配的 PR/MR 缺少有效编号、地址或正文，请核对平台返回。");
+    ? { id: first.number, url: first.url, body: first.body ?? "", head: first.headRefOid }
+    : { id: first.iid, url: first.web_url, body: first.description ?? "", head: first.sha };
+  if (target !== base || !Number.isInteger(request.id) || request.id < 1 || typeof request.url !== "string" || !request.url || typeof request.body !== "string") {
+    throw invalid("匹配的 PR/MR 目标分支不符或缺少有效编号、地址、正文，请核对平台返回。");
   }
   return request;
 }
@@ -191,7 +203,9 @@ export function createRequest({ provider, branch, base, title, body, repo = null
       : [platform.group, "create", "--source-branch", branch, "--target-branch", base, "--title", title, "--description", body, ...repoFlag(repo)];
   const result = run(platform.bin, args, { cwd, env, input: provider === "github" ? body : undefined });
   if (result.status !== 0) throw platformFailure(provider, "create", result);
-  return { id: null, url: result.stdout.trim().split("\n").filter(Boolean).at(-1) ?? "" };
+  const url = result.stdout.trim().split("\n").at(-1);
+  const id = url?.match(provider === "github" ? /\/pull\/(\d+)$/ : /\/-\/merge_requests\/(\d+)$/)?.[1];
+  return { id: id ? Number(id) : null };
 }
 
 /** 只替换描述里的托管区块，标题与区块外的内容都不动。 */
@@ -203,23 +217,6 @@ export function updateRequest({ provider, id, body, repo = null, cwd, env = proc
       : [platform.group, "update", String(id), "--description", body, ...repoFlag(repo)];
   const result = run(platform.bin, args, { cwd, env, input: provider === "github" ? body : undefined });
   if (result.status !== 0) throw platformFailure(provider, "update", result);
-  return { id, url: result.stdout.trim().split("\n").filter(Boolean).at(-1) ?? "" };
-}
-
-/** 只对有明确诊断的失败作判断，其他非零退出留给调用方核对。 */
-function platformFailureReason(result) {
-  const message = `${result.stderr ?? ""}\n${result.stdout ?? ""}`;
-  const status = message.match(/\b(?:HTTP(?:\/[\d.]+)?|status(?: code)?)[:=\s]+(\d{3})\b/i)?.[1] ??
-    message.match(/\b(?:GET|HEAD|POST|PUT|PATCH|DELETE) https?:\/\/\S+: (\d{3})\b/)?.[1];
-  if (status === "429" || /rate limit|too many requests/i.test(message)) return "rate_limit";
-  if (status === "401" || /bad credentials|authentication failed|not (?:logged in|authenticated)|(?:gh|glab) auth login/i.test(message)) return "login";
-  if (status === "403" || /permission denied|access denied|insufficient permissions?/i.test(message)) return "permission";
-  if (["500", "502", "503", "504"].includes(status) ||
-      result.error?.code === "ETIMEDOUT" ||
-      /connection (?:reset|refused|timed out)|network is unreachable|i\/o timeout|TLS handshake timeout|context deadline exceeded/i.test(message)) {
-    return "temporary";
-  }
-  return "unknown";
 }
 
 export function platformFailureAdvice(provider, reason) {
@@ -240,7 +237,7 @@ export function platformFailureAdvice(provider, reason) {
 
 function platformFailure(provider, action, result) {
   const platform = platformOf(provider);
-  const reason = platformFailureReason(result);
+  const reason = remoteFailureReason(result);
   const detail = tail(result.stderr || result.stdout);
   const error = new Error(
     [

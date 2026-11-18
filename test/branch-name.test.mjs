@@ -58,12 +58,25 @@ function withRemote(repo) {
   const calls = join(base, "platform-calls.txt");
   mkdirSync(bin);
   write(repo.root, "../platform-bin/gh", `#!/usr/bin/env node
-import { appendFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 const args = process.argv.slice(2);
+const opt = (name) => args[args.indexOf(name) + 1];
+const body = ${JSON.stringify(join(base, "pr-body.md"))};
+const url = "https://code.example.com/acme/demo/pull/1";
 appendFileSync(${JSON.stringify(calls)}, args.join(" ") + "\\n");
-if (args[0] === "pr" && args[1] === "list") process.stdout.write("[]\\n");
-else if (args[0] === "pr" && args[1] === "create") process.stdout.write("https://code.example.com/acme/demo/pull/1\\n");
-else process.exit(99);
+if (args[0] === "pr" && args[1] === "list") {
+  const requests = [];
+  if (existsSync(body)) {
+    const headRefName = opt("--head");
+    const headRefOid = execFileSync("git", ["--git-dir", ${JSON.stringify(remote)}, "rev-parse", "refs/heads/" + headRefName], { encoding: "utf8" }).trim();
+    requests.push({ number: 1, url, body: readFileSync(body, "utf8"), state: "OPEN", headRefName, headRefOid, baseRefName: opt("--base"), isCrossRepository: false });
+  }
+  process.stdout.write(JSON.stringify(requests));
+} else if (args[0] === "pr" && args[1] === "create") {
+  writeFileSync(body, readFileSync(0, "utf8"));
+  process.stdout.write(url + "\\n");
+} else process.exit(99);
 `);
   chmodSync(join(bin, "gh"), 0o755);
   repo.env.PATH = `${bin}:${process.env.PATH}`;
