@@ -20,7 +20,7 @@
 
 <script src="assets/docs.js?v=acdbbf2b96" defer></script>
 </head>
-<body data-page="team" data-index="f4b87c271d">
+<body data-page="team" data-index="607726c9c2">
 <a class="skip-link" href="#main-content">跳到主要内容</a>
 <header class="topbar">
   <div class="topbar-inner">
@@ -37,7 +37,7 @@
 </header>
 <div class="layout">
   <aside class="sidebar"><nav class="docs-nav" aria-label="文档导航"><section class="nav-group"><h2>开始使用</h2><ul><li><a href="index.html">概览</a></li><li><a href="quickstart.html">快速开始</a></li><li><a href="daily.html">日常工作流</a></li><li><a href="blocked.html">被拦截时怎么办</a></li></ul></section><section class="nav-group"><h2>核心概念</h2><ul><li><a href="architecture.html">架构总览</a></li><li><a href="principles.html">核心原理</a></li><li><a href="limits.html">信任模型与限制</a></li></ul></section><section class="nav-group"><h2>配置与维护</h2><ul><li><a href="customize.html">按项目定制</a></li><li><a href="team.html" aria-current="page">团队与多机</a></li></ul></section><section class="nav-group"><h2>参考</h2><ul><li><a href="cheatsheet.html">命令速查</a></li><li><a href="https://github.com/windvalley/harness/blob/main/docs/reference.md">参考手册<svg class="external" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6"/><path d="M20 4 10 14"/><path d="M18 13v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h6"/></svg></a></li></ul></section></nav></aside>
-  <main id="main-content"><header class="page-header"><p class="eyebrow">配置与维护</p><h1 tabindex="-1" id="team">团队与多机</h1><p class="lead">在新机器接入项目，完成升级、同步与多会话协作。</p></header><details class="mobile-page-toc"><summary>本页内容</summary><div class="page-toc-title">本页内容</div><ol><li class="toc-level-2"><a href="#new-machine">新成员或新机器</a></li><li class="toc-level-2"><a href="#upgrade">升级</a></li><li class="toc-level-2"><a href="#sync">与远程同步</a></li><li class="toc-level-2"><a href="#parallel">多个会话并行</a></li></ol></details>
+  <main id="main-content"><header class="page-header"><p class="eyebrow">配置与维护</p><h1 tabindex="-1" id="team">团队与多机</h1><p class="lead">在新机器接入项目，完成升级、同步与多会话协作。</p></header><details class="mobile-page-toc"><summary>本页内容</summary><div class="page-toc-title">本页内容</div><ol><li class="toc-level-2"><a href="#new-machine">新成员或新机器</a></li><li class="toc-level-2"><a href="#handoff">跨会话交接</a></li><li class="toc-level-2"><a href="#upgrade">升级</a></li><li class="toc-level-2"><a href="#sync">与远程同步</a></li><li class="toc-level-2"><a href="#parallel">多个会话并行</a></li></ol></details>
 
     <h2 tabindex="-1" id="new-machine">新成员或新机器</h2>
     <p>入口与客户端配置随仓库分发，门禁代码与 git 钩子留在各自的机器上。工具调用可用时，可以交给 Agent：</p>
@@ -48,6 +48,12 @@
 node ~/github/harness/bin/harness.mjs install --local
 .harness/bin/harness doctor</code></pre></div>
     <p><code>install --local</code> 按项目锁定的版本安装代码（必要时从对应的 <code>v&lt;版本&gt;</code> 标签导出），再写入本机的钩子与插件目录，不改任何入库文件。装好之前，Claude Code 与 Codex 的实时拦截会拒绝一切调用并提示这条命令。</p>
+
+    <h2 tabindex="-1" id="handoff">跨会话交接</h2>
+    <p>需要换会话、换执行者或把任务上下文贴到 PR/MR 时，从现有状态生成 Markdown 交接视图：</p>
+    <div class="code"><span class="label">只读生成交接</span><pre><code>harness status --handoff --branch feature/login</code></pre></div>
+    <p>视图汇总分支与主分支完整提交、方案文件、有效实施授权、验收清单、Worktree 未提交改动、验证与评审证据、阻塞、相关上报、下一步命令和恢复入口。缺省分支是当前分支，退出语义与普通 <code>status</code> 相同。</p>
+    <p>它不运行验证或评审，不写交接文件、账本或新的状态真源。外部副作用与恢复点没有结构化记录时会明确提示，接手者仍须核对实际环境。动态正文会遮盖常见凭据，但粘贴到外部系统前仍须人工检查。</p>
 
     <h2 tabindex="-1" id="upgrade">升级</h2>
     <div class="code"><span class="label">升级需求示例</span><pre class="prompt"><code>请从 GitHub 获取 harness 最新版本：https://github.com/windvalley/harness
@@ -75,7 +81,7 @@ HARNESS_MAIN_BYPASS=1 git merge --ff-only origin/main</code></pre></div>
 
     <h2 tabindex="-1" id="parallel">多个会话并行</h2>
     <p>只要有一个 Agent 在主 Worktree 里切走分支或留下改动，所有任务的合并都会被挡住。新项目的 <code>init</code> 默认启用 <code>main-worktree</code>：Agent 不能改主 Worktree 里的文件、不能把它切离主分支，<code>pre-commit</code> 也拒绝主 Worktree 里的提交。已有项目升级时不自动开启；可从 <code>presets</code> 删除它来关闭，只需人工在主 Worktree 提交时也可只关闭 <code>main-worktree-commit</code>。</p><nav class="pagination" aria-label="文档分页"><a class="previous" href="customize.html"><span>上一篇</span><strong>按项目定制</strong></a><a class="next" href="cheatsheet.html"><span>下一篇</span><strong>命令速查</strong></a></nav></main>
-  <aside class="page-toc"><nav aria-label="本页内容"><div class="page-toc-title">本页内容</div><ol><li class="toc-level-2"><a href="#new-machine">新成员或新机器</a></li><li class="toc-level-2"><a href="#upgrade">升级</a></li><li class="toc-level-2"><a href="#sync">与远程同步</a></li><li class="toc-level-2"><a href="#parallel">多个会话并行</a></li></ol></nav><div class="related-links"><h2>相关链接</h2><a href="https://github.com/windvalley/harness/blob/main/docs/reference.md">参考手册</a><a href="https://github.com/windvalley/harness">GitHub 仓库</a></div></aside>
+  <aside class="page-toc"><nav aria-label="本页内容"><div class="page-toc-title">本页内容</div><ol><li class="toc-level-2"><a href="#new-machine">新成员或新机器</a></li><li class="toc-level-2"><a href="#handoff">跨会话交接</a></li><li class="toc-level-2"><a href="#upgrade">升级</a></li><li class="toc-level-2"><a href="#sync">与远程同步</a></li><li class="toc-level-2"><a href="#parallel">多个会话并行</a></li></ol></nav><div class="related-links"><h2>相关链接</h2><a href="https://github.com/windvalley/harness/blob/main/docs/reference.md">参考手册</a><a href="https://github.com/windvalley/harness">GitHub 仓库</a></div></aside>
 </div>
 <footer>harness · MIT 许可 · <a href="https://github.com/windvalley/harness">GitHub</a> · <a href="https://github.com/windvalley/harness/blob/main/docs/reference.md">参考手册</a></footer>
 <dialog class="drawer" id="docs-drawer" aria-label="文档导航">

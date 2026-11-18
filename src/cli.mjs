@@ -35,6 +35,7 @@ import { initProject, planUpgrade, upgradeProject } from "./install/init.mjs";
 import { unconfiguredOptions } from "./install/optional.mjs";
 import { uninstall } from "./install/uninstall.mjs";
 import { branchStatus, formatObligations, formatStatus, openPostMergeObligations } from "./status.mjs";
+import { branchHandoff, formatHandoff } from "./handoff.mjs";
 import { stopCheck } from "./stop/stop.mjs";
 import { installAll, installLocal, installVersion, listVersions, pruneVersions, publishVersion, versionDir } from "./install/install.mjs";
 import { formatSurvey } from "./install/survey.mjs";
@@ -57,6 +58,7 @@ const USAGE = `harness <命令> [参数]    任一命令加 --help 查看该命�
               [--timeout-seconds <秒>] [--attempt-timeout-seconds <秒>] [--max-queries <次>]
                                                     总时限默认 ${DEFAULT_PLAN_TIMEOUT_SECONDS} 秒，单次默认 ${DEFAULT_PLAN_ATTEMPT_TIMEOUT_SECONDS} 秒，读仓库最多 ${DEFAULT_PLAN_MAX_QUERIES} 次
   status   --branch <名称>                           只读汇总：还差哪几步才能合并
+  status   --handoff [--branch <名称>]                生成 Markdown 交接视图，复用现有 Git、Worktree 与签名记录，不另写状态
   status   --post-merge [--branch <名称>]            列出到期而未登记的合并后验收义务；有待办时退出码为 1
   confirm  --branch <名称> [--yes]                   查看门禁改动；--yes 记录人工确认
   approve  --branch <名称> [--yes --note <原话>]     查看任务方案；用户同意实施后加 --yes，--note 照录用户原话
@@ -1130,7 +1132,11 @@ export async function main(argv) {
         return 0;
       }
       case "status": {
-        const { values } = parseArgs({ args: rest, options: { branch: { type: "string" }, "post-merge": { type: "boolean", default: false } } });
+        const { values } = parseArgs({ args: rest, options: { branch: { type: "string" }, handoff: { type: "boolean", default: false }, "post-merge": { type: "boolean", default: false } } });
+        if (values.handoff && values["post-merge"]) {
+          process.stderr.write("status --handoff 与 --post-merge 不能同时使用\n");
+          return 2;
+        }
         if (values["post-merge"]) {
           const { open } = openPostMergeObligations({ cwd: process.cwd() });
           const shown = values.branch ? open.filter((item) => item.branch === values.branch) : open;
@@ -1139,8 +1145,13 @@ export async function main(argv) {
         }
         const branch = values.branch ?? currentBranchForStatus();
         if (!branch) {
-          process.stderr.write("用法: harness status --branch <名称>\n       harness status --post-merge [--branch <名称>]\n");
+          process.stderr.write("用法: harness status --branch <名称>\n       harness status --handoff [--branch <名称>]\n       harness status --post-merge [--branch <名称>]\n");
           return 2;
+        }
+        if (values.handoff) {
+          const handoff = branchHandoff({ cwd: process.cwd(), branch });
+          print(formatHandoff(handoff));
+          return handoff.status.ready && handoff.status.complete !== false ? 0 : 1;
         }
         const status = branchStatus({ cwd: process.cwd(), branch });
         print(formatStatus(status));

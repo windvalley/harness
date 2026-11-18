@@ -45,6 +45,7 @@ describe("子命令帮助", () => {
     assert.equal(status.status, 0, status.stderr);
     assert.match(status.stdout, /--branch/);
     assert.match(status.stdout, /--post-merge/);
+    assert.match(status.stdout, /--handoff/);
     const attest = repo.rawCli("attest", "--help");
     assert.equal(attest.status, 0, attest.stderr);
     assert.match(attest.stdout, /合并后检查用 --at/, "续行也要带上");

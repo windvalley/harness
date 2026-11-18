@@ -10,6 +10,7 @@
         <tr><td><code>review --branch &lt;分支&gt;</code></td><td>独立评审</td></tr>
         <tr><td><code>review-plan --branch &lt;分支&gt; [--all]</code></td><td>方案评审，只给建议；默认只展示 high 及以上的发现，<code>--all</code> 展示全部</td></tr>
         <tr><td><code>status [--branch &lt;分支&gt;]</code></td><td>只读汇总还差哪几步才能交付</td></tr>
+        <tr><td><code>status --handoff [--branch &lt;分支&gt;]</code></td><td>从现有 Git、Worktree 与签名记录生成 Markdown 交接视图，不另写状态</td></tr>
         <tr><td><code>status --post-merge [--branch &lt;分支&gt;]</code></td><td>列出到期而未登记的合并后验收义务，有待办时退出码为 1</td></tr>
         <tr><td><code>confirm --branch &lt;分支&gt; [--yes]</code></td><td>查看门禁改动摘要；带 <code>--yes</code> 由人记录确认</td></tr>
         <tr><td><code>approve --branch &lt;分支&gt; [--yes --note &lt;原话&gt;]</code></td><td>查看方案与授权状态；记录实施授权</td></tr>
