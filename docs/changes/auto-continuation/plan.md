@@ -1,203 +1,178 @@
-# 失败即续跑：用客户端钩子自动接到下一轮
+# API 失败后的会话续跑
 
-- 验收清单：`docs/changes/auto-continuation/acceptance.md`
-- 任务分级：先方案后实施。
-  理由是新增钩子事件处理、后台续跑进程与人工授权开关，改动跨适配器、CLI、门禁规则与会话记录，风险面涉及“无人监督连续执行”。
+验收见[首版验收清单](acceptance.md)。
+本任务先完成方案评审，实施前取得用户授权。
 
-## 背景与结论先行
+## 背景与首版范围
 
-告警中心四阶段实施中，会话反复停下。0.21.0 解决了前两类：收尾检查不再催着去验证、同一状态拦三次、阶段之间自动接续。
+告警中心四阶段实施期间，2026-11-17 20:58 的 Claude Code 会话因 `API Error: Upstream request failed` 停止，错误类型为 `unknown`。
+故障轮未触发正常收尾的 `Stop`，因此 harness 无法在收尾检查中提示下一步。
 
-第三类没解决：2026-11-17 20:58 那一轮以 `API Error: Upstream request failed` 结束。
-Claude Code 此时触发 `StopFailure` 而不是 `Stop`，而 `StopFailure` 文档写明是 fire-and-forget，钩子的输出与退出码都被忽略，所以钩子本身无法让这一轮继续。
+首版面向 Claude Code 本地 CLI，由 `StopFailure` 记录中断，提供 `harness status` 提示和人在前台发起的 `harness continue --session <id>`。
+验证原会话的写入权可以排他交接后，同一钩子可按下文的授权和运行上限派发后台续跑。
+缺省关闭自动派发。
+会话写入权无法确定时，由人在原客户端手动继续。
+关闭原会话后，可经人工确认使用 `harness continue` 恢复。
 
-用户提出的方向是：不新增 `harness drive` 命令，直接用 `StopFailure` 钩子触发续跑。
-本方案采纳这个方向，并说明它成立的前提与必须补的那一部分。
+## 已验证的客户端行为
 
-技术事实（已核实）：
+本地回环假接口实测 Claude Code 2.1.326 的 `-p` 调用。
+HTTP 500 和 529 均触发 `StopFailure`，错误类型为 `server_error`。
+HTTP 401 触发 `StopFailure`，错误类型为 `authentication_failed`。
+这些失败未触发 `Stop`，且事件包含原会话的 `session_id`。
+失败的 JSON 结果可以同时出现 `subtype: "success"` 和 `is_error: true`，进程退出码为 1。
+在该版本，`dontAsk`、`--max-turns` 和 `--max-budget-usd` 已验证可组合传入无头 CLI。
+一次 `-p` 调用被 `Stop` 拦下一次时产生了两次模型请求。
+用持续拦截的 `Stop` 验证了 `--max-turns 1` 和极小的费用阈值，两次试验均只发出一个请求，各自返回 `error_max_turns` 和 `error_max_budget_usd`。
+两个并发的 `-p --resume` 进程可以同时载入同一会话、发出模型请求并成功退出。
 
-- Claude Code 2.1.326 的 `StopFailure` 输入是 `{hook_event_name, error, error_details?, last_assistant_message?}` 加通用字段，**包含 `session_id`**，与 `Stop` 共用同一套会话标识。
-- 钩子执行是 `await` 的，不是纯后台；但输出与退出码被忽略，因此钩子能做的只有“自己去做事”，不能“要求客户端继续”。
-- 它**替代** `Stop` 触发：一轮以 API 错误结束时只发 `StopFailure`，不发 `Stop`。
-  这解释了本次中断为什么收尾检查完全没发声：那一轮根本没有走到收尾检查。
-- 全部错误类型：`rate_limit`、`overloaded`、`server_error`、`max_output_tokens`、`invalid_request`、`model_not_found`、`verification_required`、`unknown`、`authentication_failed`、`oauth_org_not_allowed`、`account_on_hold`、`billing_error`、`cloud_credential_error`。
-- 本次中断的错误是 `unknown`（`Upstream request failed`）。
+`StopFailure` 没有决定当前轮是否继续的控制字段。
+恢复进程发起的是新的客户端调用。
+官方文档列出了交互终端可用的 `terminalSequence` 通知字段，实际可用性需按支持版本验证。
+[Claude Code 钩子文档](https://code.claude.com/docs/en/hooks#stopfailure) · [CLI 参数](https://code.claude.com/docs/en/cli-reference)
 
-因此可行的做法是：`StopFailure` 钩子在同进程内**拉起一个新的无头续跑进程**去接着做欠项，而钩子自己正常退出。
-续跑进程是一次新的客户端调用，必然要消耗一次新的会话轮次，这正是“自动续跑”的代价与含义。
+## 触发、欠项和停止状态
 
-## 设计
+新增 `hook --client claude --event stop-failure`，从载荷取得事件、当前目录、会话 ID 和规范化错误类型。
+钩子快速返回且不要求客户端拦截。
+缺省写入本地中断提示，自动派发资格成立时才启动和当前钩子进程脱离的续跑器。
+续跑器在首次调用 Claude 前重新核验授权、会话写入权和欠项。
+只有当前范围内还有可推进的工作时才启动 Claude。
 
-### 一、钩子只做判断与派发，不做长任务
+从 `src/stop/stop.mjs` 提取欠项计算，与正常收尾共用。
+欠项计算返回已完成、仍可推进、等待人工和无法判定四种结论，以及分支、下一步和进展指纹。
+会话未记录、关联分支无法读取或状态读取失败时，按无法判定记原因。
+只差实施授权、当前分支与证据快照命中未解除上报，或只差人工确认时，按等待人工处理。
+正常 `Stop` 继续负责前台收尾的拦截计数、提示去重和 `stop.unresolved` 记录。
+续跑器使用自己的运行状态，普通欠项查询不更新 `lastBlock` 或原收尾账本。
+后台子客户端的 `Stop` 在确认属于当前受控运行后直接放行，由续跑器统一决定是否再开一轮。
 
-`StopFailure` 钩子 `hook --client claude --event stop-failure`：
+续跑器在原客户端的会话目录调用 Claude，用参数数组传递 `-p`、`--resume`、`--permission-mode`、`--output-format json` 和本轮限制。
+harness 生成的续跑提示作为单个参数传入。
+任务范围由本机授权中核对的 Worktree 和有效的方案级授权决定。
+既有阶段顺序和验收清单约束适用于后续阶段，进入相关 Worktree 前也要核验写入权。
 
-1. 读载荷里的 `session_id` 与 `error`。
-2. 用与收尾检查完全相同的一套读取，计算该会话经手的任务分支欠项。
-3. 按配置决定是否续跑：
-   - 无欠项、只差人来处理、已有未解除上报：不续跑，写一条账本记录后退出。
-   - 有 Agent 能接着做的欠项：进入下一步。
-4. 派发一个 detach 的续跑进程后立即返回 0。
+## 授权与权限
 
-如果钩子内部同步跑续跑，客户端钩子超时会把钩子杀掉，而且用户终端会卡住，所以必须 detach。
+受信任的主分支可通过 `.harness/config.json` 配置 `continuation.enabled` 和运行上限。
+`enabled` 缺省为 `false`，只控制自动派发。
+读取自动续跑配置时使用主分支已提交的配置，首次接入使用提示模式。
+Agent 可在任务分支提出配置变更。
+变更启用状态、权限模式、自动续跑范围或放宽运行上限时，按门禁改动展示配置差异并要求人工确认，独立于 `governance.confirmOnGateChange`。
 
-### 二、续跑进程：一次新的无头会话轮次
+自动派发还需要本机操作者在可信前台为该会话登记独立授权。
+`harness continue authorize --session <id>` 向人展示仓库、会话、允许的任务范围、权限模式、已有交付授权和本次模型预算，经明确确认后在本机登记。
+授权按仓库和会话绑定一次受控运行，保存人确认的范围和运行上限。
+受信任的本机确认入口签发授权，项目配置、钩子载荷和环境变量仅提供运行条件与数据。
+重复事件和进程重启读取同一份授权的运行记录，保留已用次数、预算和停止结果。
+终止后需要人重新授权才能再次自动派发。
 
-`harness continue --session <id>`（内部命令，也允许人手动运行）：
+人工 `harness continue --session <id>` 在用户关闭写入该会话的客户端后，在可信前台确认交接、任务范围和预算。
+自动及人工路径均核验安装版本、有效的 `PreToolUse` 和工具权限约束。
+续跑器默认使用 `dontAsk`，在已授权范围内使用允许的工具。
+`bypassPermissions` 仅可在隔离环境中由本机操作者单独授权。
+门禁缺失、启动校验失败或授权变更时停止，并在 `status` 提示原因。
+本机确认和授权记录的访问控制独立于 Agent 可调用的工具及其文件权限。
+无法证明这一边界的环境仅显示提示，由用户用原客户端恢复。
 
-- 拼出 `claude -p --resume <会话> --permission-mode <模式> --output-format json "<本轮提示>"`。
-- 本轮提示由 harness 生成：欠项清单、下一步命令、以及“每一轮以工具调用推进”的要求。
-- 跑完一轮后重新计算欠项：仍有欠项就再来一轮，直到完成、要人、连续无进展或到达上限。
-- 每轮写 `continue.round`，停下写 `continue.stop`，含会话、轮次、欠项快照与停止原因。
+续跑使用已有实施和交付授权。
+`harness approve --from-stages` 仍可从有效方案级授权派生阶段授权，`harness escalate resolve` 仍需提供可复核的技术解除证据。
+新实施授权、`harness confirm --yes` 和 `harness escalate answer` 所需的人为决定由人在前台完成。
+每次派发前与每轮开跑前均核验授权和任务范围。
 
-换句话说：**stop 钩子负责“会话停下时提醒 Agent”，StopFailure 钩子负责“会话出事时把 Agent 拉起来”**，两者共用同一套欠项判定，不重复设计。
+## 会话交接、并发与取消
 
-### 三、只有人授权过一次才允许自动续跑
+自动派发的实施前置是选定可验证的交接方式，并用实际 Claude Code CLI 证明原客户端与续跑器在同一时刻只有一方能对会话写入。
+原 TUI 仍打开但已空闲、退避期间用户恢复会话、续跑中用户尝试接管均属于验收场景。
+仅发现进程存在、仅发现进程退出或通过一次进程扫描，只能作为诊断证据。
+任一参与方仍能绕开交接并写入时，该运行方式只提供中断提示和人工恢复。
+Claude Code 2.1.326 的原 TUI 场景先实施提示和人工恢复，自动派发以通过上述验证为准。
 
-这是本方案唯一的安全开关，缺省关闭。
+续跑器用共享 Git 数据目录中的原子锁约束同一会话和工作树的 harness 续跑器。
+重复派发在取得锁前退出，持锁者记录真实运行状态。
+进程退出后，确认持有者及其客户端进程已结束才能回收锁。
+无法核实存活状态时停止派发并提供诊断。
+派生钩子结合 `HARNESS_CONTINUATION=1` 和活动运行记录，把规范化失败传回原续跑器并阻止递归派发。
 
-- `.harness/config.json` 新增 `continuation`：
-  - `enabled`：缺省 `false`。为 `false` 时 `StopFailure` 钩子只记一条 `continue.notice`，在账本与 `status` 里显示“这一轮因 X 中断，仍有欠项，可运行 harness continue 续跑”，不做任何自动动作。
-  - `maxRounds` 缺省 20，`maxIdleRounds` 缺省 3，`maxFailures` 缺省 3，`maxSameErrors` 缺省 2。
-  - `permissionMode` 缺省 `bypassPermissions`（按用户此前的选择），`client` 缺省 `claude`。
-  - `skipErrors` 缺省空数组，见下一节。
-- 打开 `enabled` 是门禁改动，需要人确认；Agent 不能自行打开。
-- 新增门禁规则：`harness continue` 与改动 `continuation` 配置都只能由人发起。
-  Agent 在自己的会话里运行 `harness continue` 会被拒绝，理由是它会在当前会话之外再开一个无人监督的执行者，Agent 既看不到结果也无法对后果负责；需要续跑时由钩子派发或由人运行。
-- 续跑进程里的 Agent 拿不到任何新增权限：`harness approve`、`harness confirm --yes`、`harness escalate resolve` 仍由既有人工规则拦截。
+`harness continue cancel --session <id>` 由人撤销该次授权，停止退避或终止正在运行的客户端及其子进程。
+人在前台运行时也可用 Ctrl-C 取消。
+收到取消或客户端接管信号后先停止继续调用，确认进程结束再释放写入权并记录原因。
+此后只有新的人工授权才能重新启动同一会话的自动预算。
 
-### 四、错误分类：缺省全部续跑，靠兜底停下
+## 重试策略与运行上限
 
-不按错误类型做白名单。理由是白名单本身要猜，而绝大多数错误都能靠新的一轮改变请求而恢复：
-
-| 错误 | 新的一轮能否推进 | 做法 |
-| --- | --- | --- |
-| `rate_limit`、`overloaded`、`server_error`、`unknown` | 通常能，等一等或重发即可 | 续跑，先退避等待 |
-| `max_output_tokens` | 能，让模型接着写并缩短单次输出 | 续跑，提示里说明上一轮被截断，从断点继续并控制输出长度 |
-| `invalid_request` | 常能，多是工具参数或上下文形态问题 | 续跑，提示里要求先读回失败点、修正参数后重试 |
-| `model_not_found`、`cloud_credential_error` | 能，换备选模型或另一凭据 | 续跑，提示里说明模型或凭据不可用，按配置换用备选 |
-| `verification_required`、`authentication_failed`、`oauth_org_not_allowed`、`account_on_hold`、`billing_error` | 通常靠人处理，但重试代价几乎为零 | 仍续跑一次，连续出现即停 |
-
-- 缺省行为：`StopFailure` 一到就续跑，不判断错误类型。
-  最后一行的几种错误多数在请求被受理前就失败，重试代价通常很低；“先试一次、连续同错误就停”比预先判定哪些错误不可恢复更省事，也少一个要维护的名单。
-  这一条的实际代价在实施时用实测记录（重试次数与花费）确认，不只凭推断。
-- 兜底判据比错误类型更可靠：
-  - 同一错误连续 `maxSameErrors` 轮（缺省 2）出现且指纹没变，立即停，判为人处理并写明错误类型。
-  - 连续 `maxFailures` 轮（缺省 3）失败停。
-  - 指纹连续 `maxIdleRounds` 轮（缺省 3）不变停。
-  这三条同时覆盖偶发抖动与稳定失败，不需要事先知道哪些错误是稳定的。
-- 每轮的提示按错误类型附带恢复建议（上表右列），由 harness 生成，不指望模型自己推断上一轮为什么断。
-- `continuation.skipErrors` 是减法项：用户确实不想为某类错误续跑时填进去，例如在有计费告警的环境里填 `billing_error`。
-  它不是缺省策略。
-
-### 四、防递归与防并发
-
-- 续跑进程启动时在环境变量里带 `HARNESS_CONTINUATION=1`，派生的钩子据此不再派发新的续跑，避免套娃。
-- 会话级锁：同一 `session_id` 同时只允许一个续跑进程，第二个进程检测到锁后退出并记账。
-- 客户端进程探测：续跑前若发现该会话正被另一个客户端进程占用（用户重新打开了终端），不续跑并记账“已由用户接管”。
-- `-p` 模式下若无头会话本身也触发 `StopFailure`，由第 1 条阻断递归；由 `maxFailures` 兜底停下。
-- 退避：续跑前按错误类型等待，`rate_limit` 与 `overloaded` 等待时间较长（缺省 60 秒起，逐轮翻倍，上限 10 分钟），其余类型不等待。
-  等待期间保持会话锁，用户随时可以打断。
-- 退出条件：完成、要人、同一错误连续 `maxSameErrors` 轮且指纹不变、连续 `maxFailures` 轮失败、指纹连续 `maxIdleRounds` 轮不变、到达 `maxRounds`、被用户接管。
-
-### 五、各客户端支持情况（已核实）
-
-判定与派发逻辑与客户端无关，只有“触发器”和“无头续跑命令”按客户端区分。
-本机实测各客户端的结果：
-
-| 客户端 | 失败触发 | 无头续跑命令 | 结论 |
-| --- | --- | --- | --- |
-| Claude Code（TUI、CLI） | `StopFailure`，替代 `Stop`，载荷含 `session_id` 与 `error` | `claude -p --resume <id> --permission-mode <模式> --output-format json` | 支持 |
-| Claude Code 桌面版 | 与 TUI 共用同一份 `settings.json` 钩子，触发层一致 | 同上 | 支持，桌面版需在 `/resume` 里打开同一会话才看得到轮次 |
-| Kimi Code（`kimi`） | `StopFailure`，同样 fire-and-forget，载荷是 `errorType` 与 `errorMessage`；钩子配置在 `config.toml` 的 `[hooks]`，字段为 `event`、`matcher`、`command`、`timeout` | `kimi -p "<提示>" -S <id> --output-format stream-json`（prompt 模式必须带会话 ID） | 支持，需要为它写一个钩子配置写入器 |
-| DSH（TUI、桌面版、web） | 插件事件 `agent/turn-stopping` 加 `agent.steer`，比钩子更强：可以在同一轮里直接让 Agent 继续，不必另起进程 | `dsh --profile headless --session-id <id> --approval-policy never --json "<提示>"` | 优先用 steer；出错时是否触发 `turn-stopping` 需实测 |
-| Codex | 只有 `stop`，没有 `StopFailure` | `codex exec resume <id> --json`、`codex exec fork` | 待实测，见下 |
-| 其他客户端 | 通用入口 `hook --client generic --event stop-failure` | 命令模板 | 需用户配置 |
-
-由此得出的两条结论：
-
-1. **无头续跑本身是通用的**：Claude Code、Kimi Code、DSH、Codex 都有“带会话 ID 的非交互续跑”命令，第三方客户端用命令模板也能接。
-   所以“能不能自动续跑”不是客户端差异点。
-2. **真正的差异在失败触发**：只有 Claude Code 与 Kimi Code 提供 `StopFailure`。
-   Codex 没有这个事件，它一轮出错时是否仍触发 `stop` 尚未验证；实施时必须在 Codex 里实测一次（构造 `server_error`），结论写进交付说明。
-   验不出来时 Codex 只能退化：靠 `stop` 时的欠项检查多拦几轮，或由人运行 `harness continue`。
-3. **DSH 应当走替换路径**：它的插件可以直接 `steer`，比“派发新进程”更省一次会话、也不需要无头续跑。
-   `src/continue/` 的判定逻辑复用到插件里，派发改为 `steer`。
-
-- Codex 的钩子事件：`pre-tool-use`、`post-tool-use`、`stop`、`session-start`、`user-prompt-submit`、`subagent-start`、`subagent-stop`、`pre-compact`、`post-compact`、`permission-request`、`interrupt`，没有 `StopFailure`。
-- 通用命令模板配置放在本机 `~/.config/harness/continue.json`，支持 `${session}`、`${prompt}` 占位符与 `json`、`jsonl`、`text` 三种输出解析，第三方 Agent 不需要为它写代码。
-
-### 六、进度可见与通知：静默记账不够
-
-先说一个不能绕过的限制：`StopFailure` 钩子的输出与退出码都被客户端忽略，所以**钩子这一侧没有任何办法把字打到用户终端上**。
-只写账本的话，用户在下次运行 `harness status` 或打开 `audit` 之前根本不知道会话已经被续跑，这在“自动替你花钱跑模型”的场景下不可接受。
-
-所以方案要求四个通道同时存在，缺省全部开启，用户不需要配置任何东西就能知道：
-
-1. **会话内可见（主要通道）**：续跑默认续同一会话，每轮的提示由 harness 写成一条用户消息，内容是“自动续跑第 N 轮、上一轮因什么中断、当前欠项、下一步”。
-   用户下次 `/resume` 或 `claude --resume <会话>` 打开时，第一眼看到的就是这些轮次，和手动输入“继续”完全一样。
-2. **启动即通知（主动通道）**：`notify` 在**续跑开始时**触发一次，不是只在停止时。
-   内容含会话、中断错误类型、第 1 轮要做的欠项。
-   停止时再触发一次。两次都带 `${session}`、`${rounds}`、`${reason}`。
-   未配置 `notify` 时，退化为下一项的日志文件。
-3. **日志文件与 status 实时行（无需配置）**：续跑进程的 stdout 与 stderr 写到 `.git/harness/continue/<会话>.log`。
-   会话锁存在期间，`harness status` 显示一行 `continuation: 进行中 会话 <id> 第 N 轮 上一轮 <时间>`，并打印日志路径；锁释放后改为显示停止原因与总轮次。
-   这样即使没配通知，用户随手看 `status` 就能知道有没有东西在替他跑。
-4. **账本（事后核账）**：`continue.notice`（未启用时的提示）、`continue.dispatch`（派发成功，含轮次上限与错误类型）、`continue.round`、`continue.stop`、`continue.skip`。
-
-`sleep` 与退避期间的等待也写进日志与 status 的“上一轮时间”，让用户能看出是“在等”还是“卡住”。
-
-## 与收尾检查的关系
-
-| 中断类型 | 谁负责 |
+| 错误类型 | 自动处理 |
 | --- | --- |
-| Agent 正常结束、还有欠项 | `Stop` 钩子的收尾检查，最多拦 `stop.idleBlocks` 次 |
-| 一轮因 API 错误、上下文耗尽等结束 | `StopFailure` 钩子派发续跑进程 |
-| 阶段之间没有待办 | 收尾检查按阶段文件续跑；续跑进程同样能处理 |
-| 只差人来做 | 两者都只提示，不动手 |
+| `rate_limit`、`server_error`、可识别的 `overloaded` | 退避后重试，缺省从 60 秒起逐轮翻倍，单次等待上限 10 分钟 |
+| `max_output_tokens` | 从已记录的进展继续，提示控制单次输出长度 |
+| `unknown` | 同一次运行最多因该错误重试一次，覆盖本次实际的上游连接失败 |
+| 鉴权、计费、账号、组织、验证要求、凭据、模型或请求配置错误 | 停在等待人工并记录规范化错误类型 |
+| 未识别的错误类型、载荷缺失或无法可靠取得运行结果 | 停在无法判定并保留必要的诊断信息 |
 
-## 兼容性与默认行为
+`skipErrors` 只用于关闭原本可重试的类别。
+同类错误和失败计数把触发续跑的原始失败计为第一次。
+每次 `-p` 调用结束后，结合退出码、受控的 `StopFailure` 记录和 JSON 的 `is_error` 重算欠项。
+`error_max_turns` 表示本轮已达到代理轮次上限，按最新欠项和剩余总额度决定后续。
+`error_max_budget_usd` 表示剩余额度已触及阈值，结束本次运行。
+进展指纹变化时重置无进展计数。
+相同错误连续两次且进展指纹未变、连续失败三次、连续三轮无进展或达到无头调用上限时停止。
+对应配置为 `maxSameErrors`、`maxFailures`、`maxIdleRounds` 和 `maxRounds`，缺省分别为 2、3、3 和 20，可在授权范围内收紧。
 
-- `continuation.enabled` 缺省 `false`：不配置时不派发任何进程，只在账本与 `status` 里多一条提示，行为和 0.21.0 基本一致。
-- 新增的钩子事件由 `install` 写入客户端配置，未安装或旧版本客户端不接受 `StopFailure` 时该钩子不会被调用，不影响现有 `Stop`。
-- 新增门禁规则只匹配 `harness continue` 与 `continuation` 配置键。
-- 不改动既有命令的参数与输出。
+`maxRounds` 统计无头客户端调用次数。
+每次调用另外设置 `--max-turns`，首版缺省 3，以及五分钟的进程时限。
+`--max-turns` 约束客户端的代理轮次，客户端内部的请求重试另受进程时限约束。
+整次运行缺省 20 分钟，计入退避与等待交接，单次调用用剩余时间截断。
+缺少可执行的时限或达到任一终止阈值时停止。
+到期后终止进程树，回收锁并记录原因。
 
-## 实施步骤
+开始前由人确认一个有限且为正数的模型预算。
+每轮将剩余额度传给 `--max-budget-usd`，并用客户端报告的本轮增量花费扣减。
+历史会话费用不计入本次恢复。
+Claude 的额度基于客户端估算，最后一个请求可能使实际账单超出阈值。
+预算用尽或续跑器无法可靠核计花费时停止。
+`harness review` 等另行调用模型的命令也需要各自的额度和计量。
+首版遇到无法纳入本次预算的付费步骤时停下，请人处理。
 
-| 步骤 | 改动 | 验证方式 |
+## 本地记录与可见性
+
+`harness status` 按关联的任务分支显示失败提示、等待退避、运行中、已停止或需人处理。
+会话尚未关联任务分支时，在主分支的 `harness status` 中按会话显示提示。
+等待时显示下一次尝试时间，运行时显示会话、调用次数及最近更新时间，结束时显示停止原因。
+`status` 同时显示实际续跑日志路径，退出码仍按分支交付状态决定。
+用现有 `dataDir()` 写共享 Git 数据目录，文件名沿用会话记录按客户端和会话 ID 派生哈希的做法。
+日志使用本机受限权限，并限制体积和保留期。
+
+账本记录 `continue.notice`、`continue.dispatch`、`continue.round`、`continue.stop` 与 `continue.skip`。
+默认仅写运行状态、会话、分支、次数、规范化错误、脱敏欠项和时间等字段。
+原始 stdout、stderr、`error_details`、工具输出及会话内容只用于必要的内存判定。
+每次无头调用将由 harness 生成的简短续跑提示写入原会话，可在客户端恢复时看到。
+提示包含调用次数、规范化错误、未完成的工作和已授权的下一步。
+如人明示配置本机 `notify`，每次运行开始和停止各发一次结构化摘要，按参数数组传递且关闭 shell 解释。
+主动通知作为附加通道，首版用户通过 `harness status` 查看本机记录。
+外部通知通道需另行授权。
+
+## 客户端接入状态
+
+| 客户端 | 已验证或已核实 | 后续接入条件 |
 | --- | --- | --- |
-| 1 | 写出失败用例：`stop-failure` 载荷被接收、未启用时只记账、`skipErrors` 生效、启用后派发、递归阻断、会话锁、接管检测、退避与各停止条件 | `node --test` 定向运行，记录失败输出 |
-| 2 | 新增 `src/continue/`：欠项判定复用、派发、锁、客户端命令拼装与输出解析 | 派发与退出条件用例转绿 |
-| 3 | `hook` 增加 `--event stop-failure`；`install` 为 Claude Code 写 `StopFailure` 钩子，为 Kimi Code 写 `config.toml` 的 `[hooks]` | 安装与钩子用例转绿 |
-| 4 | DSH 插件改用 `steer` 走同一套判定，不派发进程 | 插件用例转绿 |
-| 5 | 新增 `harness continue` 命令与 `status` 的续跑实时行 | 命令级用例转绿 |
-| 6 | 门禁规则、规则文档、参考手册与文档站 | `npm run docs:build` 并审查生成差异 |
-| 7 | 假客户端端到端：模拟一轮 `unknown` 错误后自动续跑并推进到完成 | 端到端用例与日志 |
-| 8 | 真实客户端逐个实测：Claude Code、Kimi Code、DSH 各一条，确认触发与续跑落在同一会话 | 实测记录 |
-| 9 | Codex 实测一轮出错是否触发 `stop`，据此接入或如实记为不支持 | 实测记录与结论 |
-| 10 | 全量回归 | `npm test`、`npm run docs:check`、`git diff --check` |
-| 11 | 独立评审，合并本地 `main`，推送 `origin main`，删除任务分支 | 评审结论与合并记录 |
+| Claude Code 本地 CLI 2.1.326 | `StopFailure` 含 `session_id`，`-p --resume` 能恢复会话 | 首版验证人工续跑，自动派发须先验证排他交接 |
+| Claude Code 桌面版 | 仓库对现有钩子做过静态核对 | 实测钩子触发、同会话恢复、写入权和进度可见性 |
+| Kimi Code 2.6.1 | 本地假接口触发 `StopFailure`，字段为 `session_id`、`error_type` 和 `error_message`，钩子用 TOML 的 `[[hooks]]` 配置 | 实施 `PreToolUse` 与任务分支关联，验证 `-p ... -S <id>` 同会话恢复和门禁 |
+| DSH | 仓库已用 `agent/turn-stopping` 与 `agent.steer` 实现正常收尾 | 从 `agent/request-error` 核对失败恢复，验证预算与取消行为 |
+| Codex 0.162.1 | 该版本源码的模型请求错误路径在调用 `Stop` 前退出，CLI 支持 `codex exec resume` | 保留客户端原生的人工恢复，自动接入需有受支持的失败事件 |
+| 其他客户端 | 按各自的钩子、会话和权限能力评估 | 有可靠失败事件、任务分支关联、门禁、写入权和运行上限后再接入 |
 
-不修改版本号与 CHANGELOG，不打标签，发版另行授权。
+[Kimi 钩子](https://github.com/MoonshotAI/kimi-code/blob/main/docs/en/customization/hooks.md) · [DSH 插件事件](https://dsh.pub/en/plugins/agent/) · [Codex 0.162.1 源码](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/core/src/session/turn.rs)
 
-## 已知限制
+## 实施与验证顺序
 
-- `StopFailure` 是 fire-and-forget：钩子无法“让这一轮继续”，只能另起一轮；每续一次都是一次新的模型调用。
-- 缺省对所有错误都续跑一次，包括需要人处理的鉴权、计费类错误。
-  它们靠“同一错误连续 `maxSameErrors` 轮即停”兜底，最坏是多跑一两轮；这几类通常在请求发出前失败，实际代价很低。
-- 续跑进程与用户终端会话并发写同一会话时，客户端行为未被规范，靠会话锁与进程探测尽量避免；探测不到的极端情况仍可能两边同时续跑。
-- 客户端不支持落盘会话时无法续跑，只能退化为“记一条提示”。
-- `bypassPermissions` 下任何客户端本身允许、而 harness 规则没覆盖的动作都会被真正执行。
-- 只有 Claude Code 与 Kimi Code 提供 `StopFailure`。Codex 与其他客户端若一轮出错时不触发 `stop`，就只能由人运行 `harness continue`，本方案无法自动兜住这一类中断。
-- 桌面版与 TUI 共用钩子配置，但“打开会话看进度”这一步要用户自己在 `/resume` 里做；桌面版是否提供自动滚动到最新轮次没有验证。
-- DSH 的 `steer` 依赖宿主插件 API，宿主升级后接口变化可能失效，需要在插件里按版本判定。
+1. 用真实 Claude Code CLI 和回环假接口固化载荷、退出状态和交接测试，并记录未通过的场景。
+2. 将欠项计算与收尾计数分开，先覆盖现有 `Stop` 行为和四种续跑结论。
+3. 实施 Claude 的提示、人工恢复、有效门禁检查、取消和可见性，跑通缺省关闭路径。
+4. 会话交接测试通过后接入自动派发，覆盖持锁、重复事件、授权撤销、进程上限和正常完成。
+5. 补齐 `install`、`doctor`、`uninstall` 和文档站的受支持版本说明，验证旧版本原有的收尾路径。
+6. 跑全量回归，核对文档生成差异和[验收清单](acceptance.md)，完成独立评审后按仓库规则交付。
 
-## 待确认
-
-- 通知通道缺省是否需要 `notify` 才算可用。当前设计是不配置也有会话内消息、日志文件与 `status` 实时行，`notify` 只是更主动的补充。
-- 每轮是否都在日志里写一条独立分隔行，便于人直接 `tail -f` 跟进度；当前设计是写，但未在验收里单独列出。
-
-## 方案评审
-
-本仓库没有配置方案评审者，本轮未运行方案评审。
+自动派发的验收以排他交接和完整运行上限通过为准。
+交接实测未通过时，实施范围限于中断提示和人工恢复，交付说明注明适用范围。
+发版按仓库流程另行授权。
