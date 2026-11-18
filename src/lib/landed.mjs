@@ -1,8 +1,5 @@
 import { git, gitOk, isAncestor, refExists, resolveCommit } from "./git.mjs";
-import { readRecord } from "./store.mjs";
-
-// 提交记录的类别名与键规则在这里写死，不从 delivery/submit.mjs 导入：那边经 obligation.mjs 反向依赖本文件，会成环。
-const SUBMIT_KIND = "submit";
+import { hasReadySubmit } from "../delivery/record.mjs";
 
 /**
  * 任务分支顶端 tip 是否已经落进 ref。
@@ -14,13 +11,8 @@ const SUBMIT_KIND = "submit";
  */
 export function landedIn(root, tip, ref) {
   if (isAncestor(root, tip, ref)) return true;
-  if (!submittedAt(root, tip)) return false;
+  if (!hasReadySubmit(root, tip)) return false;
   return mergeIsNoop(root, tip, ref);
-}
-
-function submittedAt(root, tip) {
-  const found = readRecord(root, SUBMIT_KIND, tip);
-  return found.ok && found.record.stage === "ready" && found.record.head === tip;
 }
 
 function mergeIsNoop(root, tip, ref) {

@@ -207,7 +207,7 @@ export async function syncTask({ cwd, remote: requestedRemote = null, log = cons
       log,
       label: "sync",
     });
-    await autoCleanSynced({ cwd: mainRoot, mainRef, log });
+    await autoCleanSynced({ cwd: mainRoot, mainRef, remote, log });
 
     return {
       upToDate: false,

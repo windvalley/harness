@@ -102,11 +102,13 @@
 `bad_branch_name` 先修正分支名称并核对验收清单路径，再查看 `status` 判断已有验证与评审是否仍有效，不因只改分支名而重复执行内容检查。
 修复只能改实现、测试或提交本身：任务分支放宽不了门禁，删测试、弱化断言、跳过检查同样不允许。
 平台返回 `platform_failed` 时按实际原因继续。
-提交分支已推送、创建或更新 PR/MR 发生明确的临时故障时，`submit` 回读平台请求、远端基线和任务提交，至多补做一次缺失的请求操作。
-若仍失败，查看 `status` 的下一步，平台恢复后接续提交。
+Git 推送报错时，`submit` 回读远端引用确认是否收到任务提交。
+明确是临时故障且远端任务分支和主分支都未变化时，至多自动补推一次。
+创建或更新 PR/MR 发生明确的临时故障时，`submit` 回读平台请求和远端引用，至多补做一次缺失的请求操作。
+若仍失败，查看 `status` 的下一步，故障恢复后接续提交。
 原因无法判定时先清楚地核对返回和远端状态，同一故障不盲目重试。
 
-需要本人操作时说明对象和做法，常见情况包括 `gate_change_unconfirmed`、`risk_unconfirmed`、`plan_unapproved`、`platform_missing`、平台确实缺少登录或权限、`version_missing`、`push_rejected`、`request_changed`、`not_fast_forward`。
+需要本人操作时说明对象和做法，常见情况包括 `gate_change_unconfirmed`、`risk_unconfirmed`、`plan_unapproved`、`platform_missing`、Git 或平台确实缺少登录或权限、`version_missing`、`push_rejected`、`request_changed`、`not_fast_forward`。
 本地交付已经合并、普通推送报 `push_failed` 或 `push_skipped` 时，按命令结果核对远端并交给人处理，避免重复合并。
 按 `core.md` 判断哪些部分依赖人的决定，继续其余已授权的工作。
 
@@ -168,7 +170,8 @@ harness 保证它提交的 PR/MR 通过了本机门禁；平台上最终合入�
 1. 第 1 到第 3 步与本地交付相同：在任务分支实现、提交、`harness verify`、`harness review`。
 2. `harness submit --branch <任务分支>`：核对与 `merge` 相同的条件，把核对过的那个提交普通推送到远程同名分支，并创建或更新指向主分支的 PR/MR。
    描述里 harness 只维护 `<!-- harness:submit:start -->` 与 `<!-- harness:submit:end -->` 之间的区块，团队写在区块外的说明不会被覆盖。
-   提交记录区分推送前失败、已推送与 PR/MR 已就绪。
+   提交记录区分尚未确认推送、已推送与 PR/MR 已就绪。
+   平台回读的实际源提交和托管区块都符合当前门禁结果，且远端任务分支和目标主分支引用一致时，才记录就绪。
    重跑未完成的提交时，`submit` 先核对目标仓库、远端分支及已有请求，远端仍指向已核对提交时从请求步骤续跑。
    远端任务分支变化或已知请求消失时，交给人核对。
 3. 之后由人在平台上合并。harness 不在平台上合并，也不强推；远程同名分支已分叉时以 `push_rejected` 拒绝。

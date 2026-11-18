@@ -1,6 +1,23 @@
 import { showBlob } from "../lib/git.mjs";
 import { tail } from "../lib/redact.mjs";
 
+/** 只对有明确诊断的远端失败分类。 */
+export function remoteFailureReason(result) {
+  const message = `${result.stderr ?? ""}\n${result.stdout ?? ""}`;
+  const status = message.match(/\b(?:HTTP(?:\/[\d.]+)?|status(?: code)?)[:=\s]+(\d{3})\b/i)?.[1] ??
+    message.match(/\b(?:GET|HEAD|POST|PUT|PATCH|DELETE) https?:\/\/\S+: (\d{3})\b/)?.[1] ??
+    message.match(/requested URL returned error: (\d{3})\b/i)?.[1];
+  if (status === "429" || /rate limit|too many requests/i.test(message)) return "rate_limit";
+  if (status === "401" || /bad credentials|authentication failed|could not read Username|not (?:logged in|authenticated)|(?:gh|glab) auth login/i.test(message)) return "login";
+  if (status === "403" || /permission denied|access denied|insufficient permissions?|protected branch/i.test(message)) return "permission";
+  if (["500", "502", "503", "504"].includes(status) ||
+      result.error?.code === "ETIMEDOUT" ||
+      /connection (?:reset|refused|timed out)|network is unreachable|i\/o timeout|TLS handshake timeout|context deadline exceeded|remote end hung up unexpectedly/i.test(message)) {
+    return "temporary";
+  }
+  return "unknown";
+}
+
 /**
  * 远程操作只在这里发生，命令与参数集中一处，便于核对 harness 到底能对远程做哪些事。
  * 全部是普通推送与普通读取：不强推，不在平台上合并。
@@ -34,6 +51,7 @@ export function fetchRemoteMain({ root, remote, mainRef, run }) {
       ].join("\n"),
     );
     error.code = "fetch_failed";
+    error.gitReason = remoteFailureReason(result);
     throw error;
   }
   return `refs/remotes/${remote}/${mainRef}`;
@@ -45,7 +63,7 @@ export function fetchRemoteMain({ root, remote, mainRef, run }) {
  * 远程分支已存在且不是这个提交的祖先时，git 自己会以 non-fast-forward 拒绝，这里不加强制推送。
  */
 export function pushCommit({ root, remote, branch, commit, run }) {
-  const result = run("git", ["push", "--porcelain", remote, `${commit}:refs/heads/${branch}`], { cwd: root });
+  const result = run("git", ["push", "--porcelain", "--no-follow-tags", remote, `${commit}:refs/heads/${branch}`], { cwd: root });
   if (result.status === 0) return { pushed: true };
   const combined = tail(`${result.stdout}\n${result.stderr}`, 8);
   const diverged = /non-fast-forward|\[rejected\]|fetch first|remote contains work/i.test(combined);
@@ -61,6 +79,7 @@ export function pushCommit({ root, remote, branch, commit, run }) {
     ].join("\n"),
   );
   error.code = diverged ? "push_rejected" : "push_failed";
+  error.gitReason = remoteFailureReason(result);
   throw error;
 }
 
@@ -106,15 +125,32 @@ export function pushMain({ root, remote, mainRef, commit, previous, run }) {
  * 不用本地 refs/remotes/<remote>/<branch>：submit 只 fetch 主分支，那里的引用可能是旧的，
  * 据此跳过推送会在远程分支已被改写或删除时把没推上去的提交当成已推送。
  */
-export function remoteBranchTip({ root, remote, branch, run }) {
-  const result = run("git", ["ls-remote", "--heads", remote, `refs/heads/${branch}`], { cwd: root });
+export function remoteBranchTips({ root, remote, branches, run }) {
+  const refs = new Map(branches.map((branch) => [`refs/heads/${branch}`, branch]));
+  const result = run("git", ["ls-remote", "--heads", remote, ...refs.keys()], { cwd: root });
   if (result.status !== 0) {
-    const error = new Error(`查询 ${remote} 的 ${branch} 失败: ${tail(result.stderr || result.stdout, 4)}`);
+    const error = new Error(`查询 ${remote} 的 ${branches.join("、")} 失败: ${tail(result.stderr || result.stdout, 4)}`);
     error.code = "fetch_failed";
+    error.gitReason = remoteFailureReason(result);
     throw error;
   }
-  const line = result.stdout.trim().split("\n").find(Boolean);
-  return line ? line.split("\t")[0] : null;
+  const tips = new Map();
+  for (const line of result.stdout.trim().split("\n").filter(Boolean)) {
+    const [head, ref, ...extra] = line.split("\t");
+    const branch = refs.get(ref);
+    if (!ref?.startsWith("refs/heads/") || extra.length > 0 || tips.has(branch) || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(head)) {
+      const error = new Error(`查询 ${remote} 的 ${branches.join("、")} 时，Git 未返回有效的分支引用。`);
+      error.code = "fetch_failed";
+      throw error;
+    }
+    // ls-remote 模式会匹配尾部的路径分段，只收录名称完全相同的引用。
+    if (branch) tips.set(branch, head);
+  }
+  return tips;
+}
+
+export function remoteBranchTip({ root, remote, branch, run }) {
+  return remoteBranchTips({ root, remote, branches: [branch], run }).get(branch) ?? null;
 }
 
 /**

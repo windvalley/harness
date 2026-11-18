@@ -4,12 +4,14 @@ import { resolve, sep } from "node:path";
 import { harnessOnMain, loadTrustedProject, mainBranch, trustedMainRef } from "../lib/config.mjs";
 import { matchAny } from "../lib/glob.mjs";
 import { git, repoRoot, resolveCommit, run, samePath, worktreeEntries } from "../lib/git.mjs";
-import { appendLedger, readRecord } from "../lib/store.mjs";
+import { appendLedger } from "../lib/store.mjs";
 import { landedIn } from "../lib/landed.mjs";
 import { resolvePolicy } from "../policy/resolve.mjs";
 import { readAttestation } from "../verify/attestation.mjs";
 import { collectObligations } from "../verify/obligation.mjs";
 import { checkoutsDir } from "../verify/verify.mjs";
+import { platformRepo } from "../delivery/platform.mjs";
+import { hasReadySubmit } from "../delivery/record.mjs";
 
 const CLEANUP_TIMEOUT_MS = 10 * 60 * 1000;
 // 建好后一直没有新提交的 Worktree，这段时间内当作刚开始的任务保留，过了就没有独有的内容，可以清理。
@@ -347,14 +349,18 @@ export async function autoCleanDelivered({ cwd, branch, mainRef, allowFresh = fa
 }
 
 /** 远程同步只处理有匹配 submit ready 记录且已合入的分支，不扩大成全仓清扫。 */
-export async function autoCleanSynced({ cwd, mainRef, log = () => {} }) {
+export async function autoCleanSynced({ cwd, mainRef, remote, log = () => {} }) {
   const root = repoRoot(cwd);
+  const repo = platformRepo({ root, remote });
+  if (!repo) return [];
+  const baseRef = `${remote}/${mainRef}`;
   const outcomes = [];
   for (const entry of worktreeEntries(root).slice(1)) {
     if (!entry.branch) continue;
     const tip = resolveCommit(root, entry.branch);
-    const submitted = readRecord(root, "submit", tip);
-    if (!submitted.ok || submitted.record.stage !== "ready" || submitted.record.head !== tip) continue;
+    const submitted = hasReadySubmit(root, tip, (record) =>
+      record.branch === entry.branch && record.remote === remote && record.repo === repo && record.baseRef === baseRef);
+    if (!submitted) continue;
     if (!landedIn(root, tip, mainRef)) continue;
     outcomes.push(await autoCleanDelivered({ cwd: root, branch: entry.branch, mainRef, allowFresh: true, log }));
   }
