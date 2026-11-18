@@ -20,7 +20,7 @@
 
 <script src="assets/docs.js?v=acdbbf2b96" defer></script>
 </head>
-<body data-page="team" data-index="f19dde8f7f">
+<body data-page="team" data-index="6dca37b0de">
 <a class="skip-link" href="#main-content">跳到主要内容</a>
 <header class="topbar">
   <div class="topbar-inner">
@@ -74,7 +74,7 @@ HARNESS_MAIN_BYPASS=1 git merge --ff-only origin/main</code></pre></div>
     <p><code>HARNESS_MAIN_BYPASS</code> 是绕过开关，只能由人在自己的终端使用，Agent 设置它会被拦截。</p>
 
     <h2 tabindex="-1" id="parallel">多个会话并行</h2>
-    <p>只要有一个 Agent 在主 Worktree 里切走分支或留下改动，所有任务的合并都会被挡住。并行的项目建议在 <code>policy.json</code> 的 <code>presets</code> 里加上 <code>main-worktree</code>：Agent 不能改主 Worktree 里的文件、不能把它切离主分支，<code>pre-commit</code> 也拒绝主 Worktree 里的提交。</p><nav class="pagination" aria-label="文档分页"><a class="previous" href="customize.html"><span>上一篇</span><strong>按项目定制</strong></a><a class="next" href="cheatsheet.html"><span>下一篇</span><strong>命令速查</strong></a></nav></main>
+    <p>只要有一个 Agent 在主 Worktree 里切走分支或留下改动，所有任务的合并都会被挡住。新项目的 <code>init</code> 默认启用 <code>main-worktree</code>：Agent 不能改主 Worktree 里的文件、不能把它切离主分支，<code>pre-commit</code> 也拒绝主 Worktree 里的提交。已有项目升级时不自动开启；可从 <code>presets</code> 删除它来关闭，只需人工在主 Worktree 提交时也可只关闭 <code>main-worktree-commit</code>。</p><nav class="pagination" aria-label="文档分页"><a class="previous" href="customize.html"><span>上一篇</span><strong>按项目定制</strong></a><a class="next" href="cheatsheet.html"><span>下一篇</span><strong>命令速查</strong></a></nav></main>
   <aside class="page-toc"><nav aria-label="本页内容"><div class="page-toc-title">本页内容</div><ol><li class="toc-level-2"><a href="#new-machine">新成员或新机器</a></li><li class="toc-level-2"><a href="#upgrade">升级</a></li><li class="toc-level-2"><a href="#sync">与远程同步</a></li><li class="toc-level-2"><a href="#parallel">多个会话并行</a></li></ol></nav><div class="related-links"><h2>相关链接</h2><a href="https://github.com/windvalley/harness/blob/main/docs/reference.md">参考手册</a><a href="https://github.com/windvalley/harness">GitHub 仓库</a></div></aside>
 </div>
 <footer>harness · MIT 许可 · <a href="https://github.com/windvalley/harness">GitHub</a> · <a href="https://github.com/windvalley/harness/blob/main/docs/reference.md">参考手册</a></footer>

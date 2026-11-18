@@ -4,8 +4,11 @@ import { resolve, sep } from "node:path";
 import { harnessOnMain, loadTrustedProject, mainBranch, trustedMainRef } from "../lib/config.mjs";
 import { matchAny } from "../lib/glob.mjs";
 import { git, repoRoot, resolveCommit, run, samePath, worktreeEntries } from "../lib/git.mjs";
-import { appendLedger } from "../lib/store.mjs";
+import { appendLedger, readRecord } from "../lib/store.mjs";
+import { landedIn } from "../lib/landed.mjs";
 import { resolvePolicy } from "../policy/resolve.mjs";
+import { readAttestation } from "../verify/attestation.mjs";
+import { collectObligations } from "../verify/obligation.mjs";
 import { checkoutsDir } from "../verify/verify.mjs";
 
 const CLEANUP_TIMEOUT_MS = 10 * 60 * 1000;
@@ -146,7 +149,7 @@ function inspect(entry, ctx) {
   const ahead = aheadCount(ctx.root, ctx.mainCommit, entry);
   if (ahead === null) return skip(entry.branch ? `找不到分支 ${entry.branch}` : "读不到 HEAD 指向的提交");
   if (ahead > 0) return skip(`${ahead} 个提交没有合入 ${ctx.mainRef}`);
-  if (justCreated(entry)) return skip("建好不到 24 小时，还没有新的提交，可能是刚开始的任务");
+  if (!ctx.allowFresh && justCreated(entry)) return skip("建好不到 24 小时，还没有新的提交，可能是刚开始的任务");
   if (!existsSync(entry.path)) return { missing: true };
 
   const status = git(entry.path, ["status", "--porcelain", "--untracked-files=normal"]);
@@ -155,7 +158,8 @@ function inspect(entry, ctx) {
   if (changed > 0) return skip(`${changed} 个未提交或未跟踪的文件`);
 
   const busy = ctx.holders(entry.path);
-  if (busy.length > 0) return skip(`有进程停在里面（${listSome(busy.map(describeProcess))}）`);
+  if (ctx.requireProcessCheck && busy === null) return skip("自动清理无法确认有没有进程停在里面");
+  if (busy?.length > 0) return skip(`有进程停在里面（${listSome(busy.map(describeProcess))}）`);
 
   // 不加 --force 的 git worktree remove 照样会删掉被忽略的文件，删之前列出来；整个目录被忽略时不再往里找。
   const ignored = git(entry.path, ["ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z"])
@@ -195,8 +199,8 @@ function execute(cmd, args, { cwd, env = process.env, timeout = CLEANUP_TIMEOUT_
   });
 }
 
-/** 只读：列出哪些 Linked Worktree 可以清理、哪些跳过以及原因。 */
-export function planCleanup({ cwd, withLocalFiles = false, log = () => {} }) {
+/** 只读：列出哪些 Linked Worktree 可以清理、哪些跳过以及原因。自动模式可按 branch 限定并强制进程检查。 */
+export function planCleanup({ cwd, withLocalFiles = false, branch = null, requireProcessCheck = false, allowFresh = false, log = () => {} }) {
   const root = repoRoot(cwd);
   // 主分支已接入时配置必须读得出来：读不出来就静默跳过清理命令，会删掉 Worktree 却留下它的服务与数据库。
   const project = harnessOnMain(root) ? loadTrustedProject(root) : null;
@@ -204,18 +208,19 @@ export function planCleanup({ cwd, withLocalFiles = false, log = () => {} }) {
   const mainCommit = resolveCommit(root, mainRef);
   const cleanup = cleanupCommands(project);
   const entries = worktreeEntries(root);
-  log(`[worktree] 正在检查 ${entries.length - 1} 个 Linked Worktree，数量多时需要几十秒`);
+  const linked = entries.slice(1).filter((entry) => !branch || entry.branch === branch);
+  log(`[worktree] 正在检查 ${linked.length} 个 Linked Worktree，数量多时需要几十秒`);
   let processes;
   const holders = (path) => {
     if (processes === undefined) processes = processCwds();
-    if (processes === null) return [];
+    if (processes === null) return null;
     const real = realOrResolved(path);
     return processes.filter((item) => item.pid !== process.pid && (item.cwd === real || item.cwd.startsWith(`${real}${sep}`)));
   };
-  const ctx = { root, mainRef, mainCommit, cache: checkoutsDir(), current: root, patterns: localFilePatterns(project), withLocalFiles, holders };
+  const ctx = { root, mainRef, mainCommit, cache: checkoutsDir(), current: root, patterns: localFilePatterns(project), withLocalFiles, holders, requireProcessCheck, allowFresh };
   const removable = [];
   const skipped = [];
-  for (const entry of entries.slice(1)) {
+  for (const entry of linked) {
     const verdict = inspect(entry, ctx);
     (verdict.reason ? skipped : removable).push({ path: entry.path, branch: entry.branch, head: entry.head, ...verdict });
   }
@@ -272,8 +277,8 @@ function branchNote(item) {
  * 删除可清理的 Worktree 与分支。分支用 git branch -d，没有完全合并时 git 会拒绝，分支保留。
  * 每处理一个输出一行进度；收到第一次 Ctrl-C 时处理完当前这个再停，第二次立即退出。
  */
-export async function cleanWorktrees({ cwd, withLocalFiles = false, log = () => {} }) {
-  const plan = planCleanup({ cwd, withLocalFiles, log });
+export async function cleanWorktrees({ cwd, withLocalFiles = false, branch = null, requireProcessCheck = false, allowFresh = false, log = () => {} }) {
+  const plan = planCleanup({ cwd, withLocalFiles, branch, requireProcessCheck, allowFresh, log });
   const removed = [];
   const failed = [];
   let interrupted = false;
@@ -304,6 +309,56 @@ export async function cleanWorktrees({ cwd, withLocalFiles = false, log = () => 
   const pending = plan.removable.length - removed.length - failed.length;
   appendLedger(plan.root, { event: "worktree.clean", removed: removed.length, skipped: plan.skipped.length + failed.length, pending });
   return { ...plan, removed, failed, interrupted, pending };
+}
+
+function legacyClosedBy(project, root) {
+  return ({ item, branch, tip }) => {
+    const check = item.check ?? project.verify.checks.find((candidate) => candidate.id === item.id) ?? item;
+    return readAttestation({ root, branch, check, head: tip }).ok;
+  };
+}
+
+/** 交付后的自动清理只处理指定分支；任何判断失败都保留目录，不改变已经完成的交付。 */
+export async function autoCleanDelivered({ cwd, branch, mainRef, allowFresh = false, log = () => {} }) {
+  const root = repoRoot(cwd);
+  try {
+    const project = loadTrustedProject(root);
+    const enabled = project.config.worktree?.autoClean ?? false;
+    if (typeof enabled !== "boolean") throw new Error("worktree.autoClean 必须是布尔值");
+    if (!enabled) return { status: "disabled" };
+    const mainCommit = resolveCommit(root, mainRef);
+    const open = collectObligations({ root, mainCommit, branch, legacyClosed: legacyClosedBy(project, root) }).filter((item) => item.due && !item.closed);
+    if (open.length > 0) {
+      log(`[worktree] 自动清理保留 ${branch}: 合并后验收待完成（${[...new Set(open.map((item) => item.checkId))].join("、")}）`);
+      return { status: "skipped", branch, reason: "post-merge" };
+    }
+    const plan = planCleanup({ cwd: root, branch, requireProcessCheck: true, allowFresh, log });
+    if (plan.removable.length === 0) {
+      for (const item of plan.skipped) log(`[worktree] 自动清理保留 ${branch}: ${item.reason}`);
+      return { status: "skipped", branch, skipped: plan.skipped };
+    }
+    const outcome = await cleanWorktrees({ cwd: root, branch, requireProcessCheck: true, allowFresh, log });
+    if (outcome.removed.length > 0) log(`[worktree] 已自动清理本次任务 ${branch}`);
+    return { status: outcome.removed.length > 0 ? "cleaned" : "skipped", branch, outcome };
+  } catch (error) {
+    log(`[worktree] 自动清理未完成，保留 ${branch}: ${error.message}`);
+    return { status: "failed", branch, reason: error.message };
+  }
+}
+
+/** 远程同步只处理有匹配 submit ready 记录且已合入的分支，不扩大成全仓清扫。 */
+export async function autoCleanSynced({ cwd, mainRef, log = () => {} }) {
+  const root = repoRoot(cwd);
+  const outcomes = [];
+  for (const entry of worktreeEntries(root).slice(1)) {
+    if (!entry.branch) continue;
+    const tip = resolveCommit(root, entry.branch);
+    const submitted = readRecord(root, "submit", tip);
+    if (!submitted.ok || submitted.record.stage !== "ready" || submitted.record.head !== tip) continue;
+    if (!landedIn(root, tip, mainRef)) continue;
+    outcomes.push(await autoCleanDelivered({ cwd: root, branch: entry.branch, mainRef, allowFresh: true, log }));
+  }
+  return outcomes;
 }
 
 /** 检出的提交已在主分支上、还没清理的 Linked Worktree，供合并输出与 doctor 提示，只读且不查进程与本机文件。 */

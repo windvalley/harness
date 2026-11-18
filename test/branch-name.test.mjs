@@ -93,6 +93,7 @@ describe("分支命名 policy 的真实入口", () => {
     assert.ok(branchRule);
     assert.ok(existingRules.some((rule) => rule.kind === "commit-message"), "保留生成的提交规范");
     const presets = [...policy.presets];
+    policy.disabled = ["main-worktree-commit"];
     branchRule.pattern = "^team/ABC-[0-9]+$";
     branchRule.example = "team/ABC-123";
     branchRule.fix = "使用 team/ABC-<工单号> 格式，例如 team/ABC-123";

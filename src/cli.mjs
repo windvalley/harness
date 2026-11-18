@@ -451,10 +451,10 @@ async function cmdSubmit(argv) {
   }
 }
 
-function cmdSync(argv) {
+async function cmdSync(argv) {
   const { values } = parseArgs({ args: argv, options: { remote: { type: "string" } } });
   try {
-    const result = syncTask({ cwd: process.cwd(), remote: values.remote ?? null, log: (line) => process.stderr.write(`${line}\n`) });
+    const result = await syncTask({ cwd: process.cwd(), remote: values.remote ?? null, log: (line) => process.stderr.write(`${line}\n`) });
     print(JSON.stringify(result, null, 2));
     if (result.followUps?.length > 0) {
       process.stderr.write(`\n同步完成，还需要在客户端做:\n${result.followUps.map((note) => `  - ${note}`).join("\n")}\n`);

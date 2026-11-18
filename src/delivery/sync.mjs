@@ -8,6 +8,7 @@ import { CONFIRM_KIND } from "../confirm/confirm.mjs";
 import { divergedGuidance, fetchRemoteMain, pinnedVersionAt } from "./remote.mjs";
 import { packageVersion } from "../install/managed.mjs";
 import { listVersions, verifyVersion } from "../install/install.mjs";
+import { autoCleanSynced } from "../worktree/clean.mjs";
 
 /**
  * 确定同步目标：远程跟踪引用必须真实存在，且本地主分支是它的祖先。
@@ -72,7 +73,7 @@ function readConfirm({ root, tree }) {
  * 远程带来的普通代码改动按“信任平台主分支”导入，本机不再重复验证和评审；
  * 门禁改动、交付设置变化与首次接入仍然要人确认，因为它们改变的是门禁本身。
  */
-export function syncTask({ cwd, remote: requestedRemote = null, log = console.error }) {
+export async function syncTask({ cwd, remote: requestedRemote = null, log = console.error }) {
   const bootstrap = !harnessConfigOnMain(cwd);
   const root = repoRootOf(cwd);
   // 首次接入时本地主分支还没有配置，按仓库里真实存在的分支名处理；其余判定等取到目标提交再按它的配置做。
@@ -206,6 +207,7 @@ export function syncTask({ cwd, remote: requestedRemote = null, log = console.er
       log,
       label: "sync",
     });
+    await autoCleanSynced({ cwd: mainRoot, mainRef, log });
 
     return {
       upToDate: false,

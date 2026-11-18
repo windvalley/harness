@@ -207,7 +207,7 @@ describe("安装与自检", () => {
       assert.match(block, pattern, `托管块应保留: ${pattern}`);
     }
     const rules = readFileSync(join(repo.root, ".harness/rules/harness.md"), "utf8");
-    assert.match(rules, /## 收尾：任务 Worktree 由用户发起清理/);
+    assert.match(rules, /## 收尾：清理任务 Worktree/);
     assert.match(rules, /harness worktree clean/);
     assert.match(rules, /汇报里写一行代码评审的评审者，照抄 `harness status`/, "交付汇报要求写评审者摘要");
     assert.match(rules, /摘要里的端点域名只写在对用户的汇报里/, "端点域名不进外发内容");
@@ -265,6 +265,23 @@ describe("安装与自检", () => {
     const upgraded = repo.rawCli("upgrade");
     assert.equal(upgraded.status, 0, upgraded.stderr);
     for (const rel of files) assert.ok(existsSync(join(repo.root, rel)), `升级恢复 ${rel}`);
+  });
+
+  test("init 默认启用主 Worktree 隔离且关闭自动清理，升级不替旧项目开启隔离", () => {
+    const repo = setup({ install: false, project: { ".harness/config.json": null, ".harness/policy.json": null, ".harness/verify.json": null } });
+    const result = repo.rawCli("init");
+    assert.equal(result.status, 0, result.stderr);
+    const policyFile = join(repo.root, ".harness/policy.json");
+    const config = JSON.parse(readFileSync(join(repo.root, ".harness/config.json"), "utf8"));
+    assert.equal(config.worktree.autoClean, false);
+    assert.ok(JSON.parse(readFileSync(policyFile, "utf8")).presets.includes("main-worktree"));
+
+    const existing = JSON.parse(readFileSync(policyFile, "utf8"));
+    existing.presets = existing.presets.filter((name) => name !== "main-worktree");
+    write(repo.root, ".harness/policy.json", `${JSON.stringify(existing, null, 2)}\n`);
+    const upgraded = repo.rawCli("upgrade");
+    assert.equal(upgraded.status, 0, upgraded.stderr);
+    assert.ok(!JSON.parse(readFileSync(policyFile, "utf8")).presets.includes("main-worktree"));
   });
 
   test("init 生成默认分支命名 policy 并分发统一指引", () => {
@@ -473,7 +490,7 @@ describe("安装与自检", () => {
     assert.equal(golden.status, 0, golden.stdout + golden.stderr);
     assert.match(golden.stdout, /PASS g04-recursive-delete/);
     assert.match(golden.stdout, /PASS g17-plan-first/);
-    assert.match(golden.stdout, /SKIP g16-main-worktree-merge-only/, "针对可选预设的用例在预设未启用时跳过");
+    assert.match(golden.stdout, /PASS g16-main-worktree-merge-only/, "新项目默认启用主 Worktree 隔离并重放对应用例");
   });
 
   test("项目自己的黄金任务与内置用例一起重放", () => {
@@ -1107,6 +1124,7 @@ describe("升级时列出尚未配置的可选项", () => {
     assert.match(result.stdout, /coverage.*observe/s);
     assert.match(result.stdout, /requiredPaths.*直接拦截/s);
     assert.match(result.stdout, /delivery\.push.*仅本地交付.*推送权限/s);
+    assert.match(result.stdout, /worktree\.autoClean.*默认 false.*合并后义务完成/s);
     const after = ["config.json", "verify.json"].map((name) => readFileSync(join(repo.root, ".harness", name), "utf8"));
     assert.deepEqual(after, before);
   });
@@ -1121,6 +1139,7 @@ describe("升级时列出尚未配置的可选项", () => {
     assert.equal(partial.status, 0, partial.stderr);
     assert.match(partial.stdout, /requiredPaths/);
     assert.match(partial.stdout, /delivery\.push/);
+    assert.match(partial.stdout, /worktree\.autoClean/);
     assert.doesNotMatch(partial.stdout, /risk[^\n]*observe/);
     assert.doesNotMatch(partial.stdout, /testFirst/);
     assert.doesNotMatch(partial.stdout, /coverage/);
@@ -1131,7 +1150,7 @@ describe("升级时列出尚未配置的可选项", () => {
     assert.doesNotMatch(nearly.stdout, /requiredPaths/);
     assert.match(nearly.stdout, /delivery\.push/);
 
-    write(repo.root, ".harness/config.json", `${JSON.stringify({ ...config, risk: { mode: "observe", paths: [], deps: [] }, delivery: { ...config.delivery, push: false } })}\n`);
+    write(repo.root, ".harness/config.json", `${JSON.stringify({ ...config, risk: { mode: "observe", paths: [], deps: [] }, delivery: { ...config.delivery, push: false }, worktree: { ...config.worktree, autoClean: false } })}\n`);
     const full = repo.cli("upgrade");
     assert.equal(full.status, 0, full.stderr);
     assert.doesNotMatch(full.stdout, /尚未配置的可选项/);

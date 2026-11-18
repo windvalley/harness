@@ -654,6 +654,24 @@ describe("harness sync", () => {
     assert.equal(git(repo.root, "rev-parse", "main"), target);
   });
 
+  test("autoClean 在远程平台合入并 sync 后清理匹配任务，submit 时不清理", () => {
+    const repo = setup({ delivery: GITHUB, config: { worktree: { cleanup: [], autoClean: true } } });
+    const remote = withRemote(repo);
+    fakePlatform(repo);
+    const head = task(repo, "task/auto-clean");
+    assert.equal(repo.cli("verify", "--branch", "task/auto-clean").status, 0);
+    writeReview(repo, head, "approve");
+    const submitted = repo.cli("submit", "--branch", "task/auto-clean");
+    assert.equal(submitted.status, 0, output(submitted));
+    const path = join(repo.root, "..", "auto-clean-task");
+    git(repo.root, "worktree", "add", "-q", path, "task/auto-clean");
+    assert.ok(existsSync(path), "submit 后不自动清理");
+    platformFastForward(remote, head);
+    const synced = repo.cli("sync");
+    assert.equal(synced.status, 0, output(synced));
+    assert.equal(existsSync(path), false, `平台合入并 sync 后才自动清理\n${output(synced)}`);
+  });
+
   test("远程交付在平台合入并 sync 后跟踪合并后证据", () => {
     const verify = {
       version: 1,

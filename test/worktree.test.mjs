@@ -4,6 +4,8 @@ import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
 import { APPROVE, CONFIG, commit, fakeReviewer, git, makeRepo, sh, write } from "./helpers.mjs";
+import { writeObligations } from "../src/verify/obligation.mjs";
+import { autoCleanDelivered } from "../src/worktree/clean.mjs";
 
 let repos = [];
 let children = [];
@@ -228,6 +230,33 @@ describe("harness worktree clean", () => {
     assert.ok(existsSync(paths[1]) && existsSync(paths[2]), "后面的不再处理");
     assert.match(stdout, /已删除 1 个/);
     assert.match(stdout, /已中断，还有 2 个没有处理/);
+  });
+
+  test("autoClean 开启时合并只自动清理本次任务，其他 Worktree 保留", () => {
+    const config = { ...CONFIG, worktree: { cleanup: [], autoClean: true } };
+    const { repo, root } = setup(config);
+    const target = task(repo, root, "target", { merged: false });
+    const other = task(repo, root, "other");
+    fakeReviewer(repo, APPROVE);
+    for (const step of ["verify", "review"]) assert.equal(repo.cli(step, "--branch", "task/target").status, 0);
+    const merged = repo.cli("merge", "--branch", "task/target");
+    assert.equal(merged.status, 0, merged.stderr);
+    assert.equal(existsSync(target), false, "本次任务自动清理");
+    assert.ok(existsSync(other), "其他任务不在本次自动清理范围内");
+    assert.ok(branchExists(repo, "task/other"));
+    assert.match(merged.stderr, /自动清理/);
+  });
+
+  test("autoClean 遇到未到期的清理条件或合并后义务时保留", async () => {
+    const config = { ...CONFIG, worktree: { cleanup: [], autoClean: true } };
+    const { repo, root } = setup(config);
+    const path = task(repo, root, "pending");
+    const tip = git(repo.root, "rev-parse", "task/pending");
+    writeObligations({ root, branch: "task/pending", tip, items: [{ id: "smoke", howToVerify: "合并后冒烟", when: ["src/**"] }] });
+    const outcome = await autoCleanDelivered({ cwd: root, branch: "task/pending", mainRef: "main", log: () => {} });
+    assert.equal(outcome.status, "skipped");
+    assert.ok(existsSync(path));
+    assert.ok(branchExists(repo, "task/pending"));
   });
 
   test("合并后保留任务 Worktree，并提示可以清理；doctor 报告已合并未清理的数量", () => {

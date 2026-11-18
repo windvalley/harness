@@ -185,7 +185,7 @@ git commit -m "chore(harness): 接入门禁" -m "- 写入门禁配置、规则�
 .harness/bin/harness merge --branch chore/harness-onboard
 ```
 
-合并后保留接入分支与任务 Worktree，清理由用户另行发起，见[清理任务 Worktree](#清理任务-worktree)。
+合并后默认保留接入分支与任务 Worktree；开启 `worktree.autoClean` 或用户另行发起时才清理，见[清理任务 Worktree](#清理任务-worktree)。
 
 #### 接入时就用 PR/MR
 
@@ -769,9 +769,9 @@ Agent 先做最小诊断：
 
 ### 清理任务 Worktree
 
-合并后 harness 不删除任务 Worktree：会话常常还停在里面，也可能要回来补改。
+默认情况下合并后 harness 不删除任务 Worktree：会话常常还停在里面，也可能要回来补改。
 合并输出和 `harness doctor` 会报告已合并但还没清理的 Worktree 有几个。
-需要清理时对 Agent 说：
+需要手工清理时对 Agent 说：
 
 ```text
 我想清理已经完成的任务工作区。
@@ -835,6 +835,15 @@ git -C <主 Worktree> worktree unlock <Worktree 路径>
 
 这份配置从主分支读取，改动属于门禁改动，合并前由人确认。
 有进程停在里面的 Worktree 在运行清理命令之前就被跳过，还开着服务的先在那个 Worktree 里停掉。
+
+需要交付后自动清理时，在主分支配置 `"worktree": { "autoClean": true, "cleanup": [] }`。
+默认 `false`；开启相当于持续授权删除符合以下严格条件的本次任务 Worktree，而不是每次交付后再确认一次。
+本地交付在 `merge` 成功后执行；远程交付在 `submit` 后不清，必须等平台合入并 `sync`。
+每次只处理本次交付分支，远程同步只处理有匹配且验签通过的 `submit ready` 记录、记录提交等于分支顶端并已合入的分支。
+
+自动模式除沿用上述条件外，还要求合并后验收义务已经全部关闭；无法检查进程时直接保留，不只给警告。
+本机文件始终导致保留，不存在自动等价于 `--with-local-files` 的入口。
+清理命令失败、读取状态失败或其他判断失败都保留并报告，不改变已经完成的合并或同步结果。
 
 合并输出和 `harness doctor` 报告的“已合并但还没清理”的数量只看提交是否已在主分支上、是否锁定，不检查未提交文件、本机文件和进程，所以通常比预览里可清理的多。
 `harness worktree clean` 只处理还有 Worktree 的分支；Worktree 早已删掉、只剩本地分支的，不在它的处理范围内。
@@ -1464,9 +1473,9 @@ git commit -m "chore(harness): 升级到 <版本>" -m "- 更新入口锁定的�
 预览有冲突时退出码为 1；`upgrade` 只接受 `--dry-run` 与 `--force`，其他参数一律报错，不会被忽略。
 `AGENTS.md` 里的托管块也会刷新，块外的内容保持不动。
 `config.json`、`policy.json`、`verify.json` 保持不动，新版本带来的可选预设与配置要自己加，见 `CHANGELOG.md` 的升级说明。
-`upgrade` 结束时列出这个项目还没配置的 `risk`、`testFirst`、`coverage`、`requiredPaths`，以及本地交付下的 `delivery.push`，并标明前三项有 `observe` 模式、只记录不拦截，`requiredPaths` 配置后会直接拦截，`delivery.push` 授予推送主分支的权限；它只提示，不写这些文件。
+`upgrade` 结束时列出这个项目还没配置的 `risk`、`testFirst`、`coverage`、`requiredPaths`、`worktree.autoClean`，以及本地交付下的 `delivery.push`，并标明前三项有 `observe` 模式、只记录不拦截，`requiredPaths` 配置后会直接拦截，`delivery.push` 授予推送主分支的权限；`worktree.autoClean` 授予交付后自动清理权限，默认 `false`。它只提示，不写这些文件。
 远程交付的项目不列 `delivery.push`，它在那里是配置错误。
-Agent 按升级规则把这段转述给你，并建议在升级任务里加上三项 `observe` 配置，`requiredPaths` 与 `delivery.push` 由你决定。
+Agent 按升级规则把这段转述给你，并建议在升级任务里加上三项 `observe` 配置，`requiredPaths`、`delivery.push` 与 `worktree.autoClean` 由你决定。
 内置黄金任务随版本自动更新，新版本新增或修改的内置用例升级后直接生效。
 `golden/tasks.json` 里项目自己的用例不动；只有与当前内置用例完全相同的旧副本会被移除，免得盖住以后的内置更新。
 与内置同 id 但内容不同的用例保留，`upgrade` 会列出它们：是自己改过的就留着，只是旧版本的拷贝就删掉。
@@ -1517,6 +1526,7 @@ node ~/github/harness/bin/harness.mjs install --local   # 按新锁定的版本�
 | `stop.idleBlocks` | `3` | 收尾检查对同一状态最多拦截的次数，拦满后放行并提示用户；必须是正整数，取 `1` 与旧版行为一致；不是正整数（包括 `stop` 不是对象）时按 `3` 处理，放行提示注明已回退 |
 | `escalate.triggers` | 四条 | 建议上报的情形，写给 Agent 看，harness 不据此自动触发；交付设置授权范围内的推送不在其中 |
 | `env` | `{}` | 执行检查时附加的环境变量 |
+| `worktree.autoClean` | `false` | 是否在交付后自动清理本次任务 Worktree；远程交付等 `sync` 后才清理，严格条件见“清理任务 Worktree” |
 | `worktree.cleanup` | `[]` | `harness worktree clean` 删除 Worktree 前在里面依次运行的命令，见“清理任务 Worktree” |
 | `delivery.mode` | `local` | 交付方式：`local` 由 `harness merge` 合入本地主分支，`remote` 由 `harness submit` 推送并创建 PR/MR，见“交付方式” |
 | `delivery.provider` | `null` | `remote` 必填：`github` 用 `gh`，`gitlab` 用 `glab` |
@@ -1830,9 +1840,9 @@ harness 内置 16 个用例（`assets/golden/builtin.json`），覆盖预设规�
 | `git-safety` | 拦截递归删除、丢弃改动、强制删除 Worktree、删除分支、强推、`stash`、`--no-verify`，以及在主分支上合并、变基、重置和绕过合并工具写主分支 |
 | `gate-self` | 保护执行器入口与绕过开关，轮换密钥与人工确认只能由人执行；规则与配置本身允许修改，合并前由人确认 |
 | `plan-first` | 先方案后实施：没有实施授权记录时 Agent 只能写方案文件，大改动合并前必须有授权记录；你在对话里同意后由 Agent 照录原话记录 |
-| `main-worktree` | 可选，`init` 不启用：主 Worktree 只用来合并，改动、切分支与提交都放在 Linked Worktree |
+| `main-worktree` | 新项目 `init` 默认启用：主 Worktree 只用来合并，改动、切分支与提交都放在 Linked Worktree；已有项目升级不自动开启 |
 
-`secrets`、`git-safety`、`gate-self`、`plan-first` 由 `init` 写进 `presets`。
+`secrets`、`git-safety`、`gate-self`、`main-worktree`、`plan-first` 由新项目的 `init` 写进 `presets`。
 项目约定了别的方案目录时，同时修改 `intent.plan.markers` 和 `plan-before-code` 规则的 `allow`（在 `rules` 里写一条同 id 的规则覆盖预设）。
 每条规则的细节见 `assets/presets/`，或在项目里运行 `harness rules`。
 
@@ -1840,7 +1850,9 @@ harness 内置 16 个用例（`assets/golden/builtin.json`），覆盖预设规�
 
 `harness merge` 在主 Worktree 里更新主分支，要求它停在主分支且洁净。
 只要有一个 Agent 在主 Worktree 里切走分支或留下改动，所有任务的合并都会被挡住。
-多个 Agent 或会话并行的项目，建议在 `.harness/policy.json` 的 `presets` 里加上 `main-worktree`：
+新项目的 `init` 默认在 `.harness/policy.json` 的 `presets` 里启用 `main-worktree`，已有项目升级时不自动添加。
+需要关闭时从 `presets` 删除 `main-worktree`；配置属于门禁改动，合入前由人确认。
+启用后：
 
 - `main-worktree-edit`：Agent 不能改主 Worktree 里的文件（显式编辑工具与能认出目标的 Shell 写入，见下），被 `.gitignore` 忽略的本机文件除外。
 - `main-worktree-leave-main`：Agent 不能在主 Worktree 里 `git switch`、`git checkout` 到主分支以外。
