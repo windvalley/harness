@@ -1,4 +1,5 @@
 import { strict as assert } from "node:assert";
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -91,5 +92,13 @@ describe("GitHub Release 安全续跑", () => {
     assert.match(workflow, /store=.*RELEASE/);
     assert.match(workflow, /HARNESS_STORE="\$store"/);
     assert.doesNotMatch(workflow, /already exists; nothing to do/);
+  });
+
+  test("工作流全新安装校验脚本语法有效", () => {
+    const workflow = readFileSync(join(ROOT, ".github/workflows/release.yml"), "utf8");
+    const script = workflow.match(/RELEASE_SOURCE="\$source" node --input-type=module <<'NODE'\n([\s\S]*?)\n\s*NODE/);
+    assert.ok(script, "未找到全新安装校验脚本");
+    const result = spawnSync(process.execPath, ["--input-type=module", "--check"], { input: script[1], encoding: "utf8" });
+    assert.equal(result.status, 0, result.stderr + result.stdout);
   });
 });

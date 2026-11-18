@@ -90,7 +90,7 @@ jobs:
           gh repo clone "$GITHUB_REPOSITORY" "$source" -- --depth 1 --branch "$tag"
           HARNESS_STORE="$store" node "$source/bin/harness.mjs" install --version "$RELEASE_VERSION"
           HARNESS_STORE="$store" RELEASE_SOURCE="$source" node --input-type=module <<'NODE'
-          import { verifyVersion } from `${process.env.RELEASE_SOURCE}/src/install/install.mjs`;
+          const { verifyVersion } = await import(`${process.env.RELEASE_SOURCE}/src/install/install.mjs`);
           const result = verifyVersion({ version: process.env.RELEASE_VERSION });
           console.log(JSON.stringify({ version: process.env.RELEASE_VERSION, installed: result }, null, 2));
           if (!result.ok) throw new Error(result.reason);
