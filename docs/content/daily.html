@@ -71,6 +71,14 @@ docs/update-install-guide</code></pre></div>
     <p>需要系统补齐既有测试时，Agent 按 <code>.harness/rules/method-backfill-tests.md</code> 先完整只读盘点，再用 <code>.harness/templates/test-backfill.md</code> 统一记录功能、已有覆盖、具体缺口、测试能力与有序批次。按风险而不是覆盖率数字排序，首批预算不能把后续缺口删掉。</p>
     <p>补测只修改测试、夹具与必要的测试基础设施，不顺手修改生产代码。既有失败只阻塞相关候选，独立候选继续；计划完成或命令退出 0 不代表覆盖完整，交付前还要核对具体用例、断言与适用层。</p>
 
+    <h3 id="ui-visual">UI 视觉验收</h3>
+    <p>页面、组件、交互状态或响应式改动按 <code>.harness/rules/method-ui-visual.md</code> 先确定目标，再验证结构、内容、可访问性、关键视口与恢复状态。可使用 <code>.harness/templates/visual-contract.md</code>；小任务把适用字段写进验收清单即可。</p>
+    <p>功能 E2E 通过不等于视觉对齐，自动化评分不等于真实可用性，只保存当前截图也不能证明通过。按场景验证键盘、焦点与辅助技术语义；未实际检查的目标平台或视口标为 <code>not_evaluated</code>，不默认增加人工审批。</p>
+
+    <h3 id="cross-platform">跨平台兼容</h3>
+    <p>多平台产品涉及路径、进程、Shell、权限、编码、原生模块或平台 API 时，按 <code>.harness/rules/method-cross-platform.md</code> 和 <code>.harness/templates/platform-matrix.md</code> 记录目标平台、失败语义、环境与证据。不默认支持全部操作系统。</p>
+    <p>模拟分支与真实平台验证分记，不能互替；安装、协议注册、权限与原生能力使用最终交付形态验证。缺 Runner 或范围未知时明确列出阻塞与补验，不用本机成功或 skip 冒充通过。</p>
+
     <h3 id="commit-msg">提交信息</h3>
     <p>提交信息规范只在 <code>.harness/policy.json</code> 的 <code>commit-message</code> 规则里定义一处，<code>commit-msg</code> 钩子、<code>verify</code> 与 <code>review</code> 的前置检查、<code>status</code> 和合并共用同一份判定。可以直接约定描述用什么语言（<code>lang</code> 取 <code>zh</code>、<code>en</code> 或 <code>any</code>）、允许的类型、标题长度与正文格式。</p>
     <div class="code"><pre><code>git commit -m "feat(login): 支持短信验证码登录" -m "- 新增验证码发送与校验接口

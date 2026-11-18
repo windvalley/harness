@@ -47,6 +47,8 @@
 | 需求有歧义、概念冲突或需要记录关键取舍 | [需求澄清与领域语言](method-requirements.md) |
 | 缺陷、偶现失败或性能退化 | [故障诊断](method-diagnosis.md) |
 | 编写或修改行为测试、判断 mock 与测试边界 | [测试设计](method-test-design.md) |
+| 修改页面、组件、交互状态或响应式布局 | [UI 视觉验收](method-ui-visual.md) |
+| 产品声明多平台支持，且改动涉及平台敏感行为 | [跨平台兼容](method-cross-platform.md) |
 | 遗留仓库需要系统补齐缺失测试 | [遗留补测](method-backfill-tests.md) |
 | 需要设计方案或拆分实施步骤 | [设计与任务拆分](method-design-planning.md) |
 | 用户要求评审、收到评审意见，或变更进入交付前自审 | [需求与工程双维评审](method-review.md) |

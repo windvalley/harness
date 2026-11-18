@@ -235,6 +235,38 @@ describe("安装与自检", () => {
     assert.match(readFileSync(join(repo.root, ".harness/config.json"), "utf8"), /保留/);
   });
 
+  test("init 分发 UI 与跨平台规则包并纳入场景路由和托管清单", () => {
+    const repo = setup({ install: false, project: { ".harness/config.json": null, ".harness/policy.json": null, ".harness/verify.json": null } });
+    const result = repo.rawCli("init");
+    assert.equal(result.status, 0, result.stderr);
+    const files = [
+      ".harness/rules/method-ui-visual.md",
+      ".harness/rules/method-cross-platform.md",
+      ".harness/templates/visual-contract.md",
+      ".harness/templates/platform-matrix.md",
+    ];
+    for (const rel of files) assert.ok(existsSync(join(repo.root, rel)), rel);
+    const core = readFileSync(join(repo.root, ".harness/rules/core.md"), "utf8");
+    assert.match(core, /页面、组件.*\[UI 视觉验收\]\(method-ui-visual\.md\)/);
+    assert.match(core, /多平台支持.*\[跨平台兼容\]\(method-cross-platform\.md\)/);
+    const ui = readFileSync(join(repo.root, ".harness/rules/method-ui-visual.md"), "utf8");
+    for (const pattern of [/不从当前实现反推目标/, /可访问角色、名称和可见文本/, /功能 E2E 通过不等于视觉对齐/, /不设置通用像素阈值/, /保存当前截图.*不能.*通过/s, /键盘/, /自动化.*评分.*不等于.*可用性/s, /not_evaluated/]) {
+      assert.match(ui, pattern, `UI 规则应包含: ${pattern}`);
+    }
+    const platform = readFileSync(join(repo.root, ".harness/rules/method-cross-platform.md"), "utf8");
+    for (const pattern of [/不默认支持全部操作系统/, /模拟.*真实.*不能互替/s, /不用 skip/, /最终交付形态/, /not_evaluated/]) {
+      assert.match(platform, pattern, `跨平台规则应包含: ${pattern}`);
+    }
+    const managed = JSON.parse(readFileSync(join(repo.root, ".harness/managed-files.json"), "utf8"));
+    for (const rel of ["rules/method-ui-visual.md", "rules/method-cross-platform.md", "templates/visual-contract.md", "templates/platform-matrix.md"]) {
+      assert.match(managed.files[rel], /^[a-f0-9]{64}$/, rel);
+    }
+    for (const rel of files) rmSync(join(repo.root, rel));
+    const upgraded = repo.rawCli("upgrade");
+    assert.equal(upgraded.status, 0, upgraded.stderr);
+    for (const rel of files) assert.ok(existsSync(join(repo.root, rel)), `升级恢复 ${rel}`);
+  });
+
   test("init 生成默认分支命名 policy 并分发统一指引", () => {
     const projectRules = "# 项目规范\n\n分支统一采用 team/ABC-123 格式。\n";
     const repo = setup({
