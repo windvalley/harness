@@ -194,7 +194,7 @@ describe("安装与自检", () => {
     for (const pattern of [/日常语言/, /固定话术/, /不要求用户/, /Agent 按项目规则准备任务分支/, /验收证据、最终合并状态/]) {
       assert.doesNotMatch(block, pattern, `托管块不应包含: ${pattern}`);
     }
-    for (const pattern of [/\.harness\/rules\/core\.md/, /先判断任务分级/, /最初提出需求或回答澄清问题都不算/, /先红后绿/, /harness merge --branch/, /轮次长短、耗时与上下文大小都不是停下的理由/]) {
+    for (const pattern of [/\.harness\/rules\/core\.md/, /先判断任务分级/, /直接实施也必须先写简短验收清单/, /最初提出需求或回答澄清问题都不算/, /先红后绿/, /harness merge --branch/, /轮次长短、耗时与上下文大小都不是停下的理由/]) {
       assert.match(block, pattern, `托管块应保留: ${pattern}`);
     }
     const rules = readFileSync(join(repo.root, ".harness/rules/harness.md"), "utf8");
@@ -206,10 +206,13 @@ describe("安装与自检", () => {
     // 自审放在提交之后、verify 之前：自审改出的新提交会让已有证据与评审作废。
     assert.match(rules, /提交后、`harness verify` 之前按 `method-review\.md` 自审/, "一次任务写明自审的时机");
     const review = readFileSync(join(repo.root, ".harness/rules/method-review.md"), "utf8");
-    for (const pattern of [/交付前自审放在提交之后、`harness verify` 之前/, /合并前验收清单每条都对应到测试、命令输出或已登记的外部证据/, /`commit-message` 规则把关/, /`git status` 洁净/, /diff 之外的调用方、配置、文档和测试夹具/, /自审结论不交给独立评审/]) {
+    for (const pattern of [/交付前自审放在提交之后、`harness verify` 之前/, /合并前验收清单每条都对应到测试、命令输出或已登记的外部证据/, /`commit-message` 规则把关/, /`git status` 洁净/, /diff 之外的调用方、配置、文档和测试夹具/, /沿实际 diff、调用方和相关数据流核对适用的安全项/, /命令、SQL、路径、URL、反序列化或 HTML/, /权限边界与敏感信息/, /无关类别无需逐项填写/, /适用但未检查的标 `not_evaluated`/, /自审结论不交给独立评审/]) {
       assert.match(review, pattern, `method-review.md 的自审清单应包含: ${pattern}`);
     }
     const core = readFileSync(join(repo.root, ".harness/rules/core.md"), "utf8");
+    assert.match(core, /直接实施的任务也必须先写验收清单/, "小任务同样要有验收依据");
+    assert.match(core, /不需要另写 spec\.md 与 plan\.md，也不新增实施授权/, "小任务的轻量清单不扩大方案与授权要求");
+    assert.doesNotMatch(core, /直接实施的任务也建议写验收清单/, "验收清单不再是小任务的可选建议");
     assert.match(core, /提交后、验证前按\[需求与工程双维评审\]\(method-review\.md\)自审/, "core.md 写明自审的时机");
     assert.doesNotMatch(core, /交付前自审，按验收清单/, "自审与交付时给出验收证据分成两条");
     // 评审者汇报要求写进每次任务都读的 core.md：只放在 harness.md 时，升级发生在会话中途或会话没重读 harness.md 就会漏。

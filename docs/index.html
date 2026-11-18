@@ -20,7 +20,7 @@
 <script>if(location.hash){const targets={"why":"index.html#why","delivery":"index.html#delivery","delivery-modes":"index.html#delivery-modes","quickstart":"quickstart.html","daily":"daily.html","prompts":"daily.html#prompts","branch-naming":"daily.html#branch-naming","one-task":"daily.html#one-task","validation-path":"daily.html#validation-path","acceptance":"daily.html#acceptance","commit-msg":"daily.html#commit-msg","cleanup":"daily.html#cleanup","blocked":"blocked.html","validation-blockers":"blocked.html#validation-blockers","resolve-blocker":"blocked.html#resolve-blocker","arch":"architecture.html","layers":"architecture.html#layers","components":"architecture.html#components","pinning":"architecture.html#pinning","trust-root":"architecture.html#trust-root","signing":"architecture.html#signing","token":"architecture.html#token","principles":"principles.html","pretooluse":"principles.html#pretooluse","stop-check":"principles.html#stop-check","githooks":"principles.html#githooks","lifecycle":"principles.html#lifecycle","selection":"principles.html#selection","external-evidence":"principles.html#external-evidence","test-evidence":"principles.html#test-evidence","review":"principles.html#review","plan-first":"principles.html#plan-first","limits":"limits.html","customize":"customize.html","team":"team.html","new-machine":"team.html#new-machine","upgrade":"team.html#upgrade","sync":"team.html#sync","parallel":"team.html#parallel","cheatsheet":"cheatsheet.html"};const target=targets[location.hash.slice(1)];if(target&&target!=="index.html"+location.hash)location.replace(target);}</script>
 <script src="assets/docs.js?v=acdbbf2b96" defer></script>
 </head>
-<body data-page="index" data-index="d1f346721d">
+<body data-page="index" data-index="7cc4e54085">
 <a class="skip-link" href="#main-content">跳到主要内容</a>
 <header class="topbar">
   <div class="topbar-inner">
@@ -84,7 +84,7 @@
         <tr><td>交付</td><td>逐条给出验收证据、交付状态与待处理项；有合并后检查时，在实际合入后继续完成并登记</td><td>由你最终验收；<code>status</code> 会分清“已合入”和“合并后验收完成”</td></tr>
       </tbody>
     </table></div>
-    <p>小需求核实范围后跳过方案，直接从实施开始。任务分级和先红后绿由 Agent 按项目规范执行，门禁兜底其中能机械判定的部分：配置了 <code>testFirst</code> 与 <code>coverage</code> 的项目，验证会复算“还原实现后新增的测试必须失败”和“改动行必须被测试执行到”，见<a href="limits.html">信任模型与限制</a>。</p>
+    <p>小需求核实范围后跳过方案，写一份简短验收清单即可直接实施。任务分级和先红后绿由 Agent 按项目规范执行，门禁兜底其中能机械判定的部分：配置了 <code>testFirst</code> 与 <code>coverage</code> 的项目，验证会复算“还原实现后新增的测试必须失败”和“改动行必须被测试执行到”，见<a href="limits.html">信任模型与限制</a>。</p>
 
     <h3 tabindex="-1" id="delivery-modes">两种交付方式</h3>
     <div class="table-wrap"><table>
