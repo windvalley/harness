@@ -77,7 +77,7 @@ const USAGE = `harness <命令> [参数]    任一命令加 --help 查看该命�
 接入与维护
   init     [--dry-run] [--take-over] [--force]       接入或升级当前项目：先调查现状，--dry-run 只预览
   install  [--take-over] [--local] [--version <v>]   重新生成入口与钩子；--local 只刷新本机共用部分；--version 只装指定版本
-  upgrade  [--dry-run]                               升级项目到当前版本；--dry-run 只预览将新增或更新的文件，不写入
+  upgrade  [--dry-run] [--force]                     升级项目到当前版本；--dry-run 只预览，--force 明确覆盖冲突的托管规则与模板
   uninstall [--purge] [--dry-run]                    解除接入；--purge 连 .harness/ 一起删
   reviewer <list|set|remove|prefer|test>              本机评审者：列出、新增或修改、删除、是否优先不同模型、实测一个；见 harness reviewer
   versions                                           列出已安装的版本
@@ -993,19 +993,25 @@ function currentBranchForStatus() {
 }
 
 function cmdUpgrade(argv) {
-  const { values } = parseArgs({ args: argv, options: { "dry-run": { type: "boolean", default: false } } });
+  const { values } = parseArgs({ args: argv, options: { "dry-run": { type: "boolean", default: false }, force: { type: "boolean", default: false } } });
+  const force = values.force;
   if (values["dry-run"]) {
-    const plan = planUpgrade({});
+    const plan = planUpgrade({ force });
     print(`升级预览（${plan.root}）: 版本 ${plan.pinned ?? "未锁定"} -> ${plan.version}`);
     for (const file of plan.files) print(`  ${file.action}  ${file.path}`);
+    for (const conflict of plan.conflicts) print(`  冲突  ${conflict.path}: ${conflict.reason}`);
     if (plan.golden.removed.length > 0) print(`  将移除 .harness/golden/tasks.json 里与内置相同的旧副本: ${plan.golden.removed.join(", ")}`);
     if (plan.golden.overrides.length > 0) print(`  这些用例覆盖内置用例且与当前内置不同，升级时保留: ${plan.golden.overrides.join(", ")}`);
     if (plan.files.length === 0 && plan.golden.removed.length === 0) print("规则、模板、入口与 AGENTS.md 托管块已是最新。");
     print("git 钩子与客户端配置（.claude、.codex、DSH 插件）在正式升级时重新生成，预览不逐项比对。");
     print("以上为预览，没有写入任何文件，也没有安装版本目录。config.json、policy.json、verify.json 升级时同样不会改动。");
+    if (plan.conflicts.length > 0) {
+      print("存在托管文件冲突，正式升级会拒绝。先迁移项目自己的说明；确认用当前版本覆盖时，由人明确运行 upgrade --force。");
+      return 1;
+    }
     return 0;
   }
-  const result = upgradeProject({});
+  const result = upgradeProject({ force });
   print(`已升级到 ${result.version}，入口 ${result.shim.shim}`);
   if (result.golden.removed.length > 0) print(`  已从 .harness/golden/tasks.json 移除与内置相同的旧副本: ${result.golden.removed.join(", ")}`);
   if (result.golden.overrides.length > 0) {

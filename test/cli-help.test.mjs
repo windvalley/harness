@@ -32,6 +32,7 @@ describe("子命令帮助", () => {
       assert.equal(result.status, 0, result.stderr);
       assert.match(result.stdout, /harness upgrade/);
       assert.match(result.stdout, /--dry-run/);
+      assert.match(result.stdout, /--force/);
       assert.doesNotMatch(result.stdout, /verify\s+\[--head/, "只列本命令，不是全部用法");
       assert.deepEqual(snapshot(repo), before);
       assert.equal(existsSync(join(repo.root, ".harness/rules/core.md")), false);

@@ -15,7 +15,7 @@ node ~/github/harness/bin/harness.mjs install --local
 
 安装并升级当前项目，保留已有规则和配置，完成迁移检查、验证、评审与交付。需要我操作时，请提供具体步骤。</code></pre></div>
     <p>Agent 应直接从 GitHub 获取最新版本并安装到本机，检查项目当前版本并说明升级影响，准备任务分支及需要的 Worktree，完成验证、评审和必要确认后按交付方式交付，主动报告结果与待处理项。</p>
-    <p><code>upgrade</code> 会整份重写 <code>rules/</code> 与 <code>templates/</code>，项目自己的规范请写在 <code>AGENTS.md</code> 托管块之外；已有配置和黄金任务的迁移由 Agent 核对并说明。</p>
+    <p><code>upgrade</code> 按 <code>managed-files.json</code> 的哈希更新 <code>rules/</code> 与 <code>templates/</code>。本地修改、非普通文件或符号链接会在预览和正式升级时形成冲突；先迁移项目自己的说明，确需覆盖时由人明确运行 <code>upgrade --force</code>。已有配置和黄金任务的迁移由 Agent 核对并说明。</p>
     <p>具体命令与其他成员的接续操作见<a href="https://github.com/windvalley/harness/blob/main/docs/reference.md#升级">升级参考</a>。</p>
 
     <h3 id="sync">与远程同步</h3>

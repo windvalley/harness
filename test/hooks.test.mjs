@@ -1,5 +1,6 @@
 import { strict as assert } from "node:assert";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
@@ -181,9 +182,17 @@ describe("安装与自检", () => {
     const repo = setup({ install: false, project: { ".harness/config.json": null, ".harness/policy.json": null, ".harness/verify.json": null } });
     const first = repo.rawCli("init");
     assert.equal(first.status, 0, first.stderr);
-    for (const rel of [".harness/config.json", ".harness/policy.json", ".harness/verify.json", ".harness/rules/core.md", ".harness/rules/harness.md", ".harness/templates/spec.md"]) {
+    for (const rel of [".harness/config.json", ".harness/policy.json", ".harness/verify.json", ".harness/rules/core.md", ".harness/rules/harness.md", ".harness/rules/method-backfill-tests.md", ".harness/templates/spec.md", ".harness/templates/test-backfill.md", ".harness/managed-files.json"]) {
       assert.ok(existsSync(join(repo.root, rel)), rel);
     }
+    const backfill = readFileSync(join(repo.root, ".harness/rules/method-backfill-tests.md"), "utf8");
+    for (const pattern of [/完整的只读盘点/, /按.*风险.*排序/s, /单元、集成与 E2E/, /不修改生产代码/, /既有失败只阻塞相关候选/, /独立候选继续/, /覆盖率只作辅助证据/]) {
+      assert.match(backfill, pattern, `补测方法应包含: ${pattern}`);
+    }
+    const managed = JSON.parse(readFileSync(join(repo.root, ".harness/managed-files.json"), "utf8"));
+    assert.equal(managed.version, 1);
+    assert.match(managed.files["rules/core.md"], /^[a-f0-9]{64}$/);
+    assert.match(managed.files["templates/test-backfill.md"], /^[a-f0-9]{64}$/);
     const agents = readFileSync(join(repo.root, "AGENTS.md"), "utf8");
     assert.match(agents, /harness:start/);
     assert.match(agents, /本项目的门禁由 harness 管理，以下要求适用于所有任务，不得跳过：/);
@@ -213,6 +222,7 @@ describe("安装与自检", () => {
     assert.match(core, /直接实施的任务也必须先写验收清单/, "小任务同样要有验收依据");
     assert.match(core, /不需要另写 spec\.md 与 plan\.md，也不新增实施授权/, "小任务的轻量清单不扩大方案与授权要求");
     assert.doesNotMatch(core, /直接实施的任务也建议写验收清单/, "验收清单不再是小任务的可选建议");
+    assert.match(core, /遗留仓库.*补齐.*测试.*\[遗留补测\]\(method-backfill-tests\.md\)/, "core.md 按场景路由补测方法");
     assert.match(core, /提交后、验证前按\[需求与工程双维评审\]\(method-review\.md\)自审/, "core.md 写明自审的时机");
     assert.doesNotMatch(core, /交付前自审，按验收清单/, "自审与交付时给出验收证据分成两条");
     // 评审者汇报要求写进每次任务都读的 core.md：只放在 harness.md 时，升级发生在会话中途或会话没重读 harness.md 就会漏。
@@ -558,12 +568,85 @@ describe("安装与自检", () => {
     assert.match(result.stdout, /内容被改动|内容与清单一致/);
   });
 
+  test("升级预览与执行都拒绝本地修改的托管规则，显式 force 才覆盖", () => {
+    const repo = setup();
+    const file = join(repo.root, ".harness/rules/core.md");
+    write(repo.root, ".harness/rules/core.md", "# 项目本地修改\n");
+    const before = readFileSync(file, "utf8");
+    const preview = repo.cli("upgrade", "--dry-run");
+    assert.equal(preview.status, 1, preview.stdout + preview.stderr);
+    assert.match(preview.stdout, /冲突.*\.harness\/rules\/core\.md/);
+    assert.match(preview.stdout, /--force/);
+    assert.equal(readFileSync(file, "utf8"), before, "预览不修改冲突文件");
+    const refused = repo.cli("upgrade");
+    assert.equal(refused.status, 1);
+    assert.match(refused.stderr, /托管文件冲突[\s\S]*\.harness\/rules\/core\.md/);
+    assert.equal(readFileSync(file, "utf8"), before, "普通升级不覆盖本地修改");
+    const forced = repo.cli("upgrade", "--force");
+    assert.equal(forced.status, 0, forced.stderr);
+    assert.equal(readFileSync(file, "utf8"), readFileSync(join(PACKAGE_ROOT_TEST, "assets/rules/core.md"), "utf8"));
+  });
+
+  test("旧项目没有托管清单时按已安装版本识别本地修改", () => {
+    const repo = setup();
+    rmSync(join(repo.root, ".harness/managed-files.json"), { force: true });
+    write(repo.root, ".harness/rules/core.md", "# 旧项目本地规则\n");
+    const result = repo.cli("upgrade", "--dry-run");
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    assert.match(result.stdout, /冲突.*\.harness\/rules\/core\.md/);
+  });
+
+  test("旧项目托管文件未改时无需 force 即可补齐清单", () => {
+    const repo = setup();
+    rmSync(join(repo.root, ".harness/managed-files.json"), { force: true });
+    const result = repo.cli("upgrade");
+    assert.equal(result.status, 0, result.stderr);
+    const manifest = JSON.parse(readFileSync(join(repo.root, ".harness/managed-files.json"), "utf8"));
+    assert.equal(manifest.version, 1);
+    assert.match(manifest.files["rules/core.md"], /^[a-f0-9]{64}$/);
+  });
+
+  test("托管规则是符号链接时拒绝跟随，force 也只替换链接本身", () => {
+    const repo = setup();
+    const outside = join(repo.root, "..", "outside-rule.md");
+    const file = join(repo.root, ".harness/rules/core.md");
+    writeFileSync(outside, "不能改的外部文件\n");
+    rmSync(file);
+    symlinkSync(outside, file);
+    const refused = repo.cli("upgrade");
+    assert.equal(refused.status, 1);
+    assert.match(refused.stderr, /符号链接/);
+    assert.equal(readFileSync(outside, "utf8"), "不能改的外部文件\n");
+    const forced = repo.cli("upgrade", "--force");
+    assert.equal(forced.status, 0, forced.stderr);
+    assert.equal(lstatSync(file).isSymbolicLink(), false);
+    assert.equal(readFileSync(outside, "utf8"), "不能改的外部文件\n");
+  });
+
+  test("force 也不会穿过符号链接父目录", () => {
+    const repo = setup();
+    const rules = join(repo.root, ".harness/rules");
+    const outside = join(repo.root, "..", "outside-rules");
+    mkdirSync(outside);
+    rmSync(rules, { recursive: true });
+    symlinkSync(outside, rules, "dir");
+    const result = repo.cli("upgrade", "--force");
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /父目录是符号链接/);
+    assert.equal(existsSync(join(outside, "core.md")), false);
+  });
+
   test("升级分发 policy 指引并保留项目规范、配置与分支", () => {
     const prefix = "# 项目规范\n\n分支统一采用 team/ABC-123 格式。\n\n";
     const suffix = "\n\n## 发布规范\n\n发布分支采用 release/版本号。\n";
     const repo = setup({ files: { "AGENTS.md": `${prefix}<!-- harness:start -->\n旧托管块\n<!-- harness:end -->${suffix}` } });
     git(repo.root, "checkout", "-q", "-b", "task/existing-branch");
-    write(repo.root, ".harness/rules/core.md", "# 旧规则\n");
+    const oldRule = "# 旧规则\n";
+    write(repo.root, ".harness/rules/core.md", oldRule);
+    const manifestFile = join(repo.root, ".harness/managed-files.json");
+    const manifest = JSON.parse(readFileSync(manifestFile, "utf8"));
+    manifest.files["rules/core.md"] = createHash("sha256").update(oldRule).digest("hex");
+    write(repo.root, ".harness/managed-files.json", `${JSON.stringify(manifest, null, 2)}\n`);
     const configs = ["config.json", "policy.json", "verify.json"];
     const before = configs.map((file) => readFileSync(join(repo.root, ".harness", file), "utf8"));
     const refs = git(repo.root, "for-each-ref", "--format=%(refname):%(objectname)");

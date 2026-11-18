@@ -156,6 +156,7 @@ export const GATE_FILES = [
   // 版本锁决定本机跑哪份门禁代码，远程改它和改门禁本身是一回事。
   ".harness/VERSION",
   ".harness/golden/**",
+  ".harness/managed-files.json",
   ".harness/rules/**",
   ".harness/bin/**",
   ".claude/settings.json",

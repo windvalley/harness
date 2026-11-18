@@ -4,7 +4,7 @@ import { git, gitOk, hooksPlacement, refExists, repoRoot } from "../lib/git.mjs"
 import { PACKAGE_ROOT } from "../policy/resolve.mjs";
 import { HOOK_NAMES, installAll, pinnedVersion, publishVersion, shimBody, shimPath, storeEntry, versionDir, worktreeHooksConfig } from "./install.mjs";
 import { planBuiltinCopies, pruneBuiltinCopies } from "../golden/builtin.mjs";
-import { managedBlockBody, packageVersion, renderManagedBlock, ruleEntries, writeManagedBlock, writeRules } from "./managed.mjs";
+import { managedBlockBody, managedConflictError, packageVersion, planManagedRules, renderManagedBlock, writeManagedBlock, writeRules } from "./managed.mjs";
 import { ensurePitfallsFile, PITFALL_FILE } from "../pitfall/pitfall.mjs";
 import { survey } from "./survey.mjs";
 import { RISK_DEFAULTS, planSettings } from "../plan/plan.mjs";
@@ -288,7 +288,7 @@ function plannedWrites(root, { force }) {
     if (force || !existsSync(join(root, rel))) consider(rel);
   }
   if (!existsSync(join(root, PITFALL_FILE))) consider(PITFALL_FILE);
-  for (const rel of [".harness/bin/harness", ".harness/rules/", ".harness/templates/", ".claude/settings.json", ".codex/hooks.json", ".gitignore", "AGENTS.md"]) {
+  for (const rel of [".harness/bin/harness", ".harness/rules/", ".harness/templates/", ".harness/managed-files.json", ".claude/settings.json", ".codex/hooks.json", ".gitignore", "AGENTS.md"]) {
     consider(rel);
   }
   const { rel: hooksRel, tracked } = hooksPlacement(root, { hooksDir: worktreeHooksConfig(root)?.hooksDir });
@@ -299,6 +299,13 @@ function plannedWrites(root, { force }) {
 function stackOf(verify) {
   const generic = new Set(["lint", "harness-golden"]);
   return verify.checks.map((check) => check.id).filter((id) => !generic.has(id));
+}
+
+function previousAssetsRoot(root) {
+  const pinned = pinnedVersion(root);
+  if (!pinned) return null;
+  const assets = join(versionDir(pinned), "assets");
+  return existsSync(assets) ? assets : null;
 }
 
 /**
@@ -312,6 +319,9 @@ export function initProject({ cwd = process.cwd(), force = false, dryRun = false
   const planned = plannedWrites(root, { force });
   if (dryRun) return { root, dryRun: true, report, stack, planned };
 
+  const previousRoot = previousAssetsRoot(root);
+  const managedProblem = managedConflictError(planManagedRules({ root, previousRoot, force }));
+  if (managedProblem) throw managedProblem;
   const mainBranch = detectMainBranch(root);
   const dir = join(root, ".harness");
   mkdirSync(dir, { recursive: true });
@@ -340,17 +350,20 @@ export function initProject({ cwd = process.cwd(), force = false, dryRun = false
   mkdirSync(join(dir, "acceptance"), { recursive: true });
   if (ensurePitfallsFile(root)) written.push(PITFALL_FILE);
 
-  writeRules({ root, version });
+  writeRules({ root, version, previousRoot, force });
   writeManagedBlock({ root, body: managedBlockBody() });
   const install = installAll({ cwd: root, takeOver });
   return { root, version, written, install, report, stack, planned, takeOver };
 }
 
-export function upgradeProject({ cwd = process.cwd() } = {}) {
+export function upgradeProject({ cwd = process.cwd(), force = false } = {}) {
   const root = repoRoot(cwd);
   const version = packageVersion();
+  const previousRoot = previousAssetsRoot(root);
+  const managedProblem = managedConflictError(planManagedRules({ root, previousRoot, force }));
+  if (managedProblem) throw managedProblem;
   publishVersion({ version });
-  writeRules({ root, version });
+  writeRules({ root, version, previousRoot, force });
   ensurePitfallsFile(root);
   // 托管块随版本更新：Agent 每次都会加载 AGENTS.md，任务分级等硬性要求写在这里才不会被跳过。
   writeManagedBlock({ root, body: managedBlockBody() });
@@ -363,16 +376,18 @@ export function upgradeProject({ cwd = process.cwd() } = {}) {
  * upgrade 的只读预览：逐个比对规则、模板、版本标记、入口与 AGENTS.md 托管块，列出会新增或更新的文件。
  * git 钩子与客户端配置由 installAll 重新生成，这里不逐项比对。
  */
-export function planUpgrade({ cwd = process.cwd() } = {}) {
+export function planUpgrade({ cwd = process.cwd(), force = false } = {}) {
   const root = repoRoot(cwd);
   const version = packageVersion();
   const files = [];
+  const managed = planManagedRules({ root, previousRoot: previousAssetsRoot(root), force });
+  files.push(...managed.actions.map(({ action, path }) => ({ action, path })));
   const compare = (rel, content) => {
     const file = join(root, rel);
     if (!existsSync(file)) files.push({ action: "新增", path: rel });
     else if (readFileSync(file, "utf8") !== content) files.push({ action: "更新", path: rel });
   };
-  for (const [rel, content] of ruleEntries()) compare(`.harness/${rel}`, content);
+  if (managed.manifestChanged) files.push({ action: existsSync(join(root, ".harness/managed-files.json")) ? "更新" : "新增", path: ".harness/managed-files.json" });
   compare(".harness/VERSION", `${version}\n`);
   if (!existsSync(join(root, PITFALL_FILE))) files.push({ action: "新增", path: PITFALL_FILE });
   compare(relative(root, shimPath(root)), shimBody(version));
@@ -381,5 +396,5 @@ export function planUpgrade({ cwd = process.cwd() } = {}) {
   if (current === null) files.push({ action: "新增", path: "AGENTS.md" });
   else if (renderManagedBlock(current, managedBlockBody()) !== current) files.push({ action: "更新", path: "AGENTS.md" });
   const { removed, overrides } = planBuiltinCopies(root);
-  return { root, version, pinned: pinnedVersion(root), files, golden: { removed, overrides } };
+  return { root, version, pinned: pinnedVersion(root), files, conflicts: managed.conflicts, golden: { removed, overrides } };
 }
