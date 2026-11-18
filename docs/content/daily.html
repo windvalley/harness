@@ -27,6 +27,15 @@ docs/update-install-guide</code></pre></div>
     <p>门禁先解析实际分支名称，支持 <code>HEAD</code>、完整分支引用和远程跟踪分支；配置主分支豁免任务命名要求，原主分支保护保持生效。SHA、tag 和 detached HEAD 可做纯内容验证与评审，但不代表命名通过，启用规则后的交付必须有明确分支来源，detached HEAD 提交会被拒绝。</p>
     <p>实际判定取主分支 policy，任务分支不能通过修改自己的配置放行。项目命名要求直接维护在 policy，规则变更经人工确认合入后生效；<code>upgrade</code> 更新指引并保留项目 policy。字段错误、无效正则或重复规则会在进入主分支前被拒绝，详见<a href="https://github.com/windvalley/harness/blob/main/docs/reference.md#分支命名">分支命名参考</a>。</p>
 
+    <h3 id="parallel-worktrees">并行任务与 Worktree</h3>
+    <p>新项目的 <code>init</code> 默认启用 <code>main-worktree</code>：主 Worktree 停在主分支且保持洁净，只用于合并与固定环境。每个任务使用独立分支和 Linked Worktree，Agent 在各自目录里修改、提交、验证和评审，不在主 Worktree 里切换任务分支。</p>
+    <div class="code"><span class="label">两个任务分别从最新主分支建独立目录</span><pre><code>git worktree add -b feature/login ../project-login main
+git worktree add -b fix/payment ../project-payment main</code></pre></div>
+    <p>并行开发不只是目录隔离。依赖安装、端口、数据库、环境变量和测试数据仍需按项目隔离，避免不同任务共用会互相修改的运行资源。机制与多机协作说明见<a href="team.html#parallel">团队与多机</a>。</p>
+    <p>其他任务先合入主分支后，后续任务按需在自己的 Worktree 吸收最新主分支；出现冲突或 <code>review_stale</code> 时重新验证和评审。每次合并仍由门禁核对最新代码与证据。</p>
+    <p><code>worktree.autoClean</code> 默认关闭。清理前活跃任务可用 <code>git -C &lt;主 Worktree&gt; worktree lock &lt;任务目录&gt;</code> 保留，用完再解锁；含本机文件或进程不可知的目录在自动模式下同样保留。</p>
+    <p>已有项目升级时不会自动开启 <code>main-worktree</code>。需要关闭时从 <code>policy.json</code> 的 <code>presets</code> 删除它；只需允许人工在主 Worktree 提交时，可在 <code>disabled</code> 里只关闭 <code>main-worktree-commit</code>。配置改动仍按门禁流程确认。</p>
+
     <h3 id="one-task">一次任务</h3>
     <p>两类任务都由 Agent 整理验收标准，关键业务含义有歧义时再与你确认，按相应流程准备任务分支及需要的 Worktree，执行验证和独立评审，再按项目的交付方式交付：本地合并，或提交 PR/MR。没过门禁时它按拒绝原因修复后重跑；改动涉及门禁本身时由你亲自确认，同一个问题连续三轮修不好时停下说明。用户不需要额外提醒它汇报效果入口、验收结果和最终交付状态。</p>
     <ul>
