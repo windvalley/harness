@@ -79,7 +79,8 @@ Claude Code 此时触发 `StopFailure` 而不是 `Stop`，而 `StopFailure` 文�
 | `verification_required`、`authentication_failed`、`oauth_org_not_allowed`、`account_on_hold`、`billing_error` | 通常靠人处理，但重试代价几乎为零 | 仍续跑一次，连续出现即停 |
 
 - 缺省行为：`StopFailure` 一到就续跑，不判断错误类型。
-  最后一行那几种错误通常在请求发出前就失败，不消耗额度，所以“先试一次”比“预先判定不可恢复”更省事。
+  最后一行的几种错误多数在请求被受理前就失败，重试代价通常很低；“先试一次、连续同错误就停”比预先判定哪些错误不可恢复更省事，也少一个要维护的名单。
+  这一条的实际代价在实施时用实测记录（重试次数与花费）确认，不只凭推断。
 - 兜底判据比错误类型更可靠：
   - 同一错误连续 `maxSameErrors` 轮（缺省 2）出现且指纹没变，立即停，判为人处理并写明错误类型。
   - 连续 `maxFailures` 轮（缺省 3）失败停。
