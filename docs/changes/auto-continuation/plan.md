@@ -100,13 +100,31 @@ Claude Code 此时触发 `StopFailure` 而不是 `Stop`，而 `StopFailure` 文�
   等待期间保持会话锁，用户随时可以打断。
 - 退出条件：完成、要人、同一错误连续 `maxSameErrors` 轮且指纹不变、连续 `maxFailures` 轮失败、指纹连续 `maxIdleRounds` 轮不变、到达 `maxRounds`、被用户接管。
 
-### 五、Codex 与其他客户端
+### 五、各客户端支持情况（已核实）
 
-- Codex 的钩子事件只有 `pre-tool-use`、`post-tool-use`、`stop`、`session-start`、`user-prompt-submit`、`subagent-start`、`subagent-stop`、`pre-compact`、`post-compact`、`permission-request`、`interrupt`，**没有 `StopFailure`**。
-  Codex 一轮出错时是否触发 `stop` 需要实测；若触发，则同一套 `stop` 钩子已经覆盖，只是续跑触发器换成 `stop` 里的“失败判定”。
-- 因此本方案的实现分两层：
-  - 判定与派发逻辑与客户端无关（`src/continue/`）。
-  - 每个客户端一个触发器：Claude Code 用 `StopFailure`（已确认可用）；Codex 用 `stop` 加错误检测（实施时实测确认）；其他客户端用通用命令模板 `hook --client generic --event stop-failure`。
+判定与派发逻辑与客户端无关，只有“触发器”和“无头续跑命令”按客户端区分。
+本机实测各客户端的结果：
+
+| 客户端 | 失败触发 | 无头续跑命令 | 结论 |
+| --- | --- | --- | --- |
+| Claude Code（TUI、CLI） | `StopFailure`，替代 `Stop`，载荷含 `session_id` 与 `error` | `claude -p --resume <id> --permission-mode <模式> --output-format json` | 支持 |
+| Claude Code 桌面版 | 与 TUI 共用同一份 `settings.json` 钩子，触发层一致 | 同上 | 支持，桌面版需在 `/resume` 里打开同一会话才看得到轮次 |
+| Kimi Code（`kimi`） | `StopFailure`，同样 fire-and-forget，载荷是 `errorType` 与 `errorMessage`；钩子配置在 `config.toml` 的 `[hooks]`，字段为 `event`、`matcher`、`command`、`timeout` | `kimi -p "<提示>" -S <id> --output-format stream-json`（prompt 模式必须带会话 ID） | 支持，需要为它写一个钩子配置写入器 |
+| DSH（TUI、桌面版、web） | 插件事件 `agent/turn-stopping` 加 `agent.steer`，比钩子更强：可以在同一轮里直接让 Agent 继续，不必另起进程 | `dsh --profile headless --session-id <id> --approval-policy never --json "<提示>"` | 优先用 steer；出错时是否触发 `turn-stopping` 需实测 |
+| Codex | 只有 `stop`，没有 `StopFailure` | `codex exec resume <id> --json`、`codex exec fork` | 待实测，见下 |
+| 其他客户端 | 通用入口 `hook --client generic --event stop-failure` | 命令模板 | 需用户配置 |
+
+由此得出的两条结论：
+
+1. **无头续跑本身是通用的**：Claude Code、Kimi Code、DSH、Codex 都有“带会话 ID 的非交互续跑”命令，第三方客户端用命令模板也能接。
+   所以“能不能自动续跑”不是客户端差异点。
+2. **真正的差异在失败触发**：只有 Claude Code 与 Kimi Code 提供 `StopFailure`。
+   Codex 没有这个事件，它一轮出错时是否仍触发 `stop` 尚未验证；实施时必须在 Codex 里实测一次（构造 `server_error`），结论写进交付说明。
+   验不出来时 Codex 只能退化：靠 `stop` 时的欠项检查多拦几轮，或由人运行 `harness continue`。
+3. **DSH 应当走替换路径**：它的插件可以直接 `steer`，比“派发新进程”更省一次会话、也不需要无头续跑。
+   `src/continue/` 的判定逻辑复用到插件里，派发改为 `steer`。
+
+- Codex 的钩子事件：`pre-tool-use`、`post-tool-use`、`stop`、`session-start`、`user-prompt-submit`、`subagent-start`、`subagent-stop`、`pre-compact`、`post-compact`、`permission-request`、`interrupt`，没有 `StopFailure`。
 - 通用命令模板配置放在本机 `~/.config/harness/continue.json`，支持 `${session}`、`${prompt}` 占位符与 `json`、`jsonl`、`text` 三种输出解析，第三方 Agent 不需要为它写代码。
 
 ### 六、进度可见与通知：静默记账不够
@@ -150,15 +168,16 @@ Claude Code 此时触发 `StopFailure` 而不是 `Stop`，而 `StopFailure` 文�
 | 步骤 | 改动 | 验证方式 |
 | --- | --- | --- |
 | 1 | 写出失败用例：`stop-failure` 载荷被接收、未启用时只记账、`skipErrors` 生效、启用后派发、递归阻断、会话锁、接管检测、退避与各停止条件 | `node --test` 定向运行，记录失败输出 |
-| 2 | 新增 `src/continue/`：欠项判定复用、派发、锁、进程模板与输出解析 | 派发与退出条件用例转绿 |
-| 3 | `hook` 增加 `--event stop-failure`，`install` 为 Claude Code 写入 `StopFailure` 钩子 | 安装与钩子用例转绿 |
-| 4 | 新增 `harness continue` 命令与 `status` 的续跑一行 | 命令级用例转绿 |
-| 5 | 门禁规则、规则文档、参考手册与文档站 | `npm run docs:build` 并审查生成差异 |
-| 6 | 用假客户端做端到端：模拟一轮 `unknown` 错误后自动续跑并推进到完成 | 端到端用例与日志 |
-| 7 | 真实客户端最少验证一条：制造一次可恢复的失败（或临时把 `skipErrors` 之外的错误都放开），确认钩子真的派发且续跑轮次落在同一会话 | 实测记录 |
-| 8 | Codex 的 `stop` 失败触发实测，确认后可接入或不接入 | 实测记录与结论 |
-| 9 | 全量回归 | `npm test`、`npm run docs:check`、`git diff --check` |
-| 10 | 独立评审，合并本地 `main`，推送 `origin main`，删除任务分支 | 评审结论与合并记录 |
+| 2 | 新增 `src/continue/`：欠项判定复用、派发、锁、客户端命令拼装与输出解析 | 派发与退出条件用例转绿 |
+| 3 | `hook` 增加 `--event stop-failure`；`install` 为 Claude Code 写 `StopFailure` 钩子，为 Kimi Code 写 `config.toml` 的 `[hooks]` | 安装与钩子用例转绿 |
+| 4 | DSH 插件改用 `steer` 走同一套判定，不派发进程 | 插件用例转绿 |
+| 5 | 新增 `harness continue` 命令与 `status` 的续跑实时行 | 命令级用例转绿 |
+| 6 | 门禁规则、规则文档、参考手册与文档站 | `npm run docs:build` 并审查生成差异 |
+| 7 | 假客户端端到端：模拟一轮 `unknown` 错误后自动续跑并推进到完成 | 端到端用例与日志 |
+| 8 | 真实客户端逐个实测：Claude Code、Kimi Code、DSH 各一条，确认触发与续跑落在同一会话 | 实测记录 |
+| 9 | Codex 实测一轮出错是否触发 `stop`，据此接入或如实记为不支持 | 实测记录与结论 |
+| 10 | 全量回归 | `npm test`、`npm run docs:check`、`git diff --check` |
+| 11 | 独立评审，合并本地 `main`，推送 `origin main`，删除任务分支 | 评审结论与合并记录 |
 
 不修改版本号与 CHANGELOG，不打标签，发版另行授权。
 
@@ -170,6 +189,9 @@ Claude Code 此时触发 `StopFailure` 而不是 `Stop`，而 `StopFailure` 文�
 - 续跑进程与用户终端会话并发写同一会话时，客户端行为未被规范，靠会话锁与进程探测尽量避免；探测不到的极端情况仍可能两边同时续跑。
 - 客户端不支持落盘会话时无法续跑，只能退化为“记一条提示”。
 - `bypassPermissions` 下任何客户端本身允许、而 harness 规则没覆盖的动作都会被真正执行。
+- 只有 Claude Code 与 Kimi Code 提供 `StopFailure`。Codex 与其他客户端若一轮出错时不触发 `stop`，就只能由人运行 `harness continue`，本方案无法自动兜住这一类中断。
+- 桌面版与 TUI 共用钩子配置，但“打开会话看进度”这一步要用户自己在 `/resume` 里做；桌面版是否提供自动滚动到最新轮次没有验证。
+- DSH 的 `steer` 依赖宿主插件 API，宿主升级后接口变化可能失效，需要在插件里按版本判定。
 
 ## 待确认
 

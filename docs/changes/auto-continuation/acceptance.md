@@ -33,8 +33,11 @@
 
 ## 通用性
 
-- 判定与派发逻辑与客户端无关，按客户端只区分触发器。
-- Claude Code 使用 `StopFailure`；Codex 是否用 `stop` 加失败检测由实测决定，结论写进交付说明。
+- 判定与派发逻辑与客户端无关，按客户端只区分触发器与续跑命令。
+- Claude Code（TUI、CLI、桌面版共用同一份钩子配置）用 `StopFailure` 触发，续跑命令为 `claude -p --resume`。
+- Kimi Code 用 `StopFailure` 触发（`errorType`、`errorMessage` 字段），`install` 能写入 `config.toml` 的 `[hooks]`，续跑命令为 `kimi -p ... -S <id>`。
+- DSH 插件用 `agent.steer` 在同一轮继续，不派发进程。
+- Codex 一轮出错是否触发 `stop` 的实测结论写进交付说明；不成立时如实记为不支持自动续跑。
 - 本机 `~/.config/harness/continue.json` 支持命令模板与 `${session}`、`${prompt}` 占位符，以及 `json`、`jsonl`、`text` 输出解析；用假客户端证明非内置客户端可被驱动。
 
 ## 可见性与记录
