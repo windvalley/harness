@@ -49,6 +49,8 @@ const RULE_SOURCES = [
   "rules/method-requirements.md",
   "rules/method-diagnosis.md",
   "rules/method-test-design.md",
+  "rules/method-ui-visual.md",
+  "rules/method-cross-platform.md",
   "rules/method-backfill-tests.md",
   "rules/method-design-planning.md",
   "rules/method-review.md",
@@ -57,6 +59,8 @@ const RULE_SOURCES = [
   "templates/spec.md",
   "templates/plan.md",
   "templates/test-backfill.md",
+  "templates/visual-contract.md",
+  "templates/platform-matrix.md",
 ];
 
 /** 随版本分发的规则与模板：[.harness 下的相对路径, 内容]。 */
