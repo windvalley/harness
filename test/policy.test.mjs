@@ -8,6 +8,7 @@ import { resolvePolicy, ruleStats, loadPreset } from "../src/policy/resolve.mjs"
 import { claude } from "../src/adapters/claude.mjs";
 import { codex } from "../src/adapters/codex.mjs";
 import { dsh } from "../src/adapters/dsh.mjs";
+import { GATE_FILES } from "../src/lib/config.mjs";
 
 const policy = {
   presets: ["secrets", "git-safety", "gate-self"],
@@ -135,6 +136,10 @@ describe("路径与内容判定", () => {
     for (const file of ["/Users/u/.local/share/harness/evidence.key", "/Users/u/.local/share/harness/retired/evidence-1.key"]) {
       assert.equal(decide({ kind: "read", path: file }).decision, "deny", file);
     }
+  });
+
+  test("托管文件清单属于门禁改动", () => {
+    assert.ok(GATE_FILES.includes(".harness/managed-files.json"));
   });
 
   test("执行器入口受保护，规则与配置文件不受保护", () => {

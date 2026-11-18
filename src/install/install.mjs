@@ -660,7 +660,9 @@ export function installAll({ cwd, takeOver = false }) {
   const root = repoRoot(cwd);
   loadKey();
   const published = publishVersion();
-  writeRules({ root, version: published.version });
+  const pinned = pinnedVersion(root);
+  const previousRoot = pinned ? join(versionDir(pinned), "assets") : null;
+  writeRules({ root, version: published.version, previousRoot });
   // 旧版生成过带本机绝对路径的入口脚本，入口改为 shim 后不再需要。
   for (const name of ["claude-hook.mjs", "codex-hook.mjs"]) rmSync(join(root, ".harness", "bin", name), { force: true });
   const shim = writeShim({ root });

@@ -36,6 +36,8 @@
 
 - 升级前先读 `CHANGELOG.md` 里从当前版本到目标版本的各段，向用户说明对该项目的影响。
 - `upgrade` 只重写规则、模板、入口和钩子，不改 `config.json`、`policy.json`、`verify.json`。
+  `.harness/managed-files.json` 记录托管规则与模板的哈希；`upgrade --dry-run` 和正式升级发现本地修改、非普通文件或符号链接时都会停止并列出冲突。
+  先把项目自己的说明迁到 `AGENTS.md` 托管块之外；`upgrade --force` 只用于用户明确确认覆盖这些冲突，由人执行，Agent 不得用它绕过保护。
   它结束时会列出“尚未配置的可选项”，Agent 把这段原样转述给用户，不要概括成“都没开”。
 - 对列出的每一项，按项目实际情况给出建议，分四类汇报：
   - `risk`、`testFirst`、`coverage` 都有 `observe` 模式，只记录、不拦截。建议在升级任务里一并加上 `observe` 配置，由用户确认；`testFirst` 与 `coverage` 的命令按“接入项目”里同样的方式在基线上试跑，推断不出的列为待补，不要猜。
@@ -270,7 +272,7 @@ harness review-plan --branch <任务分支> [--all]
 
 ## 门禁改动
 
-`.harness/config.json`、`policy.json`、`verify.json`、`rules/**` 允许直接修改，改动会被记录并在交付前（`merge` 或 `submit`）要求人工确认（`harness confirm --branch <分支>`）。
+`.harness/config.json`、`policy.json`、`verify.json`、`managed-files.json`、`rules/**` 允许直接修改，改动会被记录并在交付前（`merge` 或 `submit`）要求人工确认（`harness confirm --branch <分支>`）。
 `.harness/bin/**` 是执行器入口，`.husky/**`、`.githooks/**`、`.claude/settings.json`、`.codex/hooks.json` 是客户端与 git 钩子的入口。
 它们只由 `harness install`（或 `init`、`upgrade`）生成，Agent 不能手改，但可以在任务分支运行这些命令重新生成；改动同样在交付前要求人工确认。
 

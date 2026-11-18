@@ -1,5 +1,6 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { createHash } from "node:crypto";
+import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join, sep } from "node:path";
 import { PACKAGE_ROOT } from "../policy/resolve.mjs";
 
 export const MARK_START = "<!-- harness:start -->";
@@ -48,30 +49,147 @@ const RULE_SOURCES = [
   "rules/method-requirements.md",
   "rules/method-diagnosis.md",
   "rules/method-test-design.md",
+  "rules/method-backfill-tests.md",
   "rules/method-design-planning.md",
   "rules/method-review.md",
   "rules/method-retrospective.md",
   "templates/acceptance.md",
   "templates/spec.md",
   "templates/plan.md",
+  "templates/test-backfill.md",
 ];
 
-/** 随版本分发、会被 upgrade 整份重写的规则与模板：[.harness 下的相对路径, 内容]。 */
+/** 随版本分发的规则与模板：[.harness 下的相对路径, 内容]。 */
 export function ruleEntries() {
   return RULE_SOURCES.filter((rel) => existsSync(assetPath(rel))).map((rel) => [rel, readFileSync(assetPath(rel), "utf8")]);
 }
 
-/** 写入项目内的规则文件（项目自有，可改，可随版本升级重写）。 */
-export function writeRules({ root, version }) {
-  const write = (rel, content) => {
-    const target = join(root, ".harness", rel);
-    mkdirSync(dirname(target), { recursive: true });
-    writeFileSync(target, content);
-    return `.harness/${rel}`;
+export const MANAGED_MANIFEST = ".harness/managed-files.json";
+const MANAGED_PATH = /^(rules|templates)\/[a-z0-9][a-z0-9.-]*\.md$/;
+const sha = (text) => createHash("sha256").update(text).digest("hex");
+
+function readRegular(file) {
+  try {
+    const stat = lstatSync(file);
+    if (stat.isSymbolicLink()) return { exists: true, text: null, problem: "符号链接" };
+    if (!stat.isFile()) return { exists: true, text: null, problem: "不是普通文件" };
+    return { exists: true, text: readFileSync(file, "utf8"), problem: null };
+  } catch (error) {
+    if (error.code === "ENOENT") return { exists: false, text: null, problem: null };
+    throw error;
+  }
+}
+
+function parentProblem(root, rel) {
+  let current = root;
+  for (const part of dirname(rel).split(sep)) {
+    if (!part || part === ".") continue;
+    current = join(current, part);
+    try {
+      const stat = lstatSync(current);
+      if (stat.isSymbolicLink()) return `父目录是符号链接: ${current}`;
+      if (!stat.isDirectory()) return `父路径不是目录: ${current}`;
+    } catch (error) {
+      if (error.code === "ENOENT") return null;
+      throw error;
+    }
+  }
+  return null;
+}
+
+function manifestState(root) {
+  const found = readRegular(join(root, MANAGED_MANIFEST));
+  if (found.problem) return { files: null, problem: `${MANAGED_MANIFEST} 是${found.problem}` };
+  if (!found.exists) return { files: null, problem: null };
+  try {
+    const parsed = JSON.parse(found.text);
+    if (parsed?.version !== 1 || !parsed.files || typeof parsed.files !== "object" || Array.isArray(parsed.files) || Object.keys(parsed).sort().join(",") !== "files,version") {
+      return { files: null, problem: `${MANAGED_MANIFEST} 格式无效` };
+    }
+    for (const [rel, hash] of Object.entries(parsed.files)) {
+      if (!MANAGED_PATH.test(rel) || typeof hash !== "string" || !/^[a-f0-9]{64}$/.test(hash)) {
+        return { files: null, problem: `${MANAGED_MANIFEST} 含无效文件或哈希` };
+      }
+    }
+    return { files: parsed.files, problem: null };
+  } catch {
+    return { files: null, problem: `${MANAGED_MANIFEST} 不是有效 JSON` };
+  }
+}
+
+function previousHash(previousRoot, rel) {
+  if (!previousRoot) return null;
+  const found = readRegular(join(previousRoot, rel));
+  return found.exists && !found.problem ? sha(found.text) : null;
+}
+
+/** 计算托管规则变更。旧项目没有清单时，以锁定版本的已安装资源作为比较基线。 */
+export function planManagedRules({ root, previousRoot = null, force = false }) {
+  const entries = ruleEntries();
+  const desired = Object.fromEntries(entries.map(([rel, content]) => [rel, sha(content)]));
+  const manifest = manifestState(root);
+  const old = manifest.files ?? {};
+  const conflicts = [];
+  const conflict = (path, reason, forceable = true) => {
+    if (!force || !forceable) conflicts.push({ path, reason });
   };
-  const written = ruleEntries().map(([rel, content]) => write(rel, content));
-  write("VERSION", `${version}\n`);
-  return written;
+  if (manifest.problem) conflict(MANAGED_MANIFEST, manifest.problem);
+  const actions = [];
+  for (const rel of [...new Set([...Object.keys(old), ...Object.keys(desired)])].sort()) {
+    const path = `.harness/${rel}`;
+    const parent = parentProblem(root, path);
+    if (parent) conflict(path, parent, false);
+    const current = readRegular(join(root, path));
+    if (current.problem) conflict(path, current.problem);
+    const currentHash = current.exists && !current.problem ? sha(current.text) : null;
+    const wanted = Object.hasOwn(desired, rel) ? desired[rel] : null;
+    const previous = manifest.files ? old[rel] : previousHash(previousRoot, rel);
+    if (current.exists && currentHash !== wanted && currentHash !== previous) {
+      conflict(path, previous ? "内容在上次托管写入后被修改" : "本地修改或归属不明");
+    }
+    if (wanted === null) {
+      if (current.exists && currentHash === previous) actions.push({ action: "删除", path, rel, content: null });
+    } else if (!current.exists) actions.push({ action: "新增", path, rel, content: entries.find(([name]) => name === rel)[1] });
+    else if (currentHash !== wanted) actions.push({ action: "更新", path, rel, content: entries.find(([name]) => name === rel)[1] });
+  }
+  const manifestText = `${JSON.stringify({ version: 1, files: desired }, null, 2)}\n`;
+  const currentManifest = readRegular(join(root, MANAGED_MANIFEST));
+  const manifestChanged = !currentManifest.exists || currentManifest.text !== manifestText;
+  return { actions, conflicts, manifestText, manifestChanged };
+}
+
+export function managedConflictError(plan) {
+  if (plan.conflicts.length === 0) return null;
+  return new Error(
+    `托管文件冲突:\n${plan.conflicts.map(({ path, reason }) => `  - ${path}: ${reason}`).join("\n")}\n` +
+      "先把项目自己的说明迁到 AGENTS.md 托管块之外；确认用当前版本覆盖这些托管文件时，由人明确运行 upgrade --force",
+  );
+}
+
+/** 写入托管规则、模板及其内容清单；默认拒绝覆盖本地修改或跟随符号链接。 */
+export function writeRules({ root, version, previousRoot = null, force = false }) {
+  const plan = planManagedRules({ root, previousRoot, force });
+  const problem = managedConflictError(plan);
+  if (problem) throw problem;
+  for (const item of plan.actions) {
+    const target = join(root, item.path);
+    if (item.action === "删除") {
+      rmSync(target, { force: true });
+      continue;
+    }
+    const current = readRegular(target);
+    if (current.problem) rmSync(target, { force: true });
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, item.content);
+  }
+  const manifestFile = join(root, MANAGED_MANIFEST);
+  if (readRegular(manifestFile).problem) rmSync(manifestFile, { force: true });
+  mkdirSync(dirname(manifestFile), { recursive: true });
+  if (plan.manifestChanged) writeFileSync(manifestFile, plan.manifestText);
+  const versionFile = join(root, ".harness", "VERSION");
+  mkdirSync(dirname(versionFile), { recursive: true });
+  writeFileSync(versionFile, `${version}\n`);
+  return plan.actions.map(({ path }) => path);
 }
 
 export function managedBlockBody() {

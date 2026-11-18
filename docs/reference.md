@@ -81,7 +81,8 @@ Agent 调用工具 ----> [1] 实时拦截：读写文件、执行命令之前按
 | --- | --- | --- |
 | `.harness/config.json`、`policy.json`、`verify.json` | 项目参数、拦截规则、检查映射 | 是 |
 | `.harness/golden/tasks.json` | 项目自己的黄金任务，以及对内置用例的覆盖与停用 | 是 |
-| `.harness/rules/`、`.harness/templates/` | 给 Agent 读的研发规范，以及验收清单、行为说明、实施方案模板，`upgrade` 会整份重写 | 是 |
+| `.harness/rules/`、`.harness/templates/` | 给 Agent 读的研发规范，以及验收、方案与补测模板；`upgrade` 按托管哈希更新，冲突时停止 | 是 |
+| `.harness/managed-files.json` | 托管规则与模板的 SHA-256 清单，用于识别本地修改；属于门禁文件 | 是 |
 | `.harness/acceptance/` | 验收清单 | 是 |
 | `.harness/pitfalls.md` | 本项目反复踩的坑与做法，由 `harness pitfall` 维护；项目自有，`upgrade` 不覆盖，不属于门禁文件 | 是 |
 | `.harness/bin/harness`、`.harness/VERSION` | 入口与锁定的版本号 | 是 |
@@ -216,7 +217,7 @@ node ~/github/harness/bin/harness.mjs sync                                    # 
 
 ### init 写了什么
 
-1. `.harness/` 下的 `config.json`、`policy.json`、`verify.json`、`golden/tasks.json`、`rules/`、`templates/`、`VERSION` 和空的 `acceptance/`。
+1. `.harness/` 下的 `config.json`、`policy.json`、`verify.json`、`golden/tasks.json`、`rules/`、`templates/`、`managed-files.json`、`VERSION` 和空的 `acceptance/`。
    已存在的 `config.json`、`policy.json`、`verify.json` 保持不动，加 `--force` 才覆盖；已有的 `golden/tasks.json` 始终保留。
    `golden/tasks.json` 只是放项目自己用例的空文件，规则回归用的内置用例随 harness 版本分发，不拷进项目。
    另外补一个只有说明的 `.harness/pitfalls.md`（坑位记录），已有的文件始终保留，见“坑位记录”。
@@ -1157,7 +1158,7 @@ Agent 按“正确做法”改道即可，实时拦截每次都会记进账本�
 
 以下文件属于门禁，改动它们的分支合并前要由人确认：
 
-- `.harness/config.json`、`VERSION`、`policy.json`、`verify.json`、`golden/**`、`rules/**`、`bin/**`。
+- `.harness/config.json`、`VERSION`、`policy.json`、`verify.json`、`golden/**`、`managed-files.json`、`rules/**`、`bin/**`。
 - `.claude/settings.json`、`.codex/hooks.json`、`.githooks/**`、`.husky/**`（包括子目录里的 `.husky/`）、配置的 `git.hooksDir`。
 - `governance.gatePaths` 里追加的路径。
 
@@ -1454,9 +1455,13 @@ git commit -m "chore(harness): 升级到 <版本>" -m "- 更新入口锁定的�
 ```
 
 然后按日常任务的流程 verify、review、confirm、merge。
-`upgrade` 安装新版本、改写入口锁定的版本、重新生成钩子与客户端配置，并整份重写 `rules/` 与 `templates/`。
-`upgrade --dry-run` 只比对并列出会新增或更新的规则、模板、版本标记、入口与 `AGENTS.md` 托管块，以及会被移除的黄金任务旧副本；它不写文件、不安装版本目录，钩子与客户端配置在正式升级时才重新生成，预览里不逐项比对。
-`upgrade` 只接受 `--dry-run`，其他参数一律报错，不会被忽略。
+`upgrade` 安装新版本、改写入口锁定的版本、重新生成钩子与客户端配置，并按 `.harness/managed-files.json` 的 SHA-256 清单更新 `rules/` 与 `templates/`。
+如果文件在上次托管写入后被修改，或者是符号链接、非普通文件，预览与正式升级都会列出冲突并停止，不能跟随符号链接写入目标。
+旧项目还没有清单时，harness 用 `.harness/VERSION` 对应的已安装资源判断文件是否被本地修改；无法确定归属时同样按冲突停止。
+先把项目自己的说明迁到 `AGENTS.md` 托管块之外；确认要用当前版本覆盖冲突文件时，由人在自己的终端明确运行 `upgrade --force`，Agent 不得自行使用。
+`--force` 只覆盖托管规则、模板与清单，不改变配置文件的保留规则，也不会穿过符号链接父目录。
+`upgrade --dry-run` 列出会新增、更新或删除的托管文件、版本标记、入口与 `AGENTS.md` 托管块，以及会被移除的黄金任务旧副本；它不写文件、不安装版本目录，钩子与客户端配置在正式升级时才重新生成，预览里不逐项比对。
+预览有冲突时退出码为 1；`upgrade` 只接受 `--dry-run` 与 `--force`，其他参数一律报错，不会被忽略。
 `AGENTS.md` 里的托管块也会刷新，块外的内容保持不动。
 `config.json`、`policy.json`、`verify.json` 保持不动，新版本带来的可选预设与配置要自己加，见 `CHANGELOG.md` 的升级说明。
 `upgrade` 结束时列出这个项目还没配置的 `risk`、`testFirst`、`coverage`、`requiredPaths`，以及本地交付下的 `delivery.push`，并标明前三项有 `observe` 模式、只记录不拦截，`requiredPaths` 配置后会直接拦截，`delivery.push` 授予推送主分支的权限；它只提示，不写这些文件。
@@ -1465,7 +1470,7 @@ Agent 按升级规则把这段转述给你，并建议在升级任务里加上�
 内置黄金任务随版本自动更新，新版本新增或修改的内置用例升级后直接生效。
 `golden/tasks.json` 里项目自己的用例不动；只有与当前内置用例完全相同的旧副本会被移除，免得盖住以后的内置更新。
 与内置同 id 但内容不同的用例保留，`upgrade` 会列出它们：是自己改过的就留着，只是旧版本的拷贝就删掉。
-项目自己的研发规范不要写在 `.harness/rules/` 里，下次升级会被覆盖，写在 `AGENTS.md` 托管块之外即可。
+项目自己的研发规范不要写在 `.harness/rules/` 里；升级会把它们识别为冲突，先迁移到 `AGENTS.md` 托管块之外再继续。
 合并后 harness 用新入口刷新主 Worktree 的本机钩子，并列出客户端需要做的事。
 
 其他成员拿到这次升级：
@@ -1679,6 +1684,17 @@ TDD 当前实现与还原实现的测试、coverage 子命令同样保留已知�
 
 `init` 不生成 `testFirst` 与 `coverage`：测试与覆盖率命令因项目而异，推断不出真实命令就不猜。
 接入规则要求 Agent 按项目真实的工具配置，`mode` 先写 `observe`。
+
+#### 遗留补测
+
+用户要求系统补齐既有测试时，Agent 按 `.harness/rules/method-backfill-tests.md` 工作，并用 `.harness/templates/test-backfill.md` 维护唯一盘点与批次清单。
+先完整只读盘点 Git 可见的生产文件、测试、配置、用户可观察功能、各层 runner 和基线命令，再按安全与权限风险、核心链路、外部边界、历史失败等因素排序；覆盖率只作辅助证据，首批预算不能截断后续候选。
+单元、集成与 E2E 按实际行为边界选择，不适用层须有场景理由，缺 runner 或环境不等于不适用。
+
+补测只修改测试、夹具和明确需要的测试基础设施，不修改生产代码。
+既有失败只阻塞相关候选，独立候选继续；需要生产修复时另走有授权的缺陷修复流程，再重新盘点。
+逐条记录目标用例与回归的通过、失败、阻塞和未评估状态。
+计划完成、结构齐全或命令退出 0 都不证明覆盖质量，交付前仍须复核具体行为、独立期望值、断言和适用层，再执行项目的验证、独立评审与交付流程。
 
 `init` 生成的起始检查：
 
@@ -2074,7 +2090,7 @@ Agent 完成任务后的汇报里要带一行代码评审的评审者，方案�
 | `pitfall add --signature <特征> --symptom <现象> --fix <做法>`、`pitfall list [--flagged]` | 记录与查看本项目反复踩的坑，见“坑位记录” |
 | `init [--dry-run] [--take-over] [--force]` | 接入当前项目，`--dry-run` 只预览 |
 | `install [--take-over]`、`install --local`、`install --version <版本>` | 重新生成入口、钩子与客户端配置；`--local` 只刷新本机，不改入库文件；`--version` 只把指定版本装进版本目录 |
-| `upgrade [--dry-run]` | 把项目升级到运行它的 harness 版本；`--dry-run` 只预览将新增或更新的文件，不写任何文件 |
+| `upgrade [--dry-run] [--force]` | 把项目升级到运行它的 harness 版本；`--dry-run` 只预览且冲突时退出 1；`--force` 由人明确覆盖托管规则、模板与清单冲突 |
 | `uninstall [--dry-run] [--purge]` | 解除接入 |
 | `versions`、`prune [--keep <v,...>] [--dry-run]` | 列出、清理本机安装的版本 |
 | `publish [--version <v>]`、`version` | 把当前代码装进版本目录，`--version` 只能是当前代码的版本；打印版本号 |

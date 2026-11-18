@@ -20,7 +20,7 @@
 
 <script src="assets/docs.js?v=acdbbf2b96" defer></script>
 </head>
-<body data-page="architecture" data-index="7cc4e54085">
+<body data-page="architecture" data-index="80cb5b3465">
 <a class="skip-link" href="#main-content">跳到主要内容</a>
 <header class="topbar">
   <div class="topbar-inner">
@@ -186,7 +186,7 @@
       <tbody>
         <tr><td><code>.harness/config.json</code>、<code>policy.json</code>、<code>verify.json</code></td><td>项目参数、拦截规则、检查映射</td><td>是</td></tr>
         <tr><td><code>.harness/golden/tasks.json</code></td><td>对规则本身的回归用例（黄金任务）</td><td>是</td></tr>
-        <tr><td><code>.harness/rules/</code>、<code>.harness/templates/</code></td><td>给 Agent 读的研发规范与模板，升级时整份重写</td><td>是</td></tr>
+        <tr><td><code>.harness/rules/</code>、<code>.harness/templates/</code></td><td>给 Agent 读的研发规范与模板，升级时按 <code>managed-files.json</code> 的哈希更新，本地修改或符号链接形成冲突</td><td>是</td></tr>
         <tr><td><code>.harness/bin/harness</code>、<code>.harness/VERSION</code></td><td>入口与锁定的版本号</td><td>是</td></tr>
         <tr><td><code>.claude/settings.json</code>、<code>.codex/hooks.json</code></td><td>客户端的实时拦截配置</td><td>是</td></tr>
         <tr><td><code>AGENTS.md</code> 托管块</td><td>Agent 每次都会加载的硬性要求</td><td>是</td></tr>

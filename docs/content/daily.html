@@ -67,6 +67,10 @@ docs/update-install-guide</code></pre></div>
     <p>直接实施和先方案后实施的任务都要写清单，放在 <code>.harness/acceptance/&lt;分支名&gt;.md</code>，分支名里的 <code>/</code> 等字符换成 <code>-</code>，例如 <code>feature/login</code> 对应 <code>feature-login.md</code>。小任务只写适用的几条即可，每条对应测试、命令或人工验证。没有清单时评审只评工程质量；<code>intent.mode</code> 设为 <code>required</code> 时没有清单不能合并。</p>
     <p>默认都是合并前验收。确实需要目标分支集成状态时，把条目写进“合并后验收”章节，并配置对应的 <code>post-merge</code> 检查；只写章节却没有对应检查时，验证会明确失败，不会让这条义务悄悄漏掉。</p>
 
+    <h3 id="backfill-tests">遗留补测</h3>
+    <p>需要系统补齐既有测试时，Agent 按 <code>.harness/rules/method-backfill-tests.md</code> 先完整只读盘点，再用 <code>.harness/templates/test-backfill.md</code> 统一记录功能、已有覆盖、具体缺口、测试能力与有序批次。按风险而不是覆盖率数字排序，首批预算不能把后续缺口删掉。</p>
+    <p>补测只修改测试、夹具与必要的测试基础设施，不顺手修改生产代码。既有失败只阻塞相关候选，独立候选继续；计划完成或命令退出 0 不代表覆盖完整，交付前还要核对具体用例、断言与适用层。</p>
+
     <h3 id="commit-msg">提交信息</h3>
     <p>提交信息规范只在 <code>.harness/policy.json</code> 的 <code>commit-message</code> 规则里定义一处，<code>commit-msg</code> 钩子、<code>verify</code> 与 <code>review</code> 的前置检查、<code>status</code> 和合并共用同一份判定。可以直接约定描述用什么语言（<code>lang</code> 取 <code>zh</code>、<code>en</code> 或 <code>any</code>）、允许的类型、标题长度与正文格式。</p>
     <div class="code"><pre><code>git commit -m "feat(login): 支持短信验证码登录" -m "- 新增验证码发送与校验接口
