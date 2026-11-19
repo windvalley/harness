@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { userInfo } from "node:os";
 import { join } from "node:path";
 import { acceptancePath, loadGateProject, mainBranch, trustedMainRef } from "../lib/config.mjs";
-import { acceptanceDigest, describeAcceptanceChange } from "../lib/acceptance.mjs";
+import { acceptanceDigest, describeAcceptanceChange, hasSectionedDigest } from "../lib/acceptance.mjs";
 import { matchAny } from "../lib/glob.mjs";
 import { changedPaths, git, mergeBase, refExists, resolveCommit, showBlob } from "../lib/git.mjs";
 import { appendLedger, readRecord, writeRecord } from "../lib/store.mjs";
@@ -90,15 +90,44 @@ export function approvalState({ root, branch, acceptanceText, at }) {
   if (found.record.branch !== branch) return { approved: false, reason: `授权记录属于分支 ${found.record.branch}` };
   if (acceptanceText === null || acceptanceText === undefined) return { approved: false, reason: "缺少验收清单" };
   if (found.record.acceptanceHash !== sha(acceptanceText)) {
-    // 只报“改过”会让人自己 diff；授权时存了逐条摘要时顺带说清改了哪个章节、增删几条。
-    const change = found.record.acceptanceLines ? describeAcceptanceChange(found.record.acceptanceLines, acceptanceDigest(acceptanceText)) : null;
-    return { approved: false, reason: `授权之后验收清单又改过${change ? `（${change}）` : ""}，需要向用户说明改动并重新取得同意` };
+    // 只报“改过”会让人自己 diff；有可比的摘要时顺带说清改了哪个章节、增删几条。
+    return { approved: false, reason: `授权之后验收清单又改过${describeChange({ root, record: found.record, acceptanceText })}，需要向用户说明改动并重新取得同意` };
   }
   if (found.record.stages) {
     const problem = stageApprovalProblem({ root, branch, link: found.record.stages, acceptanceText, at });
     if (problem) return { approved: false, reason: problem };
   }
   return { approved: true, record: found.record };
+}
+
+/**
+ * 授权清单的差异说明。记录里有带章节的摘要时直接比；
+ * 更早的记录只存了粗粒度数组，先按授权时的提交把原清单读回来重算摘要，读不回来就不给差异，不猜。
+ */
+function describeChange({ root, record, acceptanceText }) {
+  const current = acceptanceDigest(acceptanceText);
+  const recorded = record.acceptanceLines;
+  if (hasSectionedDigest(recorded)) {
+    const change = describeAcceptanceChange(recorded, current);
+    return change ? `（${change}）` : "";
+  }
+  const original = restoreAcceptance({ root, record });
+  if (original === null) return "";
+  const change = describeAcceptanceChange(acceptanceDigest(original), current);
+  return change ? `（${change}）` : "";
+}
+
+/** 授权时提交里的验收清单；记录里没写提交或对应文件取不到时返回 null。 */
+function restoreAcceptance({ root, record }) {
+  if (!record.branchCommit || typeof record.branchCommit !== "string") return null;
+  const path = record.acceptancePath ?? `.harness/acceptance/${record.branch.replace(/[^0-9A-Za-z._-]+/g, "-")}.md`;
+  try {
+    const text = showBlob(root, record.branchCommit, path);
+    if (typeof text === "string" && sha(text) === record.acceptanceHash) return text;
+  } catch {
+    // 提交已被清理：按“无法还原”处理，不给差异。
+  }
+  return null;
 }
 
 /** 分支的授权记录（只认能通过校验、属于这个分支的），没有时返回 null。 */
@@ -187,8 +216,9 @@ export function riskHints({ root, project, base, head, branch }) {
 /** 有授权记录但不通过校验时返回原因；没有记录属于正常阶段，返回 null，交给上面的通用提示。 */
 function staleApproval({ root, project, branch }) {
   try {
+    // 清单被删除时把 null 交给 approvalState：它能区分“从没授权”和“授权过但清单没了”，
+    // 提前返回会把后者说成普通的“要实施授权”，把真正的原因吞掉。
     const text = showBlob(root, branch, acceptancePath(project, branch));
-    if (text === null) return null;
     const state = approvalState({ root, branch, acceptanceText: text });
     if (state.approved || /还没有记录用户的实施授权/.test(state.reason)) return null;
     return state.reason.replace(/，需要向用户说明改动并重新取得同意$/, "");
@@ -286,6 +316,8 @@ export function approvePlan({ cwd, branch, note = "", stages = null, fromStages 
     branchCommit: summary.branchCommit,
     acceptanceHash: sha(summary.acceptance),
     acceptanceLines: acceptanceDigest(summary.acceptance),
+    // 记下清单路径：旧记录要按授权时的提交还原原清单才能给出章节级差异。
+    acceptancePath: summary.acceptancePath,
     planFiles: summary.planFiles,
     by,
     note: quote,
@@ -339,6 +371,7 @@ function deriveStage({ cwd, branch, note, file, stage }) {
     branchCommit: summary.branchCommit,
     acceptanceHash: sha(summary.acceptance),
     acceptanceLines: acceptanceDigest(summary.acceptance),
+    acceptancePath: summary.acceptancePath,
     planFiles: summary.planFiles,
     by: userInfo().username,
     note: grant.note,

@@ -2,8 +2,9 @@ import { createHash } from "node:crypto";
 
 const HEADING = /^##\s+(.+?)\s*$/;
 const POST_MERGE = /^(?:合并后验收|post-merge(?:\s+acceptance)?)$/i;
-// 只对能说明“改了什么”的内容行取摘要：空行与标题不计，避免排版变化被说成条目变化。
+// 内容行不含标题：标题措辞变化说明不了需求变没变，单独用“标题变化”一句带过。
 const CONTENT_HEADING = /^#{1,6}\s/;
+const UNCATEGORIZED = "(未分类)";
 
 /** 旧清单默认全部属于合并前；只有显式命名同级章节的内容才后置。 */
 export function splitAcceptance(text) {
@@ -25,30 +26,63 @@ export function splitAcceptance(text) {
   };
 }
 
-function contentDigests(text) {
-  return String(text ?? "")
-    .split("\n")
+/** 按二级标题把清单分段：段名就是章节，没有章节的内容归到“未分类”。 */
+function sections(text) {
+  const out = new Map();
+  let current = UNCATEGORIZED;
+  const push = (line) => {
+    if (!out.has(current)) out.set(current, []);
+    out.get(current).push(line);
+  };
+  for (const line of String(text ?? "").replace(/<!--[\s\S]*?-->/g, "").split("\n")) {
+    const heading = line.match(HEADING);
+    if (heading) {
+      current = heading[1].trim();
+      continue;
+    }
+    push(line);
+  }
+  return out;
+}
+
+const hash = (line) => createHash("sha256").update(line).digest("hex").slice(0, 12);
+
+function contentDigests(lines) {
+  return (lines ?? [])
     .map((line) => line.trim())
     .filter((line) => line !== "" && !CONTENT_HEADING.test(line))
-    .map((line) => createHash("sha256").update(line).digest("hex").slice(0, 12));
+    .map(hash);
+}
+
+function sectionDigest(text) {
+  const out = {};
+  for (const [name, lines] of sections(text)) {
+    const hashes = contentDigests(lines);
+    if (hashes.length > 0) out[name] = hashes;
+  }
+  return out;
 }
 
 /**
- * 授权时保存的清单摘要：按合并前与合并后验收两段记下每条内容行的哈希。
- * 只存哈希不存原文，既能说清“哪个章节增删了几条”，又不会把验收内容复制到别处。
+ * 授权时保存的清单摘要：按合并前与合并后验收两段，各自再按章节记下每条内容行的哈希。
+ * 只存哈希不存原文；带章节是因为同一条从「应该发生」移到「绝对不能发生」时，需求已经反转，
+ * 不分章节会把这种改写报告成“排版变化”。
  */
 export function acceptanceDigest(text) {
   const { preMergeText, postMergeText } = splitAcceptance(text);
-  return { preMerge: contentDigests(preMergeText), postMerge: contentDigests(postMergeText) };
+  // 合并后验收章节本身就按后置判断，它下面的内容不再细分章节，统一记在这个名字下。
+  const postMerge = sectionDigest(postMergeText);
+  const named = postMerge[UNCATEGORIZED] ? { 合并后验收: postMerge[UNCATEGORIZED] } : postMerge;
+  return { preMerge: sectionDigest(preMergeText), postMerge: named };
 }
 
 function diffCounts(before, after) {
   const remaining = new Map();
-  for (const hash of before) remaining.set(hash, (remaining.get(hash) ?? 0) + 1);
+  for (const hashValue of before) remaining.set(hashValue, (remaining.get(hashValue) ?? 0) + 1);
   let added = 0;
-  for (const hash of after) {
-    const count = remaining.get(hash) ?? 0;
-    if (count > 0) remaining.set(hash, count - 1);
+  for (const hashValue of after) {
+    const count = remaining.get(hashValue) ?? 0;
+    if (count > 0) remaining.set(hashValue, count - 1);
     else added += 1;
   }
   let removed = 0;
@@ -56,17 +90,43 @@ function diffCounts(before, after) {
   return { added, removed };
 }
 
+function unionKeys(...maps) {
+  return [...new Set(maps.flatMap((map) => Object.keys(map ?? {})))];
+}
+
+/** 一段（合并前或合并后）里各章节的增删。 */
+function describePart(before, after) {
+  const parts = [];
+  for (const name of unionKeys(before, after)) {
+    const { added, removed } = diffCounts(before?.[name] ?? [], after?.[name] ?? []);
+    if (added === 0 && removed === 0) continue;
+    parts.push({ name, changes: [added > 0 ? `新增 ${added} 条` : null, removed > 0 ? `删除 ${removed} 条` : null].filter(Boolean).join("、") });
+  }
+  return parts;
+}
+
+/** 摘要是不是带章节的新格式；旧记录是纯哈希数组，没有章节信息。 */
+export function hasSectionedDigest(digest) {
+  const isMap = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
+  return isMap(digest?.preMerge) || isMap(digest?.postMerge);
+}
+
 /**
- * 授权失效时说清清单改了什么。摘要相同但全文哈希不同（空行、排版、标题措辞）时如实说明，
- * 避免只报“清单改过”又给不出任何可核对的差异。
+ * 授权失效时说清清单改了什么：哪个章节增删几条。
+ * 摘要相同但全文哈希不同（空行、标题措辞）时如实说明没有内容行变化，避免只报“清单改过”又给不出可核对的差异。
+ * 旧记录的摘要没有章节，调用方应先用原文还原；这里返回 null 表示分不出章节级差异。
+ * 只报章节与条数，不报条目原文：摘要里只有哈希。
  */
 export function describeAcceptanceChange(before, after) {
   if (!before || !after) return null;
+  if (!hasSectionedDigest(before) || !hasSectionedDigest(after)) return null;
   const parts = [];
   for (const [key, label] of [["preMerge", "合并前"], ["postMerge", "合并后验收"]]) {
-    const { added, removed } = diffCounts(before[key] ?? [], after[key] ?? []);
-    if (added > 0 || removed > 0) parts.push(`${label} 新增 ${added} 条、删除 ${removed} 条`);
+    for (const { name, changes } of describePart(before[key], after[key])) {
+      // 合并后验收整段就是一项义务：不再重复章节名，避免“合并后验收「合并后验收 …」”。
+      parts.push(key === "postMerge" ? `${label} ${changes}` : `${label}「${name} ${changes}」`);
+    }
   }
-  if (parts.length === 0) return "只有空行、标题或排版变化";
+  if (parts.length === 0) return "没有内容行变化（只有空行、标题或排版变化）";
   return parts.join("；");
 }

@@ -93,8 +93,21 @@ function describeStagesChange(grant, text) {
     }
   }
   for (const id of before.keys()) if (!after.has(id)) parts.push(`删除阶段 ${id}`);
+  // 顺序本身决定交付条件：阶段派生按数组顺序检查前序是否已合入，换序不能算作无关改动。
+  // 只比共有阶段的相对顺序：在开头插入新阶段时，已有阶段的先后没变，由“新增阶段”覆盖。
+  const order = orderChange(grant.stages, stages);
+  if (order) parts.push(order);
   if (parts.length === 0) parts.push("只有排版或无关字段变化");
   return parts.join("；");
+}
+
+/** 共有阶段 id 的相对顺序是否变了；变了就给出改动前后的顺序。 */
+function orderChange(before, after) {
+  const shared = new Set(after.map((item) => item.id).filter((id) => before.some((item) => item.id === id)));
+  const beforeIds = before.map((item) => item.id).filter((id) => shared.has(id));
+  const afterIds = after.map((item) => item.id).filter((id) => shared.has(id));
+  if (beforeIds.join("\0") === afterIds.join("\0")) return null;
+  return `阶段顺序由 ${beforeIds.join(" -> ")} 改为 ${afterIds.join(" -> ")}`;
 }
 
 function nameHints(project, stages) {

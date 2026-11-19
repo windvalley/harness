@@ -342,11 +342,26 @@ describe("外部证据登记", () => {
   test("授权摘要按章节比出增删条数，排版变化不误报条目变化", () => {
     const before = acceptanceDigest("# 验收\n\n## 应该发生\n\n- 甲\n- 乙\n\n## 合并后验收\n\n- 冒烟通过\n");
     const sameLines = acceptanceDigest("# 验收\n\n## 应该发生\n\n\n- 甲\n\n- 乙\n\n### 小标题\n\n## 合并后验收\n\n- 冒烟通过\n");
-    assert.equal(describeAcceptanceChange(before, sameLines), "只有空行、标题或排版变化", "空行和标题不算条目变化");
+    assert.equal(describeAcceptanceChange(before, sameLines), "没有内容行变化（只有空行、标题或排版变化）", "空行和标题不算条目变化");
 
     const changed = acceptanceDigest("# 验收\n\n## 应该发生\n\n- 甲\n- 丙\n\n## 合并后验收\n");
-    assert.equal(describeAcceptanceChange(before, changed), "合并前 新增 1 条、删除 1 条；合并后验收 新增 0 条、删除 1 条");
+    assert.equal(describeAcceptanceChange(before, changed), "合并前「应该发生 新增 1 条、删除 1 条」；合并后验收 删除 1 条");
     assert.equal(describeAcceptanceChange(before, null), null);
+  });
+
+  test("同一条从「应该发生」移到「绝对不能发生」时指出两个章节的变化", () => {
+    const before = acceptanceDigest("# 验收\n\n## 应该发生\n\n- 甲\n- 会话自动续期\n\n## 绝对不能发生\n\n- 乙\n");
+    const moved = acceptanceDigest("# 验收\n\n## 应该发生\n\n- 甲\n\n## 绝对不能发生\n\n- 乙\n- 会话自动续期\n");
+    const described = describeAcceptanceChange(before, moved);
+    assert.match(described, /应该发生 删除 1 条/, "需求被反转，不能报成排版变化");
+    assert.match(described, /绝对不能发生 新增 1 条/);
+  });
+
+  test("没有章节的清单仍按未分类比较，旧摘要给不出章节差异时返回 null", () => {
+    const flat = acceptanceDigest("- 甲\n- 乙\n");
+    assert.equal(describeAcceptanceChange(flat, acceptanceDigest("- 甲\n- 丙\n")), "合并前「(未分类) 新增 1 条、删除 1 条」");
+    // 0.23 及更早的记录只存了粗粒度数组，没有章节信息：交给调用方按原文还原，不在这里猜。
+    assert.equal(describeAcceptanceChange({ preMerge: ["a"], postMerge: [] }, flat), null);
   });
 });
 

@@ -3,6 +3,7 @@ import { readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
 import { APPROVE, CONFIG, commit, fakeReviewer, git, makeRepo, sh, write } from "./helpers.mjs";
+import { writeRecord } from "../src/lib/store.mjs";
 
 let repos = [];
 afterEach(() => {
@@ -149,11 +150,11 @@ describe("先方案后实施", () => {
     git(repo.root, "checkout", "-q", "main");
 
     const status = repo.cli("status", "--branch", BRANCH);
-    assert.match(status.stdout, /合并前 新增 1 条、删除 1 条/, "要说出增删条数，不能让用户自己 diff");
+    assert.match(status.stdout, /合并前「应该发生 新增 1 条、删除 1 条」/, "要说出增删条数，不能让用户自己 diff");
     assert.match(status.stdout, /授权之后验收清单又改过/);
 
     const verify = repo.cli("verify", "--branch", BRANCH);
-    assert.match(verify.stderr, /RISK 实施授权已失效: 授权之后验收清单又改过（合并前 新增 1 条、删除 1 条）/, "verify 也要显示失效，而不是只给静态提示");
+    assert.match(verify.stderr, /RISK 实施授权已失效: 授权之后验收清单又改过（合并前「应该发生 新增 1 条、删除 1 条」）/, "verify 也要显示失效，而不是只给静态提示");
   });
 
   test("只有排版变化时说清楚没有条目增删", () => {
@@ -165,7 +166,58 @@ describe("先方案后实施", () => {
     commit(repo.root, "docs(login): 调整排版\n\n- 只加空行\n- 不改条目", { [ACCEPTANCE]: "## 应该发生\n\n\n- 甲\n" });
     git(repo.root, "checkout", "-q", "main");
 
-    assert.match(repo.cli("status", "--branch", BRANCH).stdout, /只有空行、标题或排版变化/);
+    assert.match(repo.cli("status", "--branch", BRANCH).stdout, /没有内容行变化（只有空行、标题或排版变化）/);
+  });
+
+  test("授权后把条目移进「绝对不能发生」时说明两个章节", () => {
+    const repo = setup();
+    repo.branch(BRANCH, { "src/big.js": code(10), [ACCEPTANCE]: "## 应该发生\n\n- 甲\n- 会话自动续期\n" });
+    assert.equal(repo.cli("approve", "--branch", BRANCH, "--yes", "--note", QUOTE).status, 0);
+
+    git(repo.root, "checkout", "-q", BRANCH);
+    commit(repo.root, "docs(login): 反转一条验收\n\n- 从应该发生移到绝对不能发生\n- 需求已经变化", {
+      [ACCEPTANCE]: "## 应该发生\n\n- 甲\n\n## 绝对不能发生\n\n- 会话自动续期\n",
+    });
+    git(repo.root, "checkout", "-q", "main");
+
+    const stdout = repo.cli("status", "--branch", BRANCH).stdout;
+    assert.match(stdout, /应该发生 删除 1 条/, "需求被反转，不能报成排版变化");
+    assert.match(stdout, /绝对不能发生 新增 1 条/);
+  });
+
+  test("删除验收清单后说明清单缺失，不退化成通用授权提示", () => {
+    const repo = setup();
+    repo.branch(BRANCH, { "src/big.js": code(10), [ACCEPTANCE]: "## 应该发生\n\n- 甲\n" });
+    assert.equal(repo.cli("approve", "--branch", BRANCH, "--yes", "--note", QUOTE).status, 0);
+
+    git(repo.root, "checkout", "-q", BRANCH);
+    git(repo.root, "rm", "-q", ACCEPTANCE);
+    commit(repo.root, "docs(login): 删除验收清单\n\n- 清单需要重写\n- 先看提示", {});
+    git(repo.root, "checkout", "-q", "main");
+
+    const line = repo.cli("verify", "--branch", BRANCH).stderr.split("\n").find((item) => item.includes("实施授权已失效")) ?? "";
+    assert.match(line, /缺少验收清单/, "已有授权但清单没了，与从未授权是两件事");
+  });
+
+  test("旧授权记录没有章节摘要时，按授权时的提交还原清单再比对", () => {
+    const repo = setup();
+    repo.branch(BRANCH, { "src/big.js": code(10), [ACCEPTANCE]: "## 应该发生\n\n- 甲\n- 乙\n" });
+    assert.equal(repo.cli("approve", "--branch", BRANCH, "--yes", "--note", QUOTE).status, 0);
+
+    // 把记录改写成 0.23 的格式（重新签名，模拟旧版本写下的记录）：没有 acceptanceLines，也没有 acceptancePath。
+    const file = join(repo.env.HARNESS_DATA_DIR, "plan", "feat-login.json");
+    const record = JSON.parse(readFileSync(file, "utf8"));
+    delete record.acceptanceLines;
+    delete record.acceptancePath;
+    delete record.keyId;
+    delete record.signature;
+    writeRecord(repo.root, "plan", "feat-login", record);
+
+    git(repo.root, "checkout", "-q", BRANCH);
+    commit(repo.root, "docs(login): 改一条验收\n\n- 改掉乙\n- 换成丙", { [ACCEPTANCE]: "## 应该发生\n\n- 甲\n- 丙\n" });
+    git(repo.root, "checkout", "-q", "main");
+
+    assert.match(repo.cli("status", "--branch", BRANCH).stdout, /应该发生 新增 1 条、删除 1 条/);
   });
 
   test("approve 摘要列出合并后检查及本次改动是否命中", () => {

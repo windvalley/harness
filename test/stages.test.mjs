@@ -309,6 +309,45 @@ describe("多阶段方案授权", () => {
     assert.match(text, /方案材料在授权后改过/);
   });
 
+  test("只交换阶段顺序时指出顺序变化，不当成排版变化", () => {
+    const repo = setup();
+    repo.branch(C1, carrierFiles());
+    assert.equal(approveStages(repo, C1).status, 0);
+
+    git(repo.root, "checkout", "-q", C1);
+    // 字段都不动，只把 s1 与 s2 的位置对调：阶段派生按数组顺序检查前序是否已合入。
+    writeFileSync(join(repo.root, FILE), json({ stages: [STAGES.stages[1], STAGES.stages[0], STAGES.stages[2]] }));
+    git(repo.root, "commit", "-q", "-am", "docs(alpha): 调整阶段顺序\n\n- 交换前两个阶段\n- 字段不变");
+    git(repo.root, "checkout", "-q", "main");
+
+    const text = status(repo, C1);
+    assert.match(text, /阶段顺序由 s1 -> s2 -> s3 改为 s2 -> s1 -> s3/, "换序改变交付条件，不能报成无关改动");
+    assert.doesNotMatch(text, /只有排版或无关字段变化/);
+  });
+
+  test("在开头插入新阶段时只报告新增，不误报顺序变化", () => {
+    const repo = setup();
+    repo.branch(C1, carrierFiles());
+    assert.equal(approveStages(repo, C1).status, 0);
+
+    git(repo.root, "checkout", "-q", C1);
+    const inserted = {
+      stages: [
+        { id: "s0", title: "准备", branch: "feat/alpha-0", acceptance: "docs/changes/alpha/s0.md" },
+        ...STAGES.stages,
+      ],
+    };
+    writeFileSync(join(repo.root, FILE), json(inserted));
+    writeFileSync(join(repo.root, "docs/changes/alpha/s0.md"), "- 阶段零验收\n");
+    git(repo.root, "add", "-A");
+    git(repo.root, "commit", "-q", "-m", "docs(alpha): 增加前置阶段\n\n- 新增 s0\n- 其余顺序不变");
+    git(repo.root, "checkout", "-q", "main");
+
+    const text = status(repo, C1);
+    assert.match(text, /新增阶段 s0/);
+    assert.doesNotMatch(text, /阶段顺序由/, "共有阶段的相对顺序没变");
+  });
+
   test("派生分支的清单改动、来源记录缺失或被改动时判为未授权，改回后恢复", () => {
     const repo = carrierLanded();
     repo.branch(D2, stageFiles(D2, STAGE_TEXT.s2, "beta"));
