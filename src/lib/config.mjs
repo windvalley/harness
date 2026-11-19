@@ -74,14 +74,15 @@ export function loadGuardProject(cwd) {
   }
   const root = probe.stdout.trim();
   let ref;
+  let commit;
   try {
     ref = trustedMainRef(root);
+    commit = resolveCommit(root, ref);
   } catch {
     ref = null;
   }
-  if (ref && showBlob(root, ref, `${PROJECT_DIR}/config.json`) !== null) {
-    return loadProject(root, { fromRef: ref, root });
-  }
+  // 判断与读取看同一个提交：主分支在两次调用之间前进时，不能按新树判断、按旧树读配置。
+  if (ref && hasConfigAt(root, commit)) return loadPinnedProject(root, { commit, label: ref, validateName: false });
   if (existsSync(join(root, PROJECT_DIR, "config.json"))) {
     return { ...loadProject(root, { root }), bootstrap: true };
   }
@@ -91,11 +92,20 @@ export function loadGuardProject(cwd) {
 /** at 给定时从主分支的那个提交读配置，调用方据此把“配置”与“基线”固定在同一个提交上。 */
 export function loadTrustedProject(cwd, { at } = {}) {
   const root = repoRoot(cwd);
-  const ref = at ?? trustedMainRef(root);
-  const project = loadProject(root, { fromRef: ref, root });
-  checkMainBranchName(root, project);
-  // 记下来源，verify 等命令据此显示“配置来自哪里”，任务分支改配置不生效这件事才看得见。
-  return { ...project, sourceRef: ref, sourceCommit: resolveCommit(root, ref) };
+  const ref = trustedMainRef(root);
+  const commit = resolveCommit(root, at ?? ref);
+  return loadPinnedProject(root, { commit, label: ref });
+}
+
+/**
+ * 从固定提交读配置。提交先解析成 SHA 再读文件：判断“是否已接入”和读全部配置必须看同一个提交，
+ * 否则主分支在两次读取之间前进时，会加载旧提交的检查集却标注新提交的来源。
+ */
+function loadPinnedProject(root, { commit, label, validateName = true }) {
+  const project = loadProject(root, { fromRef: commit, root });
+  // 拦截层只负责放行判定，配置里主分支名写错不该让每次工具调用都失败，由门禁命令去报。
+  if (validateName) checkMainBranchName(root, project);
+  return { ...project, sourceRef: label, sourceCommit: commit };
 }
 
 /**
@@ -119,7 +129,12 @@ function checkMainBranchName(root, project) {
 }
 
 export function harnessOnMain(root) {
-  return showBlob(root, trustedMainRef(root), `${PROJECT_DIR}/config.json`) !== null;
+  return hasConfigAt(root, resolveCommit(root, trustedMainRef(root)));
+}
+
+/** 这个提交上有没有接入配置；与读配置用同一个提交，避免判断和读取看到不同的树。 */
+function hasConfigAt(root, commit) {
+  return showBlob(root, commit, `${PROJECT_DIR}/config.json`) !== null;
 }
 
 /**
@@ -130,14 +145,18 @@ export function harnessOnMain(root) {
  */
 export function loadGateProject(cwd, { branch, at } = {}) {
   const root = repoRoot(cwd);
-  if (harnessOnMain(root)) return loadTrustedProject(root, { at });
+  // 先固定提交：判断是否已接入与读配置必须看同一个树，主分支在两次读取之间前进时不能错配。
   const mainRef = trustedMainRef(root);
+  const sourceCommit = resolveCommit(root, at ?? mainRef);
+  if (hasConfigAt(root, sourceCommit)) return loadPinnedProject(root, { commit: sourceCommit, label: mainRef });
   if (!branch) {
     throw new Error(`${mainRef} 上还没有 .harness/config.json：首次接入阶段请用 --branch <接入分支> 指定配置来源`);
   }
-  const project = loadProject(root, { fromRef: branch, root });
+  // 首次接入同样先固定接入分支的提交，避免读完一份配置后分支又前进。
+  const branchCommit = resolveCommit(root, branch);
+  const project = loadProject(root, { fromRef: branchCommit, root });
   checkMainBranchName(root, project);
-  return { ...project, bootstrap: true, bootstrapRef: branch, sourceRef: branch, sourceCommit: resolveCommit(root, branch) };
+  return { ...project, bootstrap: true, bootstrapRef: branch, sourceRef: branch, sourceCommit: branchCommit };
 }
 
 /**
