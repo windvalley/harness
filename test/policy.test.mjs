@@ -109,6 +109,15 @@ describe("预设解析", () => {
   test("未知预设直接报错", () => {
     assert.throws(() => resolvePolicy({ presets: ["nope"] }), /未知预设/);
   });
+
+  test("丢弃类拦截给出能真正撤销的写法：revert 该提交，文件级恢复用它的父提交", () => {
+    const preset = loadPreset("git-safety");
+    const rule = preset.rules.find((item) => item.id === "git-discard-changes");
+    assert.match(rule.fix, /git revert <该提交>/, "撤销自己刚做的提交用 revert");
+    // 只写 --source=<该提交> 时，HEAD 就是该提交，恢复是空操作；必须指向父提交。
+    assert.match(rule.fix, /git restore --source=<该提交>\^ -- <路径>/);
+    assert.doesNotMatch(rule.fix, /--source=<该提交>(?!\^)/);
+  });
 });
 
 describe("路径与内容判定", () => {

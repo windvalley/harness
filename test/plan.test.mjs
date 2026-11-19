@@ -139,6 +139,74 @@ describe("先方案后实施", () => {
     assert.match(schema.stderr, /改了库表相关文件 db\/migrations\/0002_add_user\.sql/);
   });
 
+  test("授权后改验收清单时，失效原因说明改了哪个章节、增删几条", () => {
+    const repo = setup();
+    repo.branch(BRANCH, { "src/big.js": code(10), [ACCEPTANCE]: "## 应该发生\n\n- 甲\n- 乙\n" });
+    assert.equal(repo.cli("approve", "--branch", BRANCH, "--yes", "--note", QUOTE).status, 0);
+
+    git(repo.root, "checkout", "-q", BRANCH);
+    commit(repo.root, "docs(login): 调整验收\n\n- 改掉一条验收\n- 补一条新验收", { [ACCEPTANCE]: "## 应该发生\n\n- 甲\n- 丙\n" });
+    git(repo.root, "checkout", "-q", "main");
+
+    const status = repo.cli("status", "--branch", BRANCH);
+    assert.match(status.stdout, /合并前 新增 1 条、删除 1 条/, "要说出增删条数，不能让用户自己 diff");
+    assert.match(status.stdout, /授权之后验收清单又改过/);
+
+    const verify = repo.cli("verify", "--branch", BRANCH);
+    assert.match(verify.stderr, /RISK 实施授权已失效: 授权之后验收清单又改过（合并前 新增 1 条、删除 1 条）/, "verify 也要显示失效，而不是只给静态提示");
+  });
+
+  test("只有排版变化时说清楚没有条目增删", () => {
+    const repo = setup();
+    repo.branch(BRANCH, { "src/big.js": code(10), [ACCEPTANCE]: "## 应该发生\n\n- 甲\n" });
+    assert.equal(repo.cli("approve", "--branch", BRANCH, "--yes", "--note", QUOTE).status, 0);
+
+    git(repo.root, "checkout", "-q", BRANCH);
+    commit(repo.root, "docs(login): 调整排版\n\n- 只加空行\n- 不改条目", { [ACCEPTANCE]: "## 应该发生\n\n\n- 甲\n" });
+    git(repo.root, "checkout", "-q", "main");
+
+    assert.match(repo.cli("status", "--branch", BRANCH).stdout, /只有空行、标题或排版变化/);
+  });
+
+  test("approve 摘要列出合并后检查及本次改动是否命中", () => {
+    const verify = {
+      version: 1,
+      docOnly: { match: ["docs/**", "**/*.md"], exclude: [] },
+      checks: [
+        { id: "unit", tier: "gate", when: ["src/**"], cmd: ["node", "-e", "process.exit(0)"] },
+        { id: "login-smoke", tier: "extended", phase: "post-merge", when: ["src/other/**"], reason: "需要合入后环境", howToVerify: "部署后实测" },
+      ],
+      fullSuiteTriggers: { paths: [] },
+    };
+    const repo = makeRepo({ project: { ".harness/verify.json": verify } });
+    repos.push(repo);
+    repo.branch(BRANCH, { "src/big.js": code(10), [ACCEPTANCE]: "- 大改动\n" });
+    const summary = repo.cli("approve", "--branch", BRANCH);
+    assert.equal(summary.status, 0, summary.stderr);
+    assert.match(summary.stdout, /login-smoke: 本次改动没有命中/, "交付时才发现会白干一轮，登记授权时就要看到");
+  });
+
+  test("账本记下授权的原话与清单指纹，记录被覆盖后仍可核对", () => {
+    const repo = setup();
+    repo.branch(BRANCH, { "src/big.js": code(10), [ACCEPTANCE]: "## 应该发生\n\n- 甲\n" });
+    assert.equal(repo.cli("approve", "--branch", BRANCH, "--yes", "--note", QUOTE).status, 0);
+
+    git(repo.root, "checkout", "-q", BRANCH);
+    commit(repo.root, "docs(login): 改验收\n\n- 追加一条验收\n- 说明改动原因", { [ACCEPTANCE]: "## 应该发生\n\n- 甲\n- 乙\n" });
+    git(repo.root, "checkout", "-q", "main");
+    assert.equal(repo.cli("approve", "--branch", BRANCH, "--yes", "--note", "确认改成两条").status, 0);
+
+    const ledger = readFileSync(join(repo.env.HARNESS_DATA_DIR, "ledger.jsonl"), "utf8")
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line))
+      .filter((event) => event.event === "plan.approve");
+    assert.equal(ledger.length, 2);
+    assert.equal(ledger[0].note, QUOTE, "旧授权被覆盖后，账本里仍要留下当时的原话");
+    assert.match(ledger[0].acceptanceHash, /^[0-9a-f]{16}$/);
+    assert.notEqual(ledger[0].acceptanceHash, ledger[1].acceptanceHash, "两次授权的清单指纹要能区分");
+  });
+
   test("未启用 plan-first 的项目不受影响", () => {
     const repo = makeRepo();
     repos.push(repo);

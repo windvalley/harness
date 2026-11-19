@@ -4,7 +4,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { spawn } from "node:child_process";
-import { acceptancePath, loadGateProject, mainBranch } from "../lib/config.mjs";
+import { acceptancePath, describeProjectSource, loadGateProject, mainBranch } from "../lib/config.mjs";
 import { splitAcceptance } from "../lib/acceptance.mjs";
 import { matchAny, matches } from "../lib/glob.mjs";
 import {
@@ -99,10 +99,27 @@ export function postMergeAcceptanceProblem({ root, project, branch, head, base, 
     reason: owed
       ? "本次改动修改了验收清单的合并后验收条目，但没有对应的 post-merge 检查"
       : "验收清单包含合并后验收条目，但本次改动没有对应的 post-merge 检查",
-    fix: owed
-      ? "在 .harness/verify.json 配置 tier=extended、phase=post-merge 且 when 命中本次改动的检查，或把该章节改回合入时的内容"
-      : "在 .harness/verify.json 为对应验收配置 tier=extended、phase=post-merge 的检查，并确保 when 命中本次改动；不需要后置验收时删除该章节",
+    fix: postMergeFix({ project, owed, rel }),
   };
+}
+
+/**
+ * 三态改法：首次接入阶段配置本来就来自任务分支；已有义务时删除章节不会取消义务；
+ * 已接入且没有义务时，配置只从主分支读取，必须说清任务分支改配置不生效，并给出三条可执行路径。
+ */
+function postMergeFix({ project, owed, rel }) {
+  if (project.bootstrap) {
+    return "首次接入阶段配置从本分支读取：在本分支 .harness/verify.json 配置 tier=extended、phase=post-merge 且 when 命中本次改动的检查；不需要后置验收时删除该章节";
+  }
+  if (owed) {
+    return `这条分支已经有合并后验收义务，删除章节不会取消它：把 ${rel} 的「合并后验收」改回合入时的内容，并在主分支 .harness/verify.json 配置 when 命中本次改动的 post-merge 检查（门禁改动需人 confirm 后重新验证）`;
+  }
+  return [
+    "门禁检查配置只从主分支读取，改在任务分支不会生效。三条路径任选：",
+    "1) 验收能在任务分支执行：把条目移出「合并后验收」章节，改成合并前 extended 检查，成功后用 harness attest 登记；",
+    "2) 验收必须等合入后才做：在独立分支给主分支 .harness/verify.json 配置 tier=extended、phase=post-merge 且 when 命中本次改动的检查，经人 harness confirm 合入后再重新验证；",
+    "3) 确认不需要后置验收：删除「合并后验收」章节。",
+  ].join("\n");
 }
 
 const cmdText = (cmd) => (Array.isArray(cmd) ? cmd.join(" ") : cmd);
@@ -481,6 +498,7 @@ export async function verify({
       `[verify] head=${headCommit.slice(0, 12)} 变更 ${changed.length} 个文件${docOnly ? "(仅文档)" : ""}，` +
         `计划 ${plan.length} 项，复用 ${reusable.size} 项，重跑 ${rerun.length} 项`,
     );
+    log(`[verify] 配置来源 ${describeProjectSource(project)}（任务分支里的 .harness/*.json 不参与门禁判定）`);
     if (previous.ok) log(`[verify] 主分支自上次验证新增 ${priorMainDelta.length} 个文件`);
 
     // 写错的检查记为失败，证据不能显示通过；配置要先改，其余检查按 failFast 不再执行。

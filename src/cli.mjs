@@ -4,7 +4,7 @@ import { parseArgs } from "node:util";
 import { redact } from "./lib/redact.mjs";
 import { rewrittenLandings } from "./lib/landed.mjs";
 import { deliverySettings, describeDelivery, loadCurrentProject, loadGateProject, loadGuardProject, loadTrustedProject, mainBranch } from "./lib/config.mjs";
-import { changedPaths, currentBranch, git, gitOk, isLinkedWorktree, mainWorktreeRoot, mergeBase, repoRoot, resolveCommit } from "./lib/git.mjs";
+import { changedPaths, currentBranch, git, gitOk, isLinkedWorktree, mainWorktreeRoot, mergeBase, refExists, repoRoot, resolveCommit } from "./lib/git.mjs";
 import { keyStatus, readLedger, rotateKey, scanRecords } from "./lib/store.mjs";
 import { resolvePolicy, ruleStats } from "./policy/resolve.mjs";
 import { evaluateCall } from "./policy/engine.mjs";
@@ -155,6 +155,14 @@ async function cmdVerify(argv) {
     },
   });
   const cwd = process.cwd();
+  // 分支解析不到时给候选，而不是把 git 的 fatal 原文抛出去：常见原因是把验收清单文件名当成了分支名。
+  if (values.branch) {
+    const problem = missingBranchProblem(cwd, values.branch);
+    if (problem) {
+      process.stderr.write(`${problem}\n`);
+      return 1;
+    }
+  }
   if (values.plan) return cmdVerifyPlan({ cwd, branch: values.branch ?? values.head ?? "HEAD", base: values.base, json: values.json });
   // 提交信息不合规时，验证出来的证据也随之作废：先拒绝，不白跑检查。
   if (values.branch) {
@@ -221,6 +229,25 @@ function riskLines(cwd, branch) {
     return riskHints({ root, project, base, head, branch }).map((line) => `  ${line}`);
   } catch {
     return [];
+  }
+}
+
+/** 分支解析不到时的说明：列出本地候选分支，避免把 git 的 fatal 原文直接抛给用户。 */
+function missingBranchProblem(cwd, branch) {
+  try {
+    const root = repoRoot(cwd);
+    if (refExists(root, branch)) return null;
+    // 把「/」写成「-」是最常见的笔误（验收清单文件名就是这么生成的），按归一化后的名字比对。
+    const norm = (name) => name.replace(/[^0-9A-Za-z._-]+/g, "-");
+    const candidates = gitOk(root, ["for-each-ref", "--format=%(refname:short)", "refs/heads"])
+      .split("\n")
+      .filter(Boolean)
+      .filter((name) => norm(name) === norm(branch) || name.includes(branch) || branch.includes(name))
+      .slice(0, 5);
+    const hint = candidates.length > 0 ? `\n可能是想传这些分支之一: ${candidates.join("、")}` : "";
+    return `分支不存在: ${branch}。先确认分支已创建（git worktree add -b <分支> ... 或 git switch -c <分支>），分支名不要用验收清单文件名${hint}`;
+  } catch {
+    return null;
   }
 }
 

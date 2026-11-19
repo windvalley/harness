@@ -193,3 +193,22 @@ test("fail-fast 保留未受影响的普通检查与测试证据复用，统计�
   assert.equal(events.filter((event) => event.event === "verify").at(-1).reused, 2);
   assert.equal(repo.cli("merge", "--branch", "task/outcomes").status, 1, "有效复用不会消除失败 gate");
 });
+
+test("验证输出写明配置来源：门禁判定读主分支，任务分支改配置不生效", () => {
+  const repo = setup([check("first", "process.exit(0)")]);
+  const main = git(repo.root, "rev-parse", "main").trim();
+  const result = run(repo);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, new RegExp(`配置来源 main@${main.slice(0, 12)}`));
+  assert.match(result.stderr, /任务分支里的 \.harness\/\*\.json 不参与门禁判定/);
+});
+
+test("分支不存在时列出候选分支，不把 git 的 fatal 原文抛给用户", () => {
+  const repo = setup([check("first", "process.exit(0)")]);
+  // 典型误用：把验收清单文件名当成分支名。
+  const wrong = repo.cli("verify", "--branch", "task-outcomes");
+  assert.notEqual(wrong.status, 0);
+  assert.match(wrong.stderr, /分支不存在: task-outcomes/);
+  assert.match(wrong.stderr, /可能是想传这些分支之一: task\/outcomes/);
+  assert.doesNotMatch(wrong.stderr, /fatal:/);
+});

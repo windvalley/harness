@@ -1,6 +1,7 @@
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { acceptancePath } from "../lib/config.mjs";
+import { acceptanceDigest, describeAcceptanceChange } from "../lib/acceptance.mjs";
 import { matchAny } from "../lib/glob.mjs";
 import { refExists, resolveCommit, showBlob } from "../lib/git.mjs";
 import { landedIn } from "../lib/landed.mjs";
@@ -61,9 +62,39 @@ export function prepareGrant({ project, root, branch, at, file, stage }) {
   const hashed = stages.map((item) => {
     const content = showBlob(root, at, item.acceptance);
     if (content === null) throw new Error(`阶段 ${item.id} 的验收清单 ${item.acceptance} 还没有提交到分支 ${branch}`);
-    return { ...item, acceptanceHash: sha256(content) };
+    return { ...item, acceptanceHash: sha256(content), acceptanceLines: acceptanceDigest(content) };
   });
   return { grant: { file, stagesHash: sha256(text), stages: hashed }, stage: current, hints: nameHints(project, stages) };
+}
+
+/**
+ * 阶段文件在授权后的变化：按阶段 id 比对字段，说清是哪个阶段的 title、branch 或验收清单路径改过。
+ * 解析失败只说明文件内容变了，不再抛错，失效原因本身要能被读到。
+ */
+function describeStagesChange(grant, text) {
+  if (typeof text !== "string") return "阶段文件已删除";
+  let stages;
+  try {
+    stages = parseStages(text, grant.file);
+  } catch {
+    return "阶段文件内容已变化（无法按阶段解析）";
+  }
+  const before = new Map(grant.stages.map((item) => [item.id, item]));
+  const after = new Map(stages.map((item) => [item.id, item]));
+  const parts = [];
+  for (const [id, item] of after) {
+    const previous = before.get(id);
+    if (!previous) {
+      parts.push(`新增阶段 ${id}`);
+      continue;
+    }
+    for (const field of ["title", "branch", "acceptance"]) {
+      if (previous[field] !== item[field]) parts.push(`阶段 ${id} 的 ${field} 有变化`);
+    }
+  }
+  for (const id of before.keys()) if (!after.has(id)) parts.push(`删除阶段 ${id}`);
+  if (parts.length === 0) parts.push("只有排版或无关字段变化");
+  return parts.join("；");
 }
 
 function nameHints(project, stages) {
@@ -100,17 +131,24 @@ export function stageApprovalProblem({ root, branch, link, acceptanceText, at })
     if (grant.carrier?.branch !== branch) return `方案 ${link.file} 已在分支 ${grant.carrier?.branch} 重新授权，本分支的授权失效，需要向用户说明并重新授权`;
     const ref = at ?? branch;
     const text = showBlob(root, ref, link.file);
-    if (text === null || sha256(text) !== grant.stagesHash) return MATERIAL_CHANGED;
+    if (text === null || sha256(text) !== grant.stagesHash) return `${MATERIAL_CHANGED}（${describeStagesChange(grant, text)}）`;
     for (const item of grant.stages) {
       const content = showBlob(root, ref, item.acceptance);
-      if (content === null || sha256(content) !== item.acceptanceHash) return `${MATERIAL_CHANGED}（${item.acceptance}）`;
+      if (content === null) return `${MATERIAL_CHANGED}（阶段 ${item.id} 的验收清单 ${item.acceptance} 已删除）`;
+      if (sha256(content) !== item.acceptanceHash) {
+        const change = item.acceptanceLines ? describeAcceptanceChange(item.acceptanceLines, acceptanceDigest(content)) : null;
+        return `${MATERIAL_CHANGED}（阶段 ${item.id} 的验收清单${change ? `：${change}` : "内容已变化"}）`;
+      }
     }
     return null;
   }
   const stage = grant.stages.find((item) => item.id === link.stage);
   if (!stage) return `方案 ${link.file} 的授权里没有阶段 ${link.stage}，需要向用户说明并重新授权`;
   if (acceptanceText === null || acceptanceText === undefined || sha256(acceptanceText) !== stage.acceptanceHash) {
-    return `阶段 ${link.stage} 的验收清单与方案授权不一致，需要向用户说明并重新授权`;
+    const change = acceptanceText !== null && acceptanceText !== undefined && stage.acceptanceLines
+      ? describeAcceptanceChange(stage.acceptanceLines, acceptanceDigest(acceptanceText))
+      : null;
+    return `阶段 ${link.stage} 的验收清单与方案授权不一致${change ? `（${change}）` : ""}，需要向用户说明并重新授权`;
   }
   return null;
 }

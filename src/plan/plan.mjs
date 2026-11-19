@@ -3,9 +3,11 @@ import { existsSync, readFileSync } from "node:fs";
 import { userInfo } from "node:os";
 import { join } from "node:path";
 import { acceptancePath, loadGateProject, mainBranch, trustedMainRef } from "../lib/config.mjs";
+import { acceptanceDigest, describeAcceptanceChange } from "../lib/acceptance.mjs";
 import { matchAny } from "../lib/glob.mjs";
 import { changedPaths, git, mergeBase, refExists, resolveCommit, showBlob } from "../lib/git.mjs";
 import { appendLedger, readRecord, writeRecord } from "../lib/store.mjs";
+import { postMergeHits } from "../verify/checks.mjs";
 import { prepareGrant, readGrant, stageApprovalProblem, stageLanding, writeGrant } from "./stages.mjs";
 
 export const PLAN_KIND = "plan";
@@ -87,7 +89,11 @@ export function approvalState({ root, branch, acceptanceText, at }) {
   if (!found.ok) return { approved: false, reason: found.code === "missing" ? "还没有记录用户的实施授权" : found.reason };
   if (found.record.branch !== branch) return { approved: false, reason: `授权记录属于分支 ${found.record.branch}` };
   if (acceptanceText === null || acceptanceText === undefined) return { approved: false, reason: "缺少验收清单" };
-  if (found.record.acceptanceHash !== sha(acceptanceText)) return { approved: false, reason: "授权之后验收清单又改过，需要向用户说明改动并重新取得同意" };
+  if (found.record.acceptanceHash !== sha(acceptanceText)) {
+    // 只报“改过”会让人自己 diff；授权时存了逐条摘要时顺带说清改了哪个章节、增删几条。
+    const change = found.record.acceptanceLines ? describeAcceptanceChange(found.record.acceptanceLines, acceptanceDigest(acceptanceText)) : null;
+    return { approved: false, reason: `授权之后验收清单又改过${change ? `（${change}）` : ""}，需要向用户说明改动并重新取得同意` };
+  }
   if (found.record.stages) {
     const problem = stageApprovalProblem({ root, branch, link: found.record.stages, acceptanceText, at });
     if (problem) return { approved: false, reason: problem };
@@ -168,11 +174,27 @@ export function riskHints({ root, project, base, head, branch }) {
   for (const item of risk.observed) lines.push(`RISK 观察（不拦截）: ${item}`);
   if (risk.reasons.length > 0 && planEnforced(project.policy)) {
     lines.push(`RISK 要实施授权: ${risk.reasons.join("；")}。先写方案并向用户说明，用户同意后运行 harness approve --branch ${branch} --yes --note "<用户原话>"；改动本不该这么大时，现在拆小或撤掉无关改动`);
+    // 已有记录但已失效时，最贵的错误是 Agent 以为还能合并；这里直接说出失效原因。
+    const stale = staleApproval({ root, project, branch });
+    if (stale) lines.push(`RISK 实施授权已失效: ${stale}。向用户说明改动并重新取得同意后再 approve`);
   }
   if (risk.confirmReasons.length > 0) {
     lines.push(`RISK 要人确认: ${risk.confirmReasons.join("；")}。验证与评审通过后运行 harness confirm --branch ${branch} 展示摘要，由人在自己的终端带 --yes 确认`);
   }
   return lines;
+}
+
+/** 有授权记录但不通过校验时返回原因；没有记录属于正常阶段，返回 null，交给上面的通用提示。 */
+function staleApproval({ root, project, branch }) {
+  try {
+    const text = showBlob(root, branch, acceptancePath(project, branch));
+    if (text === null) return null;
+    const state = approvalState({ root, branch, acceptanceText: text });
+    if (state.approved || /还没有记录用户的实施授权/.test(state.reason)) return null;
+    return state.reason.replace(/，需要向用户说明改动并重新取得同意$/, "");
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -226,6 +248,8 @@ export function planSummary({ cwd, branch }) {
     reasons: need.reasons,
     lines: need.lines,
     enforced: planEnforced(project.policy),
+    postMerge: postMergeHits({ verify: project.verify, changed: paths }),
+    bootstrap: Boolean(project.bootstrap),
     approval: approvalState({ root, branch, acceptanceText: acceptance }),
   };
 }
@@ -261,13 +285,22 @@ export function approvePlan({ cwd, branch, note = "", stages = null, fromStages 
     branch,
     branchCommit: summary.branchCommit,
     acceptanceHash: sha(summary.acceptance),
+    acceptanceLines: acceptanceDigest(summary.acceptance),
     planFiles: summary.planFiles,
     by,
     note: quote,
     approvedAt,
     ...(link ? { stages: link } : {}),
   });
-  appendLedger(summary.root, { event: "plan.approve", branch, commit: summary.branchCommit, ...(link ? { stages: link.file, stage: link.stage, role: link.role } : {}) });
+  appendLedger(summary.root, {
+    event: "plan.approve",
+    branch,
+    commit: summary.branchCommit,
+    // 记录会被同分支的下一次授权覆盖，账本里留下原话与清单指纹，事后才能核对授权时同意了哪些内容。
+    note: quote,
+    acceptanceHash: record.acceptanceHash.slice(0, 16),
+    ...(link ? { stages: link.file, stage: link.stage, role: link.role } : {}),
+  });
   return { record, summary, stages: prepared ? { total: prepared.grant.stages.length, stage: prepared.stage, hints: prepared.hints } : null };
 }
 
@@ -293,8 +326,9 @@ function deriveStage({ cwd, branch, note, file, stage }) {
   if (index < 0) throw new Error(`方案 ${file} 的授权里没有阶段 ${stage}`);
   const target = grant.stages[index];
   if (sha(summary.acceptance) !== target.acceptanceHash) {
+    const change = target.acceptanceLines ? describeAcceptanceChange(target.acceptanceLines, acceptanceDigest(summary.acceptance)) : null;
     throw new Error(
-      `分支 ${branch} 的验收清单 ${summary.acceptancePath} 与阶段 ${stage} 授权时的清单 ${target.acceptance} 不一致；先把阶段清单原样复制过来，内容要改时向用户说明并重新授权`,
+      `分支 ${branch} 的验收清单 ${summary.acceptancePath} 与阶段 ${stage} 授权时的清单 ${target.acceptance} 不一致${change ? `（${change}）` : ""}；先把阶段清单原样复制过来，内容要改时向用户说明并重新授权`,
     );
   }
   const landing = stageLanding({ root, file, stages: grant.stages, mainCommit });
@@ -304,13 +338,23 @@ function deriveStage({ cwd, branch, note, file, stage }) {
     branch,
     branchCommit: summary.branchCommit,
     acceptanceHash: sha(summary.acceptance),
+    acceptanceLines: acceptanceDigest(summary.acceptance),
     planFiles: summary.planFiles,
     by: userInfo().username,
     note: grant.note,
     approvedAt: new Date().toISOString(),
     stages: { file, stage, role: "derived" },
   });
-  appendLedger(root, { event: "plan.approve", branch, commit: summary.branchCommit, stages: file, stage, role: "derived" });
+  appendLedger(root, {
+    event: "plan.approve",
+    branch,
+    commit: summary.branchCommit,
+    note: grant.note,
+    acceptanceHash: record.acceptanceHash.slice(0, 16),
+    stages: file,
+    stage,
+    role: "derived",
+  });
   return { record, summary, derived: { file, stage } };
 }
 
@@ -319,6 +363,20 @@ export function formatPlanSummary(summary) {
   if (!summary.enforced) lines.push("注意: 主分支的 policy.json 没有启用 plan-first 预设，授权记录不会被实时拦截与合并检查使用");
   lines.push(summary.reasons.length ? `需要实施授权: ${summary.reasons.join("；")}` : `按当前改动属于直接实施的范围（代码改动 ${summary.lines} 行）`);
   lines.push(summary.approval.approved ? `已记录实施授权（依据：${summary.approval.record.note}，${summary.approval.record.approvedAt}）` : `授权状态: ${summary.approval.reason}`);
+  // 交付时才发现清单里的合并后条目没有对应检查，前面的实现可能要返工；登记授权时先摊开。
+  if (summary.postMerge.length > 0) {
+    lines.push("合并后检查:");
+    for (const item of summary.postMerge) {
+      const when = item.when.length > 0 ? item.when.join(", ") : "(未配置 when)";
+      lines.push(
+        item.hits.length > 0
+          ? `  ${item.id}: 本次改动命中 ${item.hits.length} 个路径（when: ${when}）`
+          : `  ${item.id}: 本次改动没有命中，合并后不会产生这项义务（when: ${when}）`,
+      );
+    }
+  } else {
+    lines.push("合并后检查: 主分支没有配置 phase=post-merge 的检查，验收清单不要写「合并后验收」章节");
+  }
   lines.push("方案文件:");
   for (const path of summary.planFiles) lines.push(`  ${path}`);
   if (summary.planFiles.length === 0) lines.push("  (无)");

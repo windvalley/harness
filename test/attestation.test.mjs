@@ -2,10 +2,10 @@ import { strict as assert } from "node:assert";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
-import { APPROVE, commit, fakeReviewer, git, makeRepo } from "./helpers.mjs";
+import { APPROVE, CONFIG, commit, fakeReviewer, git, makeRepo } from "./helpers.mjs";
 import { verifyConfigProblems } from "../src/verify/verify.mjs";
 import { attestCheck } from "../src/verify/attestation.mjs";
-import { splitAcceptance } from "../src/lib/acceptance.mjs";
+import { acceptanceDigest, describeAcceptanceChange, splitAcceptance } from "../src/lib/acceptance.mjs";
 import { redact } from "../src/lib/redact.mjs";
 import { readdirSync } from "node:fs";
 import { PACKAGE_ROOT, sh } from "./helpers.mjs";
@@ -173,10 +173,78 @@ describe("外部证据登记", () => {
     assert.match(missing.stderr, /报告不存在/);
   });
 
+  test("任务分支私有的检查不能登记：门禁判定读主分支配置", () => {
+    const repo = setup();
+    // 分支自己加一个 extended 检查；主分支没有它，verify 不会消费，登记了也没有任何消费者。
+    const branchVerify = {
+      ...VERIFY,
+      checks: [...VERIFY.checks, { id: "branch-only", tier: "extended", when: ["src/**"], reason: "分支自加", howToVerify: "跑一下" }],
+    };
+    repo.branch("task/a", {
+      "src/a.js": "a\n",
+      ".harness/verify.json": `${JSON.stringify(branchVerify, null, 2)}\n`,
+      ".harness/acceptance/task-a.md": ACCEPTANCE,
+    });
+    const report = join(repo.root, "..", "branch-only-report.md");
+    writeFileSync(report, "passed\n");
+    const denied = repo.cli("attest", "--branch", "task/a", "--check", "branch-only", "--command", "run branch only", "--report", report);
+    assert.notEqual(denied.status, 0);
+    assert.match(denied.stderr, /不存在.*extended 检查/);
+    assert.match(denied.stderr, /门禁配置只从主分支读取/);
+  });
+
+  test("登记用主分支的检查定义，任务分支改了定义不算数", () => {
+    const repo = setup();
+    const changed = {
+      ...VERIFY,
+      checks: VERIFY.checks.map((check) => (check.id === "browser" ? { ...check, howToVerify: "分支上改过的验收方式" } : check)),
+    };
+    repo.branch("task/a", {
+      "src/a.js": "a\n",
+      ".harness/verify.json": `${JSON.stringify(changed, null, 2)}\n`,
+      ".harness/acceptance/task-a.md": ACCEPTANCE,
+    });
+    const registered = attest(repo);
+    assert.equal(registered.status, 0, registered.stderr);
+    const verified = repo.cli("verify", "--branch", "task/a");
+    assert.equal(verified.status, 0, verified.stderr);
+    assert.match(verified.stderr, /ATTESTED browser/, "用主分支定义登记，verify 才认这份证据");
+    assert.doesNotMatch(verified.stderr, /NOT_EXECUTED browser/);
+  });
+
+  test("主分支后来删掉合并后检查，仍可凭历史定义关闭已有义务", () => {
+    const repo = setup();
+    task(repo);
+    assert.equal(repo.cli("verify", "--branch", "task/a").status, 0);
+    fakeReviewer(repo, APPROVE);
+    assert.equal(repo.cli("review", "--branch", "task/a").status, 0);
+    assert.equal(repo.cli("merge", "--branch", "task/a").status, 0);
+    assert.match(repo.cli("status", "--branch", "task/a").stdout, /合并后验收待完成/);
+
+    // 另一个任务从主分支删掉这项检查：义务仍然待办，登记不能被“主分支没有该检查”卡死。
+    const without = { ...VERIFY, checks: VERIFY.checks.filter((check) => check.id !== "integrated-smoke") };
+    commit(repo.root, "chore(harness): 移除旧的合并后检查\n\n- 该检查已被新的部署验证替代\n- 义务仍需登记", {
+      ".harness/verify.json": `${JSON.stringify(without, null, 2)}\n`,
+    });
+    const closed = attest(repo, "integrated-smoke", "部署环境冒烟通过\n");
+    assert.equal(closed.status, 0, closed.stderr);
+    assert.match(repo.cli("status", "--branch", "task/a").stdout, /交付与合并后验收均完成/);
+  });
+
   test("验收章节只识别真实标题，注释里的示例不生效", () => {
     const split = splitAcceptance("# 验收\n\n- 合并前\n\n<!--\n## 合并后验收\n- 示例\n-->\n");
     assert.match(split.preMergeText, /合并前/);
     assert.equal(split.postMergeText, "");
+  });
+
+  test("授权摘要按章节比出增删条数，排版变化不误报条目变化", () => {
+    const before = acceptanceDigest("# 验收\n\n## 应该发生\n\n- 甲\n- 乙\n\n## 合并后验收\n\n- 冒烟通过\n");
+    const sameLines = acceptanceDigest("# 验收\n\n## 应该发生\n\n\n- 甲\n\n- 乙\n\n### 小标题\n\n## 合并后验收\n\n- 冒烟通过\n");
+    assert.equal(describeAcceptanceChange(before, sameLines), "只有空行、标题或排版变化", "空行和标题不算条目变化");
+
+    const changed = acceptanceDigest("# 验收\n\n## 应该发生\n\n- 甲\n- 丙\n\n## 合并后验收\n");
+    assert.equal(describeAcceptanceChange(before, changed), "合并前 新增 1 条、删除 1 条；合并后验收 新增 0 条、删除 1 条");
+    assert.equal(describeAcceptanceChange(before, null), null);
   });
 });
 
@@ -232,9 +300,57 @@ describe("合并后验收", () => {
     const plan = repo.cli("verify", "--plan", "--branch", "task/a");
     assert.notEqual(plan.status, 0);
     assert.match(plan.stdout, /acceptance:post-merge/);
+    assert.match(plan.stdout, /门禁检查配置只从主分支读取，改在任务分支不会生效/, "改法要指出现有实现读的是主分支");
+    // 改法要能照着做：三条路径各自给出命令级动作，而不是只描述目标。
+    assert.match(plan.stdout, /harness attest 登记/);
+    assert.match(plan.stdout, /harness confirm/);
     const result = repo.cli("verify", "--branch", "task/a");
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /合并后验收.*没有对应.*post-merge/s);
+  });
+
+  test("已有合并后义务时提示不能靠删除章节取消义务", () => {
+    const repo = setup();
+    task(repo);
+    assert.equal(repo.cli("verify", "--branch", "task/a").status, 0);
+    fakeReviewer(repo, APPROVE);
+    assert.equal(repo.cli("review", "--branch", "task/a").status, 0);
+    assert.equal(repo.cli("merge", "--branch", "task/a").status, 0);
+
+    // 合入后追加一次只改验收清单的提交：这次没有命中 post-merge 检查，但义务已经写在账上。
+    git(repo.root, "checkout", "-q", "task/a");
+    commit(repo.root, "docs(demo): 调整合并后验收\n\n- 补充环境说明\n- 条目本身不变", {
+      ".harness/acceptance/task-a.md": ACCEPTANCE.replace("主 Worktree 集成后的冒烟测试通过。", "主 Worktree 集成后的冒烟测试通过，环境见报告。"),
+    });
+    git(repo.root, "checkout", "-q", "main");
+
+    const result = repo.cli("verify", "--branch", "task/a");
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /这条分支已经有合并后验收义务，删除章节不会取消它/);
+    assert.doesNotMatch(result.stderr, /确认不需要后置验收：删除「合并后验收」章节/, "已有义务时不能再建议删除");
+  });
+
+  test("首次接入阶段按分支自己的配置检查，提示不指向主分支", () => {
+    const verify = {
+      ...VERIFY,
+      checks: VERIFY.checks.map((check) => (check.id === "integrated-smoke" ? { ...check, when: ["src/other/**"] } : check)),
+    };
+    const repo = makeRepo();
+    repos.push(repo);
+    // 主分支退回首次接入状态：还没有 .harness/config.json。
+    git(repo.root, "rm", "-q", ".harness/config.json");
+    commit(repo.root, "chore(demo): 回到首次接入\n\n- 主分支还没有接入配置\n- 由接入分支提议", {});
+    repo.branch("task/a", {
+      "src/a.js": "a\n",
+      ".harness/config.json": `${JSON.stringify(CONFIG, null, 2)}\n`,
+      ".harness/verify.json": `${JSON.stringify(verify, null, 2)}\n`,
+      ".harness/acceptance/task-a.md": ACCEPTANCE,
+    });
+
+    const plan = repo.cli("verify", "--plan", "--branch", "task/a");
+    assert.notEqual(plan.status, 0, "章节有内容但本次没有命中检查，仍然要报错");
+    assert.match(plan.stdout, /首次接入阶段配置从本分支读取/, "首次接入时分支配置才是判定来源");
+    assert.doesNotMatch(plan.stdout, /门禁检查配置只从主分支读取/);
   });
 
   test("主分支后来修改检查定义，不影响已登记的任务证据", () => {

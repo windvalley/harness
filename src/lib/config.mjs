@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { git, refExists, repoRoot, showBlob } from "./git.mjs";
+import { git, refExists, repoRoot, resolveCommit, showBlob } from "./git.mjs";
 
 export const PROJECT_DIR = ".harness";
 export const FILES = ["config.json", "policy.json", "verify.json"];
@@ -91,9 +91,21 @@ export function loadGuardProject(cwd) {
 /** at 给定时从主分支的那个提交读配置，调用方据此把“配置”与“基线”固定在同一个提交上。 */
 export function loadTrustedProject(cwd, { at } = {}) {
   const root = repoRoot(cwd);
-  const project = loadProject(root, { fromRef: at ?? trustedMainRef(root), root });
+  const ref = at ?? trustedMainRef(root);
+  const project = loadProject(root, { fromRef: ref, root });
   checkMainBranchName(root, project);
-  return project;
+  // 记下来源，verify 等命令据此显示“配置来自哪里”，任务分支改配置不生效这件事才看得见。
+  return { ...project, sourceRef: ref, sourceCommit: resolveCommit(root, ref) };
+}
+
+/**
+ * 配置来源的一行说明：已接入项目是“main@提交”，首次接入阶段是分支名。
+ * 任务分支里的 .harness/verify.json 不参与门禁判定，输出里说清来源能省掉一次试错。
+ */
+export function describeProjectSource(project) {
+  if (!project?.sourceRef) return "未知";
+  const commit = project.sourceCommit ? `@${project.sourceCommit.slice(0, 12)}` : "";
+  return project.bootstrap ? `首次接入，按分支 ${project.sourceRef} 的配置` : `${project.sourceRef}${commit}`;
 }
 
 // 配置里的主分支名写错（典型情况：git init 用了 main，配置写了 master）时直接说清楚，
@@ -125,7 +137,7 @@ export function loadGateProject(cwd, { branch, at } = {}) {
   }
   const project = loadProject(root, { fromRef: branch, root });
   checkMainBranchName(root, project);
-  return { ...project, bootstrap: true, bootstrapRef: branch };
+  return { ...project, bootstrap: true, bootstrapRef: branch, sourceRef: branch, sourceCommit: resolveCommit(root, branch) };
 }
 
 /**

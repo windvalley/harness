@@ -69,6 +69,20 @@ function branchTipOf(root, branch, checkId) {
   }
 }
 
+/**
+ * 登记要用的检查定义。已接入项目以主分支为准：verify 也按主分支定义核对证据，
+ * 用任务分支上的定义登记会立刻被判过期。两个例外：
+ * - 首次接入阶段主分支还没有配置，只能用分支配置；
+ * - 合并后检查允许用分支顶端的历史定义，这样主分支之后删掉这项检查时，已写下的义务仍然能关掉。
+ */
+function trustedCheck({ gate, checkId, branchCheck }) {
+  if (gate.bootstrap) return branchCheck ?? null;
+  const mainCheck = (gate.verify?.checks ?? []).find((item) => item.id === checkId && item.tier === "extended");
+  if (mainCheck) return mainCheck;
+  if (branchCheck && checkPhase(branchCheck) === POST_MERGE) return branchCheck;
+  return null;
+}
+
 /** 登记一次已经成功的外部检查。记录由本机密钥签名，后续 verify 会重新核对检查定义与覆盖文件。 */
 export function attestCheck({ cwd, branch, checkId, command, report, note = "", at = null }) {
   if (!branch) throw new Error("用法: harness attest --branch <分支> --check <检查ID> --command <实际命令> --report <报告>");
@@ -78,8 +92,21 @@ export function attestCheck({ cwd, branch, checkId, command, report, note = "", 
   const root = gate.root;
   const branchHead = branchTipOf(root, branch, checkId);
   const proposed = loadProject(root, { fromRef: branchHead, root });
-  const check = (proposed.verify?.checks ?? []).find((item) => item.id === checkId && item.tier === "extended");
-  if (!check) throw new Error(`分支 ${branch} 上不存在 ID 为 ${checkId} 的 extended 检查`);
+  const branchCheck = (proposed.verify?.checks ?? []).find((item) => item.id === checkId && item.tier === "extended");
+  const check = trustedCheck({ gate, checkId, branchCheck });
+  if (!check) {
+    const mainDefinition = gate.bootstrap ? null : (gate.verify?.checks ?? []).find((item) => item.id === checkId);
+    if (mainDefinition) {
+      throw new Error(
+        `分支 ${branch} 上不存在 ID 为 ${checkId} 的 extended 检查：主分支上的 ${checkId} 是 ${mainDefinition.tier}，不能用 attest 登记；` +
+          `需要人工验收时把 tier 改为 extended 并写上 reason 与 howToVerify`,
+      );
+    }
+    throw new Error(
+      `分支 ${branch} 上不存在 ID 为 ${checkId} 的 extended 检查；` +
+        `门禁配置只从主分支读取，要在任务分支用的外部检查必须先在主分支按 extended 配置好`,
+    );
+  }
   const phase = checkPhase(check);
   if (at && phase !== POST_MERGE) throw new Error("--at 只用于合并后验收检查");
   let head = branchHead;
