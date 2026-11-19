@@ -62,6 +62,7 @@ export function hasObligation({ root, branch }) {
  * 这条分支为某项检查写下的义务，含已经关闭的。
  * 有记录就说明这项检查当初是按合并后验收登记的：之后主分支把它删掉或挪到合并前，
  * 登记仍要按合并后关闭，否则报告会被写成同名的合并前证据，义务永远待办。
+ * 已关闭的也算：同一个 ID 曾被当作合并后检查用过，重登就保持同一语义；要换语义请换一个新的检查 ID。
  */
 export function branchObligations({ root, mainCommit, branch, checkId }) {
   return collectObligations({ root, mainCommit, branch }).filter((item) => item.checkId === checkId);

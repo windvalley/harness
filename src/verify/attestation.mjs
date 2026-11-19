@@ -185,6 +185,7 @@ export function attestCheck({ cwd, branch, checkId, command, report, note = "", 
     createdAt: new Date().toISOString(),
   });
   const closed = phase === POST_MERGE ? closeObligations({ root, branch, branchTip: branchHead, checkId, at: head, reportSha256: record.report.sha256 }) : [];
-  appendLedger(root, { event: "attest", branch, checkId, phase, head, closed: closed.length });
+  // 记下定义是从哪来的：登记用了历史定义时，事后核对不必再猜当时按哪份配置判定。
+  appendLedger(root, { event: "attest", branch, checkId, phase, head, definitionFrom: resolved.source, closed: closed.length });
   return { ...record, closedObligations: closed.length };
 }
