@@ -259,6 +259,43 @@ describe("先方案后实施", () => {
     assert.notEqual(ledger[0].acceptanceHash, ledger[1].acceptanceHash, "两次授权的清单指纹要能区分");
   });
 
+  test("授权原话里的凭据在写入记录与账本前就被遮掉", () => {
+    const repo = setup();
+    repo.branch(BRANCH, { "src/big.js": code(10), [ACCEPTANCE]: "## 应该发生\n\n- 甲\n" });
+    const said = "确认：API_KEY=sk-live-abcdef123456 和 --token ghp-deadbeef 都可以跑";
+    assert.equal(repo.cli("approve", "--branch", BRANCH, "--yes", "--note", said).status, 0);
+
+    const record = JSON.parse(readFileSync(join(repo.env.HARNESS_DATA_DIR, "plan", "feat-login.json"), "utf8"));
+    assert.doesNotMatch(record.note, /sk-live-abcdef123456/, "授权记录不能留下明文凭据");
+    assert.doesNotMatch(record.note, /ghp-deadbeef/);
+    assert.match(record.note, /确认：/);
+    assert.match(record.note, /都可以跑/, "遮掉的只是凭据值，授权措辞要保留");
+
+    const ledger = readFileSync(join(repo.env.HARNESS_DATA_DIR, "ledger.jsonl"), "utf8");
+    assert.doesNotMatch(ledger, /sk-live-abcdef123456/);
+    assert.doesNotMatch(ledger, /ghp-deadbeef/);
+  });
+
+  test("再次授权覆盖记录后，整份账本仍不含凭据", () => {
+    const repo = setup();
+    repo.branch(BRANCH, { "src/big.js": code(10), [ACCEPTANCE]: "## 应该发生\n\n- 甲\n" });
+    const first = "先按这个跑，token=sk-first-abcdef123456";
+    assert.equal(repo.cli("approve", "--branch", BRANCH, "--yes", "--note", first).status, 0);
+
+    git(repo.root, "checkout", "-q", BRANCH);
+    commit(repo.root, "docs(login): 补一条验收\n\n- 追加一条\n- 说明原因", { [ACCEPTANCE]: "## 应该发生\n\n- 甲\n- 乙\n" });
+    git(repo.root, "checkout", "-q", "main");
+    const second = "确认，password=hunter2-secret 这次也一样";
+    assert.equal(repo.cli("approve", "--branch", BRANCH, "--yes", "--note", second).status, 0);
+
+    const ledger = readFileSync(join(repo.env.HARNESS_DATA_DIR, "ledger.jsonl"), "utf8");
+    assert.doesNotMatch(ledger, /sk-first-abcdef123456/, "被覆盖的那次授权同样不能留明文");
+    assert.doesNotMatch(ledger, /hunter2-secret/);
+    const approvals = ledger.split("\n").filter(Boolean).map((line) => JSON.parse(line)).filter((event) => event.event === "plan.approve");
+    assert.equal(approvals.length, 2, "两次授权都要留在账本里，措辞与指纹仍可追溯");
+    assert.ok(approvals.every((event) => /^[0-9a-f]{16}$/.test(event.acceptanceHash)));
+  });
+
   test("未启用 plan-first 的项目不受影响", () => {
     const repo = makeRepo();
     repos.push(repo);

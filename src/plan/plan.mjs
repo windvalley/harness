@@ -6,6 +6,7 @@ import { acceptancePath, loadGateProject, mainBranch, trustedMainRef } from "../
 import { acceptanceDigest, describeAcceptanceChange, hasSectionedDigest } from "../lib/acceptance.mjs";
 import { matchAny } from "../lib/glob.mjs";
 import { changedPaths, git, mergeBase, refExists, resolveCommit, showBlob } from "../lib/git.mjs";
+import { redact } from "../lib/redact.mjs";
 import { appendLedger, readRecord, writeRecord } from "../lib/store.mjs";
 import { postMergeHits } from "../verify/checks.mjs";
 import { prepareGrant, readGrant, stageApprovalProblem, stageLanding, writeGrant } from "./stages.mjs";
@@ -292,10 +293,13 @@ export function planSummary({ cwd, branch }) {
  */
 export function approvePlan({ cwd, branch, note = "", stages = null, fromStages = null, stage = null }) {
   if (fromStages) return deriveStage({ cwd, branch, note, file: fromStages, stage });
-  const quote = String(note).trim();
-  if (!quote) {
+  const raw = String(note).trim();
+  if (!raw) {
     throw new Error("记录实施授权要用 --note 照录用户表示同意实施的原话，例如 --note \"可以，开始实施\"；用户还没有同意时停下等待");
   }
+  // 原话会进记录、账本和 PR/MR 描述：在入口处遮盖一次，所有下游输出都不会带出凭据。
+  // 遮掉的只是凭据值，授权措辞仍然原样保留，事后仍可核对。
+  const quote = redact(raw);
   const summary = planSummary({ cwd, branch });
   if (summary.acceptance === null) {
     throw new Error(`分支 ${branch} 上还没有提交验收清单 ${summary.acceptancePath}，先把方案提交到任务分支再记录授权`);

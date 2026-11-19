@@ -14,6 +14,7 @@ import {
   pushGrantMissing,
   sameDelivery,
 } from "../lib/config.mjs";
+import { redact } from "../lib/redact.mjs";
 import { matchAny } from "../lib/glob.mjs";
 import { environmentDigests, environmentItems } from "../verify/environment.mjs";
 import { testEvidenceChecks } from "../verify/testevidence.mjs";
@@ -379,8 +380,8 @@ export async function checkGates({ project, root, branch, log = console.error, d
         "plan_unapproved",
       );
     }
-    approval = planState.record.note;
-    log(`[${label}] 已有实施授权(依据: ${planState.record.note})`);
+    approval = redact(planState.record.note);
+    log(`[${label}] 已有实施授权(依据: ${redact(planState.record.note)})`);
   }
   const unresolved = unresolvedStop(root, branch, branchCommit);
   if (unresolved) log(`[${label}] 注意: 有会话在 ${unresolved.at} 没有上报阻塞就结束了（当时${unresolved.missing}），汇报时说明`);

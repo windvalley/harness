@@ -140,7 +140,7 @@ export function attestCheck({ cwd, branch, checkId, command, report, note = "", 
   const check = resolved.check;
   if (!check) {
     const configured = (gate.verify?.checks ?? []).find((item) => item.id === checkId);
-    const where = gate.bootstrap ? `接入分支 ${gate.sourceRef}` : "主分支";
+    const where = gate.bootstrap ? `接入分支 ${gate.sourceRef} ` : "主分支";
     if (configured) {
       throw new Error(
         `${where}的配置里不存在 ID 为 ${checkId} 的 extended 检查（它的 tier 是 ${configured.tier}），不能用 attest 登记；` +

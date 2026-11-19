@@ -1,6 +1,7 @@
 import { acceptancePath, deliveryAt, deliverySettings, gatePaths, loadGateProject, mainBranch } from "./lib/config.mjs";
 import { matchAny } from "./lib/glob.mjs";
 import { changedPaths, gitOk, isAncestor, mainWorktreeRoot, refExists, showBlob } from "./lib/git.mjs";
+import { redact } from "./lib/redact.mjs";
 import { readRecord } from "./lib/store.mjs";
 import { EVIDENCE_KIND } from "./verify/verify.mjs";
 import { readAttestation } from "./verify/attestation.mjs";
@@ -269,7 +270,7 @@ export function branchStatus({ cwd, branch }) {
       add("plan", "ok", `属于直接实施的范围（代码改动 ${risk.lines} 行），不需要实施授权`);
     } else {
       const state = approvalState({ root, branch, acceptanceText: showBlob(root, branchCommit, acceptancePath(project, branch)), at: branchCommit });
-      if (state.approved) add("plan", "ok", `已有实施授权（${risk.reasons.join("；")}；依据：${state.record.note}）`);
+      if (state.approved) add("plan", "ok", `已有实施授权（${risk.reasons.join("；")}；依据：${redact(state.record.note)}）`);
       else {
         add("plan", "fail", `${risk.reasons.join("；")}，${state.reason}：用户同意实施后运行 harness approve --branch ${branch} --yes --note "<用户原话>"`);
         block("plan_unapproved", "待实施授权");

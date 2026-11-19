@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
 import { APPROVE, CONFIG, PACKAGE_ROOT, commit, fakeReviewer, git, makeRepo, sh, write, writeReview } from "./helpers.mjs";
 import { packageVersion } from "../src/install/managed.mjs";
+import { sectionBody } from "../src/delivery/submit.mjs";
 
 let repos = [];
 afterEach(() => {
@@ -2033,5 +2034,24 @@ describe("平台以 squash 或 rebase 合入", () => {
     assert.equal(synced.status, 0, output(synced));
     assert.doesNotMatch(synced.stderr, /squash 或 rebase/);
     assert.match(status(repo).stdout, /已经包含在主分支中/);
+  });
+});
+
+describe("PR/MR 描述里的授权原话", () => {
+  test("旧记录里的明文凭据在写进平台描述前被遮掉", () => {
+    const body = sectionBody({
+      branch: "task/a",
+      branchCommit: "a".repeat(40),
+      baseCommit: "b".repeat(40),
+      baseRef: "main",
+      resultTree: "c".repeat(40),
+      gateTouched: [],
+      evidence: { status: "passed", checks: [] },
+      review: null,
+      approval: "可以，开始实施（token=sk-old-plaintext-123456）",
+      risk: null,
+    });
+    assert.match(body, /- 实施授权: 可以，开始实施/);
+    assert.doesNotMatch(body, /sk-old-plaintext-123456/, "描述会发到平台，不能带出凭据");
   });
 });

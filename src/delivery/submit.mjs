@@ -1,6 +1,6 @@
 import { deliveryAt, deliverySettings, describeDelivery, loadGateProject, mainBranch, sameDelivery, trustedMainRef } from "../lib/config.mjs";
 import { gitOk, isAncestor, refExists, repoRoot, resolveCommit, run } from "../lib/git.mjs";
-import { tail } from "../lib/redact.mjs";
+import { redact, tail } from "../lib/redact.mjs";
 import { appendLedger } from "../lib/store.mjs";
 import { MergeError, acquireLock, checkGates, planMergeResult } from "../merge/merge.mjs";
 import { writeObligations } from "../verify/obligation.mjs";
@@ -103,12 +103,13 @@ function describeGates({ evidence, review, approval, risk }) {
       lines.push(`  - ${finding.severity}: ${finding.title ?? finding.summary ?? ""}`.trimEnd());
     }
   }
-  lines.push(`- 实施授权: ${approval ? approval : "本任务不需要（未写方案、改动未超过阈值）"}`);
+  // 旧记录里的原话可能是未脱敏写入的，写进会发到平台之前再遮一次。
+  lines.push(`- 实施授权: ${approval ? redact(approval) : "本任务不需要（未写方案、改动未超过阈值）"}`);
   if (risk?.confirmReasons?.length > 0) lines.push(`- 风险确认: 已由人确认（${risk.confirmReasons.join("；")}）`);
   return lines;
 }
 
-function sectionBody({ branch, branchCommit, baseCommit, baseRef, resultTree, gateTouched, evidence, review, approval, risk }) {
+export function sectionBody({ branch, branchCommit, baseCommit, baseRef, resultTree, gateTouched, evidence, review, approval, risk }) {
   const lines = [
     "## harness 门禁结果",
     "",
