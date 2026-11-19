@@ -2,7 +2,7 @@
 
 <!-- 放在 .harness/acceptance/<分支名>.md。每条写成能判定对错的结果，独立评审按这里逐条核对；实施方案把每条对应到测试。 -->
 <!-- 默认全部是合并前验收。只有依赖目标分支集成状态的条目才放进下面的可选章节，并在 verify.json 配置对应 phase=post-merge 的 extended 检查。 -->
-<!-- 门禁判定读主分支的 .harness/verify.json：主分支还没有对应的 post-merge 检查时，写上这个章节会让 verify 以 acceptance:post-merge 失败。先在主分支配置好检查，再写这个章节。 -->
+<!-- 门禁判定读主分支的 .harness/verify.json（首次接入阶段读接入分支）：还没有对应的 post-merge 检查时，写上这个章节会让 verify 以 acceptance:post-merge 失败。先配好检查，再写这个章节。 -->
 
 ## 应该发生
 
