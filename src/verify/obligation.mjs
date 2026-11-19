@@ -58,6 +58,21 @@ export function hasObligation({ root, branch }) {
   return allRaw(root).some(({ raw }) => raw.branch === branch);
 }
 
+/**
+ * 这条分支为某项检查写下的义务，含已经关闭的。
+ * 有记录就说明这项检查当初是按合并后验收登记的：之后主分支把它删掉或挪到合并前，
+ * 登记仍要按合并后关闭，否则报告会被写成同名的合并前证据，义务永远待办。
+ */
+export function branchObligations({ root, mainCommit, branch, checkId }) {
+  return collectObligations({ root, mainCommit, branch }).filter((item) => item.checkId === checkId);
+}
+
+/** 义务当时对应的检查定义：优先取合入前证据里记下的完整定义，那是签名过的当时值。 */
+export function obligationEvidence(root, branchTip) {
+  const evidence = readRecord(root, EVIDENCE_KIND, branchTip);
+  return evidence.ok ? evidence.record : null;
+}
+
 /** 分支已被删除时，登记要用的分支顶端取自这条分支最近一次写下的义务。 */
 export function obligationTip({ root, branch, checkId }) {
   const found = allRaw(root)

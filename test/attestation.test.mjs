@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
 import { APPROVE, CONFIG, commit, fakeReviewer, git, makeRepo } from "./helpers.mjs";
@@ -63,6 +63,21 @@ function attest(repo, check = "browser", content = "224/224 passed\n") {
 
 function evidence(repo, head) {
   return JSON.parse(readFileSync(join(repo.env.HARNESS_DATA_DIR, "evidence", `${head}.json`), "utf8"));
+}
+
+/** 已登记的 attestation 记录，按创建时间排序。 */
+function attestationRecords(repo) {
+  const dir = join(repo.env.HARNESS_DATA_DIR, "attestation");
+  return readdirSync(dir)
+    .filter((name) => name.endsWith(".json"))
+    .map((name) => JSON.parse(readFileSync(join(dir, name), "utf8")))
+    .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
+}
+
+/** 全仓库到期且未关闭的合并后义务，用 CLI 的只读视图核对。 */
+function pendingObligations(repo) {
+  const list = repo.cli("status", "--post-merge");
+  return { status: list.status, text: list.stdout };
 }
 
 describe("外部证据登记", () => {
@@ -229,6 +244,93 @@ describe("外部证据登记", () => {
     const closed = attest(repo, "integrated-smoke", "部署环境冒烟通过\n");
     assert.equal(closed.status, 0, closed.stderr);
     assert.match(repo.cli("status", "--branch", "task/a").stdout, /交付与合并后验收均完成/);
+  });
+
+  test("同名检查从合并后改成合并前，登记仍按合并后关闭旧义务", () => {
+    const repo = setup();
+    task(repo);
+    assert.equal(repo.cli("verify", "--branch", "task/a").status, 0);
+    fakeReviewer(repo, APPROVE);
+    assert.equal(repo.cli("review", "--branch", "task/a").status, 0);
+    assert.equal(repo.cli("merge", "--branch", "task/a").status, 0);
+    assert.match(repo.cli("status", "--branch", "task/a").stdout, /合并后验收待完成/);
+
+    // 主分支把同名检查前移成合并前验收：义务已经写下，登记不能改成写合并前证据。
+    const moved = {
+      ...VERIFY,
+      checks: VERIFY.checks.map((check) =>
+        check.id === "integrated-smoke"
+          ? { id: check.id, tier: "extended", when: check.when, reason: "改成合并前人工验收", howToVerify: "在任务分支执行" }
+          : check,
+      ),
+    };
+    commit(repo.root, "chore(harness): 把冒烟验收前移\n\n- 不再依赖合入后环境\n- 改在任务分支登记", {
+      ".harness/verify.json": `${JSON.stringify(moved, null, 2)}\n`,
+    });
+
+    const closed = attest(repo, "integrated-smoke", "冒烟通过\n");
+    assert.equal(closed.status, 0, closed.stderr);
+    assert.equal(attestationRecords(repo).filter((record) => record.checkId === "integrated-smoke").at(-1).phase, "post-merge", "要按义务当时的状态登记，不能写成同名合并前证据");
+    assert.match(repo.cli("status", "--branch", "task/a").stdout, /交付与合并后验收均完成/);
+  });
+
+  test("任务分支已删除时，仍能凭义务里的分支顶端关闭旧义务", () => {
+    const repo = setup();
+    task(repo);
+    assert.equal(repo.cli("verify", "--branch", "task/a").status, 0);
+    fakeReviewer(repo, APPROVE);
+    assert.equal(repo.cli("review", "--branch", "task/a").status, 0);
+    assert.equal(repo.cli("merge", "--branch", "task/a").status, 0);
+    git(repo.root, "branch", "-D", "task/a");
+
+    const closed = attest(repo, "integrated-smoke", "部署环境冒烟通过\n");
+    assert.equal(closed.status, 0, closed.stderr);
+    // 分支已经删除，按仓库级视图核对：义务不能再待办。
+    const pending = pendingObligations(repo);
+    assert.equal(pending.status, 0, pending.text);
+    assert.doesNotMatch(pending.text, /integrated-smoke/);
+  });
+
+  test("任务分支创建于接入之前时，按主分支定义就能登记", () => {
+    const repo = setup();
+    // 从接入前的提交建分支：那个提交里还没有 .harness 配置，模拟“分支创建于项目接入之前”。
+    git(repo.root, "checkout", "-q", "-b", "task/legacy", "HEAD~1");
+    writeFileSync(join(repo.root, "a.js"), "a\n");
+    git(repo.root, "add", "-A");
+    commit(repo.root, "feat(demo): 旧分支的实现\n\n- 分支不带门禁配置\n- 沿用主分支的检查", { "src/a.js": "a\n" });
+    git(repo.root, "checkout", "-q", "main");
+    git(repo.root, "checkout", "-q", "task/legacy");
+    mkdirSync(join(repo.root, ".harness/acceptance"), { recursive: true });
+    writeFileSync(join(repo.root, ".harness/acceptance/task-legacy.md"), "# 验收清单\n\n## 应该发生\n\n- 行为正确。\n");
+    git(repo.root, "add", "-A");
+    commit(repo.root, "docs(demo): 补验收清单\n\n- 写清单\n- 不改门禁", {});
+    git(repo.root, "checkout", "-q", "main");
+
+    const verified = repo.cli("verify", "--branch", "task/legacy");
+    assert.equal(verified.status, 0, verified.stderr);
+    assert.match(verified.stderr, /NOT_EXECUTED browser/, "主分支配置已经把 browser 选中为待登记");
+
+    const report = join(repo.root, "..", "legacy-browser.md");
+    writeFileSync(report, "passed\n");
+    const registered = repo.cli("attest", "--branch", "task/legacy", "--check", "browser", "--command", "run browser", "--report", report);
+    assert.equal(registered.status, 0, `分支没有门禁配置不该挡住登记: ${registered.stderr}`);
+  });
+
+  test("--at 早于任务合入点时义务继续待办", () => {
+    const repo = setup();
+    task(repo);
+    assert.equal(repo.cli("verify", "--branch", "task/a").status, 0);
+    fakeReviewer(repo, APPROVE);
+    assert.equal(repo.cli("review", "--branch", "task/a").status, 0);
+    const before = git(repo.root, "rev-parse", "main").trim();
+    assert.equal(repo.cli("merge", "--branch", "task/a").status, 0);
+
+    const report = join(repo.root, "..", "early-smoke.md");
+    writeFileSync(report, "passed\n");
+    const early = repo.cli("attest", "--branch", "task/a", "--check", "integrated-smoke", "--at", before, "--command", "run smoke", "--report", report);
+    assert.notEqual(early.status, 0, "被测提交还没包含这次合入，不能用来关闭义务");
+    assert.match(early.stderr, /必须在分支合入 main 后执行并登记/);
+    assert.match(repo.cli("status", "--branch", "task/a").stdout, /合并后验收待完成/);
   });
 
   test("验收章节只识别真实标题，注释里的示例不生效", () => {

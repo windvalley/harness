@@ -5,7 +5,7 @@ import { isAncestor, resolveCommit, treeOf } from "../lib/git.mjs";
 import { redact } from "../lib/redact.mjs";
 import { appendLedger, readRecord, sha256, writeRecord } from "../lib/store.mjs";
 import { checkFingerprint, checkPhase, checkScopeDigest, POST_MERGE } from "./checks.mjs";
-import { closeObligations, obligationTip } from "./obligation.mjs";
+import { branchObligations, closeObligations, obligationEvidence, obligationTip } from "./obligation.mjs";
 import { landedIn } from "../lib/landed.mjs";
 
 export const ATTESTATION_KIND = "attestation";
@@ -70,16 +70,59 @@ function branchTipOf(root, branch, checkId) {
 }
 
 /**
- * 登记要用的检查定义。已接入项目以主分支为准：verify 也按主分支定义核对证据，
- * 用任务分支上的定义登记会立刻被判过期。两个例外：
- * - 首次接入阶段主分支还没有配置，只能用分支配置；
- * - 合并后检查允许用分支顶端的历史定义，这样主分支之后删掉这项检查时，已写下的义务仍然能关掉。
+ * 登记要用的检查定义。分两条路：
+ * - 这条分支为这项检查写过义务：说明当初按合并后验收登记过，之后主分支删掉这项检查或把它挪到合并前，
+ *   都要按义务当时的定义登记并关闭义务，否则报告会变成同名的合并前证据，旧义务永远待办。
+ * - 没有义务：用门禁配置里的定义。已接入项目取主分支，首次接入取接入分支；
+ *   任务分支自己改的配置不参与，所以分支创建于接入之前也不影响登记。
  */
-function trustedCheck({ gate, checkId, branchCheck }) {
-  if (gate.bootstrap) return branchCheck ?? null;
-  const mainCheck = (gate.verify?.checks ?? []).find((item) => item.id === checkId && item.tier === "extended");
-  if (mainCheck) return mainCheck;
-  if (branchCheck && checkPhase(branchCheck) === POST_MERGE) return branchCheck;
+function resolveCheck({ gate, root, branch, checkId, branchTip, mainCommit }) {
+  const obligations = branchObligations({ root, mainCommit, branch, checkId });
+  if (obligations.length > 0) return obligationCheck({ root, checkId, obligations });
+  const check = (gate.verify?.checks ?? []).find((item) => item.id === checkId && item.tier === "extended") ?? null;
+  return { check, phase: check ? checkPhase(check) : null, source: "门禁配置" };
+}
+
+/** 按义务当时的定义登记：先取合入前证据里签名过的完整定义，再退回义务分支顶端提交的定义并与快照核对。 */
+function obligationCheck({ root, checkId, obligations }) {
+  const tips = [...new Set(obligations.map((item) => item.branchTip).filter((tip) => typeof tip === "string"))];
+  const reasons = [];
+  for (const tip of tips) {
+    const evidence = obligationEvidence(root, tip);
+    const recorded = (evidence?.postMerge ?? []).find((item) => item.id === checkId)?.check;
+    if (recorded) return { check: recorded, phase: POST_MERGE, source: `合入前证据里的定义（分支顶端 ${tip.slice(0, 12)}）` };
+    let fromCommit = null;
+    try {
+      fromCommit = (loadProject(root, { fromRef: tip, root }).verify?.checks ?? []).find((item) => item.id === checkId && item.tier === "extended") ?? null;
+    } catch (error) {
+      reasons.push(`分支顶端 ${tip.slice(0, 12)} 读不出配置（${error.message}）`);
+      continue;
+    }
+    if (!fromCommit) {
+      reasons.push(`分支顶端 ${tip.slice(0, 12)} 的配置里没有 ${checkId}`);
+      continue;
+    }
+    const snapshot = obligations.find((item) => item.branchTip === tip)?.check ?? null;
+    const mismatch = snapshotMismatch(snapshot, fromCommit);
+    if (mismatch) {
+      reasons.push(`分支顶端 ${tip.slice(0, 12)} 的定义与义务快照不一致（${mismatch}）`);
+      continue;
+    }
+    return { check: fromCommit, phase: POST_MERGE, source: `分支顶端 ${tip.slice(0, 12)} 的定义` };
+  }
+  throw new Error(
+    `无法确认检查 ${checkId} 当时的定义，不能把这份报告登记成同名的合并前证据。已尝试：${reasons.join("；") || "没有可用的义务分支顶端"}。` +
+      `确认这项验收是否仍然需要：需要就用 harness attest --branch <分支> --check <新检查ID> 登记到一个已有的合并后检查，不需要就直接说明它作废`,
+  );
+}
+
+/** 义务快照与提交里的定义是否一致；只比对能说明“是不是同一次验收”的字段。 */
+function snapshotMismatch(snapshot, check) {
+  if (!snapshot) return null;
+  for (const field of ["howToVerify", "reason"]) {
+    const recorded = snapshot[field];
+    if (typeof recorded === "string" && recorded !== "" && recorded !== check[field]) return `${field} 不同`;
+  }
   return null;
 }
 
@@ -91,36 +134,36 @@ export function attestCheck({ cwd, branch, checkId, command, report, note = "", 
   const gate = loadGateProject(cwd, { branch });
   const root = gate.root;
   const branchHead = branchTipOf(root, branch, checkId);
-  const proposed = loadProject(root, { fromRef: branchHead, root });
-  const branchCheck = (proposed.verify?.checks ?? []).find((item) => item.id === checkId && item.tier === "extended");
-  const check = trustedCheck({ gate, checkId, branchCheck });
+  const mainRef = mainBranch(gate);
+  const mainCommit = resolveCommit(root, mainRef);
+  const resolved = resolveCheck({ gate, root, branch, checkId, branchTip: branchHead, mainCommit });
+  const check = resolved.check;
   if (!check) {
-    const mainDefinition = gate.bootstrap ? null : (gate.verify?.checks ?? []).find((item) => item.id === checkId);
-    if (mainDefinition) {
+    const configured = (gate.verify?.checks ?? []).find((item) => item.id === checkId);
+    const where = gate.bootstrap ? `接入分支 ${gate.sourceRef}` : "主分支";
+    if (configured) {
       throw new Error(
-        `分支 ${branch} 上不存在 ID 为 ${checkId} 的 extended 检查：主分支上的 ${checkId} 是 ${mainDefinition.tier}，不能用 attest 登记；` +
+        `${where}的配置里不存在 ID 为 ${checkId} 的 extended 检查（它的 tier 是 ${configured.tier}），不能用 attest 登记；` +
           `需要人工验收时把 tier 改为 extended 并写上 reason 与 howToVerify`,
       );
     }
     throw new Error(
-      `分支 ${branch} 上不存在 ID 为 ${checkId} 的 extended 检查；` +
-        `门禁配置只从主分支读取，要在任务分支用的外部检查必须先在主分支按 extended 配置好`,
+      `${where}的门禁配置里不存在 ID 为 ${checkId} 的 extended 检查${gate.bootstrap ? "" : "；门禁配置只从主分支读取，任务分支上自己加的检查不参与判定"}，` +
+        `需要这项验收时先在${where}按 extended 配置好${gate.bootstrap ? "" : "（门禁改动要人确认后合入）"}`,
     );
   }
-  const phase = checkPhase(check);
+  const phase = resolved.phase;
   if (at && phase !== POST_MERGE) throw new Error("--at 只用于合并后验收检查");
   let head = branchHead;
   if (phase === POST_MERGE) {
-    const mainRef = mainBranch(gate);
-    const mainHead = resolveCommit(root, mainRef);
-    head = mainHead;
+    head = mainCommit;
     if (at) {
       try {
         head = resolveCommit(root, at);
       } catch {
         throw new Error(`--at 无法解析为提交: ${at}`);
       }
-      if (!isAncestor(root, head, mainHead)) throw new Error(`--at ${at} 不是 ${mainRef} 的祖先：被测提交必须已经合入 ${mainRef}`);
+      if (!isAncestor(root, head, mainCommit)) throw new Error(`--at ${at} 不是 ${mainRef} 的祖先：被测提交必须已经合入 ${mainRef}`);
     }
     if (!landedIn(root, branchHead, head)) {
       throw new Error(`检查 ${checkId} 属于合并后验收，必须在分支合入 ${mainRef} 后执行并登记；远程交付请先等平台合入并运行 harness sync`);
