@@ -75,3 +75,15 @@ node scripts/release.mjs audit --tag v<版本> --commit <发布提交完整SHA> 
 标签指向的分发内容应与本机同版本安装内容一致，否则不同机器的门禁代码可能不一致。
 
 项目级安装、升级与本机版本目录见[参考手册的安装说明](reference.md#安装)和[升级说明](reference.md#升级)。
+
+## 可选：真实模型授权交互回归
+
+普通 `npm test` 在隔离仓库里验证 `approve --stages`、`approve --from-stages` 可以由 Agent 执行，`confirm --yes` 和 `--confirm-contract` 仍被拦截，同时验证未授权时 CLI 指引明确执行主体。
+
+如果本机已安装并登录 Claude Code，可额外运行（**会调用真实模型并产生费用**）：
+
+```bash
+RUN_LIVE_AGENT_APPROVAL_TEST=1 node scripts/agent-approval-smoke.mjs
+```
+
+该脚本缺省对“方案已评审、尚未授权”和“用户已授权全部阶段”各调用三次模型，检查模型回复是否错误地要求用户执行 `approve` 命令。可用 `AGENT_APPROVAL_ROUNDS=1` 缩减次数。它只检查真实模型的文本决策，不运行真实项目写操作，也**不能单独证明** Claude Code 集成后的工具调用和连续交付正常。未安装客户端或没有有效登录时应报告未运行，而非通过。
