@@ -96,7 +96,7 @@ function addNextSteps(handoff, lines) {
     return;
   }
   if (steps.get("acceptance")?.state === "fail") lines.push(`补齐并提交验收清单 ${handoff.acceptance.path}。`);
-  if (steps.get("plan")?.state === "fail") lines.push(`向用户说明当前方案与变化，取得同意后运行 ${command("approve", branch)} --yes --note "<用户原话>"。`);
+  if (steps.get("plan")?.state === "fail") lines.push(`向用户说明当前方案与变化，取得用户对话授权后由 Agent 自行运行 ${command("approve", branch)} --yes --note "<用户原话>"（不要要求用户执行授权命令）。`);
   if (steps.get("evidence")?.state === "fail") lines.push(`处理验证缺项后运行 ${command("verify", branch)}。`);
   if (steps.get("review")?.state === "fail") lines.push(`处理评审发现及前置验证后运行 ${command("review", branch)}。`);
   for (const id of ["gate", "risk"]) {
