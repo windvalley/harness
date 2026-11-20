@@ -313,3 +313,24 @@ describe("适配器归一", () => {
     assert.equal(dsh.formatDeny("x").decision.kind, "deny");
   });
 });
+
+
+describe("实施授权和独立人工确认的执行主体", () => {
+  test("阶段初始授权及后续阶段继承授权应允许 Agent 通过门禁执行", () => {
+    for (const command of [
+      '.harness/bin/harness approve --branch feature/alert-p0 --yes --note "同意全部阶段" --stages docs/changes/alert/stages.json',
+      ".harness/bin/harness approve --branch feature/alert-p1 --yes --from-stages docs/changes/alert/stages.json --stage P1",
+    ]) {
+      assert.equal(decide({ kind: "shell", command }).decision, "allow", command);
+    }
+  });
+
+  test("风险确认与核心契约变更仍禁止 Agent 代为确认", () => {
+    for (const command of [
+      ".harness/bin/harness confirm --branch feature/alert-p0 --yes",
+      ".harness/bin/harness approve --branch feature/alert-p0 --yes --confirm-contract deadbeef",
+    ]) {
+      assert.equal(decide({ kind: "shell", command }).decision, "deny", command);
+    }
+  });
+});
