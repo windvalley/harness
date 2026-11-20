@@ -586,7 +586,6 @@ describe("多阶段方案的收尾检查", () => {
   });
 });
 
-
 describe("多阶段方案的授权交互", () => {
   test("未授权时只读摘要请用户在对话中授权，命令由 Agent 执行", () => {
     const repo = setup();
@@ -599,5 +598,8 @@ describe("多阶段方案的授权交互", () => {
     assert.match(result.stdout, /由 Agent 执行/);
     assert.match(result.stdout, /用户无需执行命令/);
     assert.equal(grantFiles(repo).length, before, "只读摘要不得写入授权记录");
+    const waiting = status(repo, C1);
+    assert.match(waiting, /由 Agent 自行运行 harness approve/);
+    assert.match(waiting, /用户无需执行命令/);
   });
 });
