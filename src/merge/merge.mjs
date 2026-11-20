@@ -321,7 +321,7 @@ export async function checkGates({ project, root, branch, log = console.error, d
     : { approved: true };
   const alsoPending = (skip) =>
     [
-      !planState.approved && skip !== "plan" ? `另外还差用户同意实施（${risk.reasons.join("；")}）：${planState.reason}，用户同意后运行 harness approve --branch ${branch} --yes --note "<用户原话>"` : null,
+      !planState.approved && skip !== "plan" ? `另外还差用户同意实施（${risk.reasons.join("；")}）：${planState.reason}，用户在对话中同意后由 Agent 自行运行 harness approve --branch ${branch} --yes --note "<用户原话>"，用户无需执行命令` : null,
       risk.confirmReasons.length > 0 && !confirmed && skip !== "confirm" ? `另外还差人确认高风险改动（${risk.confirmReasons.join("；")}）：harness confirm --branch ${branch}，确认无误后加 --yes` : null,
     ].filter(Boolean);
   // 门禁改动：需要人确认过这一版内容。
