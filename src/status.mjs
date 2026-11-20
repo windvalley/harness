@@ -5,6 +5,7 @@ import { redact } from "./lib/redact.mjs";
 import { readRecord } from "./lib/store.mjs";
 import { EVIDENCE_KIND } from "./verify/verify.mjs";
 import { readAttestation } from "./verify/attestation.mjs";
+import { requiredEvidenceProblems } from "./verify/required.mjs";
 import { collectObligations } from "./verify/obligation.mjs";
 import { landedIn } from "./lib/landed.mjs";
 import { REVIEW_KIND, reviewerSummary } from "./review/review.mjs";
@@ -243,6 +244,11 @@ export function branchStatus({ cwd, branch }) {
     if (current.length > 0) add("evidence:attested", "ok", `已登记 ${current.length} 项外部证据`);
     if (recheck.length > 0) add("evidence:attested", "warn", `外部证据需重新核对：${recheck.map((item) => item.id).join("、")}，不能作为当前集成结果的有效证据`);
     if ((evidence.record.postMerge?.length ?? 0) > 0) add("evidence:postMerge", "info", `${evidence.record.postMerge.length} 项合并后验收不阻塞本次交付：${evidence.record.postMerge.map((item) => item.id).join("、")}`);
+    const acceptanceText = showBlob(root, branchCommit, acceptancePath(project, branch)) ?? showBlob(root, mainCommit, acceptancePath(project, branch));
+    const required = requiredEvidenceProblems({ project, root, branch, acceptanceText, evidence: { ...evidence.record, attested: current } });
+    result.requiredEvidence = required;
+    for (const item of required) add("evidence:required", "fail", `${item.id}: ${item.reason}；${item.howToVerify}`);
+    if (required.length > 0) block("evidence_incomplete", "必需证据不完整");
     if (pending > 0) add("evidence:notExecuted", "warn", `${pending} 项检查未执行，交付汇报里必须说明`);
     if (advisory > 0) add("evidence:advisory", "info", `${advisory} 项咨询项，仅提示`);
   }
@@ -262,6 +268,10 @@ export function branchStatus({ cwd, branch }) {
   } else {
     add("review", "ok", `评审通过（需求符合度 ${review.record.requirementFit?.rating ?? "?"}，工程质量 ${review.record.engineeringQuality?.rating ?? "?"}，清单来源 ${review.record.acceptanceSource ?? "无"}，评审者 ${reviewerSummary(review.record)}）`);
   }
+  const pendingFindings = (review.record?.findingHistory ?? []).filter((item) => item.status === "pending_recheck");
+  if (pendingFindings.length > 0) add("review:history", "warn", `${pendingFindings.length} 条历史发现待复核：${pendingFindings.slice(0, 3).map((item) => item.findingKey).join("、")}`);
+  const repeated = (review.record?.findingHistory ?? []).filter((item) => item.status === "open" && (item.rounds ?? 1) >= 3);
+  if (repeated.length > 0) add("review:repeated", "warn", `同一阻断发现连续 ${Math.max(...repeated.map((item) => item.rounds))} 轮未解决：${repeated.map((item) => `${item.findingKey}（${item.summary}）`).join("；")}；停止盲目重试，说明已尝试路径并上报阻塞`);
 
   const riskBase = gitOk(root, ["merge-base", mainCommit, branchCommit]);
   const risk = assessRisk({ root, project, base: riskBase, head: branchCommit });

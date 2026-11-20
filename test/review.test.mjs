@@ -95,15 +95,49 @@ describe("评审", () => {
     confirmed.branch("task/a", { "a.txt": "a\n" });
     assert.equal(confirmed.cli("verify", "--branch", "task/a").status, 0);
     fakeReviewer(confirmed, partial);
-    const rejected = confirmed.cli("review", "--branch", "task/a");
+    const rejected = confirmed.cli("review", "--branch", "task/a", "--json");
     assert.equal(rejected.status, 1);
-    assert.match(rejected.stdout + rejected.stderr, /reject/);
+    const record = JSON.parse(rejected.stdout);
+    assert.equal(record.outcome, "completed");
+    assert.deepEqual(record.rejectionReasons, ["requirement_partial"]);
+    const status = confirmed.cli("status", "--branch", "task/a", "--json");
+    const summary = JSON.parse(status.stdout);
+    assert.equal(summary.branch, "task/a");
+    assert.equal(summary.codes.includes("review_rejected"), true);
 
     const draft = setup();
     draft.branch("task/b", { "b.txt": "b\n", ".harness/acceptance/task-b.md": "- 第 1 条\n" });
     assert.equal(draft.cli("verify", "--branch", "task/b").status, 0);
     fakeReviewer(draft, partial);
     assert.equal(draft.cli("review", "--branch", "task/b").status, 0);
+  });
+
+  test("评审历史保留未再次报告的问题并标为待复核，不自动当成已修复", () => {
+    const repo = setup();
+    repo.branch("task/a", { "a.txt": "a\n" });
+    assert.equal(repo.cli("verify", "--branch", "task/a").status, 0);
+    const finding = { severity: "high", file: "a.txt", summary: "输入会崩溃", scenario: "输入 x 时进程退出" };
+    fakeReviewer(repo, { ...APPROVE, findings: [finding] });
+    assert.equal(repo.cli("review", "--branch", "task/a").status, 1);
+
+    for (const round of [2, 3]) {
+      git(repo.root, "checkout", "-q", "task/a");
+      commit(repo.root, `fix: 第 ${round} 次修复崩溃\n\n- 补充输入校验`, { "a.txt": `fixed-${round}\n` });
+      git(repo.root, "checkout", "-q", "main");
+      assert.equal(repo.cli("verify", "--branch", "task/a").status, 0);
+      fakeReviewer(repo, { ...APPROVE, findings: [finding] });
+      assert.equal(repo.cli("review", "--branch", "task/a").status, 1);
+    }
+    const repeated = JSON.parse(repo.cli("status", "--branch", "task/a", "--json").stdout);
+    assert.match(repeated.steps.find((item) => item.id === "review:repeated").detail, /连续 3 轮未解决/);
+
+    fakeReviewer(repo, APPROVE);
+    assert.equal(repo.cli("review", "--branch", "task/a").status, 0);
+    const status = JSON.parse(repo.cli("status", "--branch", "task/a", "--json").stdout);
+    assert.match(status.steps.find((item) => item.id === "review:history").detail, /待复核/);
+    const review = JSON.parse(repo.cli("review", "--branch", "task/a", "--exploratory", "--json").stdout);
+    assert.equal(review.outcome, "exploratory");
+    assert.deepEqual(JSON.parse(repo.cli("status", "--branch", "task/a", "--json").stdout), status, "探索性评审不改正式历史");
   });
 
   test("评审进程失败时说出真实原因：超出预算给出处理办法，警告不再盖住 stdout", () => {
@@ -297,6 +331,26 @@ describe("度量", () => {
     assert.equal(total.verifyFirstPass, 1);
     assert.equal(total.verifyFirstPassRate, 0.5);
     assert.equal(total.verifyReused, 2);
+  });
+
+  test("分开采集定向验证、探索性评审、预检阻塞与授权修订", () => {
+    const events = [
+      { at: at(5), event: "verify", status: "passed", tree: "t1", durationMs: 120 },
+      { at: at(5), event: "verify.targeted", durationMs: 20 },
+      { at: at(5), event: "review", outcome: "exploratory", verdict: "approve" },
+      { at: at(5), event: "review.preflight" },
+      { at: at(5), event: "plan.amend" },
+      { at: at(5), event: "plan.approve", approvalKind: "reapproval" },
+    ];
+    const { total } = computeMetrics(events);
+    assert.equal(total.verifyRuns, 1);
+    assert.equal(total.targetedVerifyRuns, 1);
+    assert.equal(total.verifyDurationMs, 140);
+    assert.equal(total.reviews, 0);
+    assert.equal(total.exploratoryReviews, 1);
+    assert.equal(total.reviewPreflightBlocked, 1);
+    assert.equal(total.planAmendments, 1);
+    assert.equal(total.planReapprovals, 1);
   });
 
   test("按周分组，无数据时比率为空", () => {

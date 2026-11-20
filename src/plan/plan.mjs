@@ -82,17 +82,26 @@ function recordKey(branch) {
 
 /**
  * 方案是否已有实施授权：用户在对话里表达开始实施的意思后，由 Agent 照录原话记录。
- * 记录绑定验收清单的内容，之后清单再改就要重新取得授权。
- * 属于多阶段方案的记录还要通过阶段校验；at 是读取携带分支方案材料的提交，缺省用分支名。
+ * 新任务绑定唯一 contract.md，实施细节可继续修订；旧记录没有契约时保持整份验收清单绑定。
+ * 核心材料变化后须由人针对新 hash 确认；多阶段记录还要通过阶段校验，at 缺省用分支名。
  */
 export function approvalState({ root, branch, acceptanceText, at }) {
   const found = readRecord(root, PLAN_KIND, recordKey(branch));
   if (!found.ok) return { approved: false, reason: found.code === "missing" ? "还没有记录用户的实施授权" : found.reason };
   if (found.record.branch !== branch) return { approved: false, reason: `授权记录属于分支 ${found.record.branch}` };
-  if (acceptanceText === null || acceptanceText === undefined) return { approved: false, reason: "缺少验收清单" };
-  if (found.record.acceptanceHash !== sha(acceptanceText)) {
-    // 只报“改过”会让人自己 diff；有可比的摘要时顺带说清改了哪个章节、增删几条。
-    return { approved: false, reason: `授权之后验收清单又改过${describeChange({ root, record: found.record, acceptanceText })}，需要向用户说明改动并重新取得同意` };
+  if (found.record.contractHash) {
+    const text = showBlob(root, at ?? branch, found.record.contractPath);
+    if (text === null) return { approved: false, reason: `缺少核心授权契约 ${found.record.contractPath}` };
+    if (sha(text) !== found.record.contractHash) {
+      const change = describeAcceptanceChange(found.record.contractLines ?? [], acceptanceDigest(text));
+      return { approved: false, reason: `核心授权契约在授权后改过${change ? `（${change}）` : ""}，需要向用户说明改动并由人确认新契约` };
+    }
+  } else {
+    if (acceptanceText === null || acceptanceText === undefined) return { approved: false, reason: "缺少验收清单" };
+    if (found.record.acceptanceHash !== sha(acceptanceText)) {
+      // 只报“改过”会让人自己 diff；有可比的摘要时顺带说清改了哪个章节、增删几条。
+      return { approved: false, reason: `授权之后验收清单又改过${describeChange({ root, record: found.record, acceptanceText })}，需要向用户说明改动并重新取得同意` };
+    }
   }
   if (found.record.stages) {
     const problem = stageApprovalProblem({ root, branch, link: found.record.stages, acceptanceText, at });
@@ -203,7 +212,10 @@ export function riskHints({ root, project, base, head, branch }) {
   const lines = [];
   for (const item of risk.observed) lines.push(`RISK 观察（不拦截）: ${item}`);
   if (risk.reasons.length > 0 && planEnforced(project.policy)) {
-    lines.push(`RISK 要实施授权: ${risk.reasons.join("；")}。先写方案并向用户说明，用户同意后运行 harness approve --branch ${branch} --yes --note "<用户原话>"；改动本不该这么大时，现在拆小或撤掉无关改动`);
+    const state = currentApproval({ root, project, branch });
+    if (!state?.approved) {
+      lines.push(`RISK 要实施授权: ${risk.reasons.join("；")}。先写方案并向用户说明，用户同意后运行 harness approve --branch ${branch} --yes --note "<用户原话>"；改动本不该这么大时，现在拆小或撤掉无关改动`);
+    }
     // 已有记录但已失效时，最贵的错误是 Agent 以为还能合并；这里直接说出失效原因。
     const stale = staleApproval({ root, project, branch });
     if (stale) lines.push(`RISK 实施授权已失效: ${stale}。向用户说明改动并重新取得同意后再 approve`);
@@ -212,6 +224,15 @@ export function riskHints({ root, project, base, head, branch }) {
     lines.push(`RISK 要人确认: ${risk.confirmReasons.join("；")}。验证与评审通过后运行 harness confirm --branch ${branch} 展示摘要，由人在自己的终端带 --yes 确认`);
   }
   return lines;
+}
+
+function currentApproval({ root, project, branch }) {
+  try {
+    const text = showBlob(root, branch, acceptancePath(project, branch));
+    return approvalState({ root, branch, acceptanceText: text });
+  } catch {
+    return null;
+  }
 }
 
 /** 有授权记录但不通过校验时返回原因；没有记录属于正常阶段，返回 null，交给上面的通用提示。 */
@@ -268,12 +289,20 @@ export function planSummary({ cwd, branch }) {
   const paths = changedPaths(root, base, branchCommit);
   const planFiles = paths.filter((path) => path === rel || dirs.some((dir) => path.startsWith(dir)));
   const otherFiles = paths.filter((path) => !planFiles.includes(path));
+  const contracts = planFiles.filter((path) => path.endsWith("/contract.md"));
+  if (contracts.length > 1) throw new Error(`核心授权契约只能有一个，当前找到: ${contracts.join("、")}`);
+  const contractPath = contracts[0] ?? null;
+  const contract = contractPath ? showBlob(root, branchCommit, contractPath) : null;
   return {
     root,
     branch,
     branchCommit,
+    baseCommit: base,
     acceptancePath: rel,
     acceptance,
+    contractPath,
+    contract,
+    contractHash: contract === null ? null : sha(contract),
     planFiles,
     otherFiles,
     reasons: need.reasons,
@@ -291,7 +320,7 @@ export function planSummary({ cwd, branch }) {
  * stages 给出阶段文件时，同时记录覆盖全部阶段的方案级授权，本分支是携带它的分支；
  * fromStages 给出阶段文件时，按已有的方案级授权为后续阶段记录授权，原话照搬，不接受新的 note。
  */
-export function approvePlan({ cwd, branch, note = "", stages = null, fromStages = null, stage = null }) {
+export function approvePlan({ cwd, branch, note = "", stages = null, fromStages = null, stage = null, confirmContract = null }) {
   if (fromStages) return deriveStage({ cwd, branch, note, file: fromStages, stage });
   const raw = String(note).trim();
   if (!raw) {
@@ -312,7 +341,18 @@ export function approvePlan({ cwd, branch, note = "", stages = null, fromStages 
     const project = loadGateProject(cwd, { branch });
     prepared = prepareGrant({ project, root: summary.root, branch, at: summary.branchCommit, file: stages, stage });
     link = { file: stages, stage: prepared.stage, role: "carrier" };
-    // 先写方案级授权再写分支记录：中途失败时分支记录还是旧的，不会指向一份不存在的方案级授权。
+  }
+  const confirmationHash = prepared
+    ? sha(JSON.stringify(prepared.grant.stages.map((item) => [item.id, item.contractHash ?? item.acceptanceHash])))
+    : summary.contractHash ?? sha(summary.acceptance);
+  const previousApproval = approvalRecord(summary.root, branch);
+  const hadApproval = Boolean(previousApproval);
+  const addedContract = Boolean(summary.contractPath && !previousApproval?.contractPath);
+  if (hadApproval && (!summary.approval.approved || addedContract) && confirmContract !== confirmationHash) {
+    throw new Error(`核心授权材料已经变化，需要人查看差异并针对新内容重新确认。运行 harness approve --branch ${branch} --yes --note "<用户针对本次差异的新确认>" --confirm-contract ${confirmationHash}${stages ? ` --stages ${stages}` : ""}`);
+  }
+  if (prepared) {
+    // 先确认新契约，再写方案级授权；失败时旧授权保持不变。
     writeGrant(summary.root, { ...prepared.grant, note: quote, by, approvedAt, carrier: { branch, stage: prepared.stage } });
   }
   const record = writeRecord(summary.root, PLAN_KIND, recordKey(branch), {
@@ -320,6 +360,13 @@ export function approvePlan({ cwd, branch, note = "", stages = null, fromStages 
     branchCommit: summary.branchCommit,
     acceptanceHash: sha(summary.acceptance),
     acceptanceLines: acceptanceDigest(summary.acceptance),
+    ...(summary.contractPath ? {
+      authorizationVersion: 2,
+      contractPath: summary.contractPath,
+      contractHash: summary.contractHash,
+      contractLines: acceptanceDigest(summary.contract),
+      confirmationHash,
+    } : {}),
     // 记下清单路径：旧记录要按授权时的提交还原原清单才能给出章节级差异。
     acceptancePath: summary.acceptancePath,
     planFiles: summary.planFiles,
@@ -331,6 +378,8 @@ export function approvePlan({ cwd, branch, note = "", stages = null, fromStages 
   appendLedger(summary.root, {
     event: "plan.approve",
     branch,
+    taskId: `${branch}@${summary.baseCommit}`,
+    approvalKind: hadApproval ? "reapproval" : "initial",
     commit: summary.branchCommit,
     // 记录会被同分支的下一次授权覆盖，账本里留下原话与清单指纹，事后才能核对授权时同意了哪些内容。
     note: quote,
@@ -338,6 +387,36 @@ export function approvePlan({ cwd, branch, note = "", stages = null, fromStages 
     ...(link ? { stages: link.file, stage: link.stage, role: link.role } : {}),
   });
   return { record, summary, stages: prepared ? { total: prepared.grant.stages.length, stage: prepared.stage, hints: prepared.hints } : null };
+}
+
+export function amendPlan({ cwd, branch, reason = "" }) {
+  const summary = planSummary({ cwd, branch });
+  if (!summary.contractPath) throw new Error("只有使用 contract.md 的核心契约任务需要显式修订记录；plan.md 的日常更新直接提交即可");
+  if (!summary.approval.approved) throw new Error(`当前授权无效：${summary.approval.reason}。合理修订不能代替核心契约的重新确认`);
+  const text = String(reason).trim();
+  if (!text) throw new Error("修订记录要用 --reason 说明为什么在原核心契约范围内调整");
+  const amendedAt = new Date().toISOString();
+  const key = `am-${sha(`${branch}:${summary.branchCommit}:${amendedAt}:${text}`).slice(0, 24)}`;
+  const record = writeRecord(summary.root, "plan-amend", key, {
+    branch,
+    branchCommit: summary.branchCommit,
+    contractPath: summary.contractPath,
+    contractHash: summary.contractHash,
+    acceptanceHash: sha(summary.acceptance),
+    originalNote: summary.approval.record.note,
+    originalApprovedAt: summary.approval.record.approvedAt,
+    reason: redact(text),
+    amendedAt,
+  });
+  appendLedger(summary.root, {
+    event: "plan.amend",
+    branch,
+    taskId: `${branch}@${summary.baseCommit}`,
+    commit: summary.branchCommit,
+    contractHash: summary.contractHash.slice(0, 16),
+    reason: record.reason,
+  });
+  return record;
 }
 
 /** 按方案级授权为后续阶段记录授权：主分支上的阶段文件、本分支清单都要与授权时一致，前序阶段都已合入。 */
@@ -361,7 +440,12 @@ function deriveStage({ cwd, branch, note, file, stage }) {
   const index = grant.stages.findIndex((item) => item.id === stage);
   if (index < 0) throw new Error(`方案 ${file} 的授权里没有阶段 ${stage}`);
   const target = grant.stages[index];
-  if (sha(summary.acceptance) !== target.acceptanceHash) {
+  if (target.contractHash) {
+    const contract = showBlob(root, branch, target.contract);
+    if (contract === null || sha(contract) !== target.contractHash) {
+      throw new Error(`分支 ${branch} 的核心授权契约 ${target.contract} 与阶段 ${stage} 授权时不一致，需要向用户说明并由人确认新契约`);
+    }
+  } else if (sha(summary.acceptance) !== target.acceptanceHash) {
     const change = target.acceptanceLines ? describeAcceptanceChange(target.acceptanceLines, acceptanceDigest(summary.acceptance)) : null;
     throw new Error(
       `分支 ${branch} 的验收清单 ${summary.acceptancePath} 与阶段 ${stage} 授权时的清单 ${target.acceptance} 不一致${change ? `（${change}）` : ""}；先把阶段清单原样复制过来，内容要改时向用户说明并重新授权`,
@@ -376,6 +460,12 @@ function deriveStage({ cwd, branch, note, file, stage }) {
     acceptanceHash: sha(summary.acceptance),
     acceptanceLines: acceptanceDigest(summary.acceptance),
     acceptancePath: summary.acceptancePath,
+    ...(target.contractHash ? {
+      authorizationVersion: 2,
+      contractPath: target.contract,
+      contractHash: target.contractHash,
+      contractLines: target.contractLines,
+    } : {}),
     planFiles: summary.planFiles,
     by: userInfo().username,
     note: grant.note,
@@ -385,6 +475,8 @@ function deriveStage({ cwd, branch, note, file, stage }) {
   appendLedger(root, {
     event: "plan.approve",
     branch,
+    taskId: `${branch}@${summary.baseCommit}`,
+    approvalKind: "derived",
     commit: summary.branchCommit,
     note: grant.note,
     acceptanceHash: record.acceptanceHash.slice(0, 16),

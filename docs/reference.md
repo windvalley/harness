@@ -441,11 +441,12 @@ Agent 开始任务前先判断分级，规则写在 `.harness/rules/core.md`，�
 2. 澄清：先查已有需求、契约、代码和可用资料；有明确契约支撑的技术实现、兼容性和失败处理取舍由 Agent 记录依据后继续。
    只有仍无法自行获得且影响结果的关键信息才询问，一次问一个问题并给出推荐答案；你说“待定”的问题会原样列进方案，不会被替你填上。
    产品语义、权限边界和用户可见承诺没有明确依据时仍须由你确认，主动判断不扩大实施授权、危险操作或外部副作用的权限。
-3. 验收清单 `.harness/acceptance/<分支名>.md` 写清交付结果和边界，`docs/changes/<change-id>/spec.md` 写明行为，`docs/changes/<change-id>/plan.md` 说明实现、验证与可采用的备选路径。
+3. 验收清单 `.harness/acceptance/<分支名>.md` 写清交付结果和边界，`docs/changes/<change-id>/spec.md` 写明行为，`contract.md` 固定核心授权契约，`plan.md` 说明实现、验证与可采用的备选路径。
+   核心契约是唯一授权来源，包含主要方案、验收底线、必需证据和权限边界；测试映射与执行进度留在 `plan.md`，日常更新不需要重新授权。
    交方案前核对适用的测试入口、依赖和评审者，提前说明已知阻塞和必须由人完成的操作。
    远程交付可用 `harness doctor --check-remote` 只读核对平台访问。
    本机配置了评审者（`reviewers.json`）时，交出前先跑一轮方案评审。
-   把三份材料提交到任务分支后停下。
+   把这些材料提交到任务分支后停下。
 4. 授权：方案交付后，你在对话里明确表示同意实施该方案即可，不要求固定用语，也不需要执行命令。
    最初提出需求不能替代这一阶段的授权，对某个澄清答案或方案细节的认可也不等于同意实施。
 5. Agent 连续实施到完成，先把每条验收写成测试并确认全部失败，再实现到全部通过，最后按验收清单逐条给出结果与证据。
@@ -467,12 +468,14 @@ Agent 开始任务前先判断分级，规则写在 `.harness/rules/core.md`，�
 - 合并时，写了实施方案、改了库表相关文件或代码改动超过阈值的分支，必须有授权记录，否则报 `plan_unapproved`；没写方案就直接做了大改动的分支在这里被拦下。
 - 合并输出、`harness status` 与 `harness approve --branch <分支>` 的摘要都会显示记录下来的原话，你可以随时核对 Agent 是否真的得到了你的同意。
   每次授权另外在账本里留下原话与验收清单指纹，记录被下一次授权覆盖后仍可回溯；展示时同样会再遮一次凭据。
-- 授权绑定验收清单的内容：之后要改清单，Agent 要先向你说明并重新取得同意；实施方案里的进度记录可以随时更新。
-  清单改动后，`status`、`verify` 与 `merge` 都会指出改了哪几段、各增删几条；只有空行、标题或排版变化时也会如实说明，不会只丢一句“清单改过”。
+- 使用 `contract.md` 的任务绑定核心契约内容，验收细化和实施进度可以持续更新；重要技术取舍可用 `harness amend --branch <分支> --reason "<原因>"` 留下签名修订记录，日常更新无需登记。
+  核心契约变化后，Agent 先展示具体条目差异，再由你在自己的终端用 `--confirm-contract <新hash>` 针对新内容重新确认；旧原话只用于审计，不能冒充对新契约的同意。
+  没有 `contract.md` 的旧任务继续绑定整份验收清单，不自动迁移授权语义；清单改动后，`status`、`verify` 与 `merge` 都会指出改了哪几段、各增删几条。
 - 有授权记录后，独立评审把这份清单当作你同意过的需求来核对。
 - `harness approve --branch <分支>` 的摘要会列出主分支配置的合并后检查，以及本次改动是否命中 `when`：没命中时合并后不会产生这项义务，交付前就该发现。
 
-一个分支交付不完的需求可以写成多阶段方案：方案目录里放阶段文件（默认 `docs/changes/*/stages.json`，可由 `intent.plan.stages` 覆盖），格式为 `{"stages": [{"id", "title", "branch", "acceptance"}]}`。
+一个分支交付不完的需求可以写成多阶段方案：方案目录里放阶段文件（默认 `docs/changes/*/stages.json`，可由 `intent.plan.stages` 覆盖），格式为 `{"stages": [{"id", "title", "branch", "acceptance", "contract"?}]}`。
+阶段提供 `contract` 时绑定各自核心契约，验收清单可继续细化；没有该字段时保持整份清单绑定。
 
 - 你同意授权覆盖全部阶段时，Agent 在第一个阶段的分支上运行 `harness approve --branch <分支> --yes --note "<你的原话>" --stages <阶段文件> [--stage <阶段>]`，同时记下方案级授权，绑定阶段文件与全部阶段清单的内容。
   同一份方案只有一条当前记录，重新授权会覆盖它，历次授权都在账本里。
@@ -722,6 +725,16 @@ harness merge  --branch feature/login   # 本地交付：核对证据与评审�
   命令、`--note` 与报告摘要登记时会按名字遮盖常见凭据：`--token`、`--password`、`--api-key` 这类选项的值，`GITHUB_TOKEN=`、`API_KEY=` 这类赋值，`Authorization` 头与 `Bearer` 令牌，URL 里的用户信息与 `access_token=` 查询参数，保存和发往评审端点的都是遮盖后的内容。
   这是启发式，认不出的写法（位置参数里的密码、短选项）仍可能漏掉，所以命令里不要直接写凭据，改用环境变量或配置文件。
   需要后置到合并之后的检查见“合并后验收：完整示例”。
+- 修复期间可运行 `harness verify --check <检查ID>` 做定向验证，默认读取当前任务 Worktree 的未提交内容；加 `--committed` 才读取当前提交。
+  定向结果写入独立的 `verify-targeted` 记录，不能替代正式 `evidence`，也不会覆盖已有的正式证据。
+  `harness review --exploratory` 同样只写独立的 `review-exploratory` 记录，可用于早期探索，不要求正式证据，也不能用于交付。
+- 核心契约或验收清单可用 `<!-- harness:evidence id="browser-ui" phase="pre-merge" -->` 声明必需证据。
+  评审调用评审者前检查一次，`merge` 与 `submit` 对实际集成结果再核对；缺失、未知 ID、阶段错误或报告过期返回 `evidence_incomplete`，预检阶段不会调用评审者。
+  补登记后同一提交可以重新评审；未声明的 `extended` 继续只披露，不自动阻断。
+- `review --json` 与 `status --json` 输出结构化结果，区分正式完成、预检阻塞、定向调试和探索性评审。
+  正式评审的 `rejectionReasons` 可同时包含 `blocking_findings`、`requirement_partial`、`requirement_unmet`、`requirement_unknown` 等原因。
+  历史发现无法可靠匹配时标为 `pending_recheck`，不会因为换措辞或下一轮没有提到就自动视为已修复。
+  只有确定性指纹相同的阻断发现才累计轮次，连续三轮未解决时提示停止盲目重试并上报已尝试路径。
 - 提交之后、`verify` 之前按 `.harness/rules/method-review.md` 自审：验收清单能逐条对上证据、提交说明与 diff 一致且格式合规、没有漏提交的文件与无关改动、diff 之外的调用方与文档已经一起改。
   还要沿实际 diff、调用方和相关数据流核对适用的命令、SQL、路径、URL、反序列化、HTML、权限与敏感信息安全项；无关类别不用逐项填表，适用但未检查的标 `not_evaluated` 并说明影响与补验方式。
   自审不是门禁，不留记录，结论也不交给独立评审。
@@ -2138,6 +2151,8 @@ harness reviewer set mine --client command --command-json '["my-reviewer","--jso
 
 `harness merge` 和 `harness submit` 复用已通过的评审时，日志里写出“评审者: …”一行。
 两条命令在日志最后还会再写一行“汇报时写一行代码评审的评审者: …”，用 `tail` 截取输出时也不会丢。
+harness 直接运行时保证自身退出码，普通 `harness ... | tail` 的退出码由 shell 的最后一个命令决定，可能把失败变成 0。
+需要截断时，Bash 用 `set -o pipefail` 或检查 `PIPESTATUS`，zsh 检查 `pipestatus`；长任务续接优先使用 `review --json` 和 `status --json`，不要解析截断后的自然语言结论。
 Agent 完成任务后的汇报里要带一行代码评审的评审者，方案评审跑过的再带一行，内容照抄上述摘要。
 这条要求同时写在 `core.md` 和 `harness.md`：`core.md` 每次任务开始都会读，`harness.md` 有格式细则。
 这样你能直接看到评审用了哪个客户端、模型和 effort，需要时用 `harness reviewer set` 调整。
@@ -2151,15 +2166,17 @@ Agent 完成任务后的汇报里要带一行代码评审的评审者，方案�
 | 命令 | 用途 |
 | --- | --- |
 | `verify [--branch <分支>] [--head <ref>] [--base <ref>] [--plan] [--no-reuse] [--json]` | 验证并写签名证据；`--plan` 只列计划，`--no-reuse` 不复用已有结果，`--json` 输出 JSON |
+| `verify --check <检查ID> [--branch <分支>] [--committed] [--json]` | 定向调试验证，默认读取当前工作区；只写独立调试记录，不作为正式证据 |
 | `attest --branch <分支> --check <检查ID> --command <实际命令> --report <报告> [--note <摘要>] [--at <提交>]` | 登记已成功的外部 `extended` 检查，绑定检查定义与覆盖文件；合并后检查用 `--at` 指定被测的主分支提交，并关闭对应义务 |
-| `review --branch <分支>` | 独立评审 |
+| `review --branch <分支> [--exploratory] [--json]` | 独立评审；探索性结果与正式证据隔离，`--json` 输出结构化结论与拒绝原因 |
 | `review-plan --branch <分支> [--all] [--timeout-seconds <秒>] [--attempt-timeout-seconds <秒>] [--max-queries <次>]` | 方案评审，实时报告进度与回退，默认只展示 high 及以上的发现，见“方案评审” |
 | `reviewer list`、`set`、`remove`、`prefer`、`test` | 管理本机评审者：客户端、模型、推理强度、端点与 key，见“独立评审的后端” |
-| `status [--branch <分支>]` | 只读汇总还差哪几步才能交付，默认看当前分支；已合入但合并后验收待完成时退出码为 1 |
+| `status [--branch <分支>] [--json]` | 只读汇总还差哪几步才能交付，默认看当前分支；已合入但合并后验收待完成时退出码为 1 |
 | `status --handoff [--branch <分支>]` | 从现有 Git、Worktree 与签名记录生成 Markdown 交接视图，不另写状态；退出语义与普通 `status` 相同 |
 | `status --post-merge [--branch <分支>]` | 列出到期而未登记的合并后验收义务，有待办时退出码为 1 |
 | `confirm --branch <分支> [--yes] [--note <说明>]` | 查看门禁改动摘要；带 `--yes` 由人记录确认 |
-| `approve --branch <分支> [--yes --note <原话>]` | 查看任务方案与授权状态；用户同意实施后由 Agent 带 `--yes` 照录原话记录授权 |
+| `approve --branch <分支> [--yes --note <原话>] [--confirm-contract <新hash>]` | 查看任务方案与授权状态；核心契约变化后由人针对新 hash 重新确认 |
+| `amend --branch <分支> --reason <原因>` | 记录核心契约范围内的重要技术修订；`plan.md` 日常更新无需登记 |
 | `merge --branch <分支> [--dry-run]` | 受控合并到主分支（本地交付） |
 | `submit --branch <分支>` | 推送核对过的提交并创建或更新 PR/MR（远程交付） |
 | `sync [--remote <远程>]` | 把本地主分支快进到远程主分支，核对门禁改动并刷新本机安装；`--remote` 只在首次接入时使用 |
@@ -2238,7 +2255,8 @@ harness 防的是 Agent 的误操作，以及被提示注入后常见的绕过�
 | `harness:tdd-red` 失败 | 看失败输出里的原因：没有新增或修改测试，就补会先失败的测试；测试在还原实现后仍然通过，说明它对旧实现也成立，要改成真正约束新行为的断言；测试在当前实现上就不通过，先修测试。行为不变的重构在提交信息里写 `Tdd-Waiver: 原因`，不要为了过检查凑一个对旧实现也成立的测试 |
 | `harness:changed-line-coverage` 失败 | 输出里列出了没被执行的改动行：补测试覆盖它们；整个文件“不在覆盖率报告里”时，检查覆盖率命令是否包含该文件，没有可执行代码的文件用 `include.exclude` 排除；不要靠调低 `threshold` 或改成 `observe` 过关，这类改动要人确认 |
 | `risk_unconfirmed` | 改动命中了 `risk.paths` 的敏感路径，验证与评审已通过；Agent 展示 `harness confirm` 摘要，由人在自己的终端执行带 `--yes` 的确认，之后让 Agent 重新运行交付命令 |
-| `plan_unapproved` | 大改动没有实施授权记录，或授权后验收清单又改了；失效原因带上哪个章节各增删几条（条目跨章节移动会分别列出两个章节），阶段换序给出改动前后的顺序；已有授权但清单被删除时说明「缺少验收清单」。补齐方案并提交，向用户说明，用户同意后照录原话运行 `harness approve --branch <分支> --yes --note "<原话>"` |
+| `plan_unapproved` | 大改动没有实施授权记录，或核心授权材料发生变化；失效原因带上具体条目差异。使用契约的任务由人针对新 hash 执行 `--confirm-contract`，旧任务继续按验收清单授权 |
+| `evidence_incomplete` | 核心契约或验收清单声明的必需证据缺失或过期；按检查 ID 和 `howToVerify` 补验并用 `attest` 登记，再重新 verify、review 和交付。评审预检阶段不会调用评审者 |
 | `acceptance:post-merge` | 清单写了合并后条目但本次改动没有命中任何 `post-merge` 检查；按报错给出的三条路径处理。门禁检查配置只从主分支读取，改在任务分支不会生效；已有义务时删除章节也不会取消义务 |
 | `分支不存在` | 传错了分支名（常见是把验收清单文件名当成分支名）；报错会列出相近的本地分支，先用 `git branch` 或 `git worktree list` 核对 |
 | 写代码时被 `plan-before-code` 拦截 | 任务分支里有实施方案但还没有授权记录；用户还没同意就停下等，已经同意就按上一条记录；只是借用了 `docs/changes/` 下的旧方案时，把它移出这次改动 |

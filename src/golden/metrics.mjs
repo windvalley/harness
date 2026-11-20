@@ -13,9 +13,15 @@ function emptyBucket() {
     submits: 0,
     syncs: 0,
     verifyRuns: 0,
+    targetedVerifyRuns: 0,
     verifyReused: 0,
+    verifyDurationMs: 0,
     reviews: 0,
+    exploratoryReviews: 0,
+    reviewPreflightBlocked: 0,
     reviewRejected: 0,
+    planAmendments: 0,
+    planReapprovals: 0,
     policyDenials: 0,
     escalationsOpened: 0,
     escalationsAnswered: 0,
@@ -54,11 +60,26 @@ export function computeMetrics(events, { sinceDays } = {}) {
         case "verify":
           bucket.verifyRuns += 1;
           bucket.verifyReused += event.reused ?? 0;
+          bucket.verifyDurationMs += event.durationMs ?? 0;
+          break;
+        case "verify.targeted":
+          bucket.targetedVerifyRuns += 1;
+          bucket.verifyDurationMs += event.durationMs ?? 0;
           break;
         case "review":
-          bucket.reviews += 1;
+          if (event.outcome === "exploratory") bucket.exploratoryReviews += 1;
+          else bucket.reviews += 1;
           if (event.verdict === "reject") bucket.reviewRejected += 1;
           bucket.reviewCostUsd += event.costUsd ?? 0;
+          break;
+        case "review.preflight":
+          bucket.reviewPreflightBlocked += 1;
+          break;
+        case "plan.amend":
+          bucket.planAmendments += 1;
+          break;
+        case "plan.approve":
+          if (event.approvalKind === "reapproval") bucket.planReapprovals += 1;
           break;
         case "policy.deny":
           bucket.policyDenials += 1;
@@ -131,6 +152,7 @@ export function formatMetrics(result) {
     );
   }
   const t = result.total;
+  lines.push(`过程: 定向验证 ${t.targetedVerifyRuns}，探索性评审 ${t.exploratoryReviews}，预检阻塞 ${t.reviewPreflightBlocked}，契约修订 ${t.planAmendments}，重新授权 ${t.planReapprovals}，实际验证耗时 ${(t.verifyDurationMs / 1000).toFixed(1)} 秒`);
   lines.push(
     `合计: 本地合并 ${t.merges}，PR/MR 提交 ${t.submits}，同步 ${t.syncs}，验证 ${t.verifyRuns} 次(复用检查 ${t.verifyReused} 项)，评审拒绝率 ${pct(t.reviewRejectRate)}，` +
       `策略拦截 ${t.policyDenials}，上报 ${t.escalationsOpened}(已答复 ${t.escalationsAnswered})，` +

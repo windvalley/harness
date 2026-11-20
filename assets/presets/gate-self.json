@@ -65,6 +65,14 @@
       "patterns": ["\\bharness(\\.mjs)?\\s+confirm\\b[^|;&]*--yes\\b"],
       "reason": "门禁改动与首次接入的确认必须由人做出，Agent 代为确认等于没有确认",
       "fix": "运行不带 --yes 的 harness confirm 把摘要交给用户，由用户在自己的终端执行带 --yes 的命令；在 Claude Code 里用户可以在输入框里用 ! 前缀直接执行"
+    },
+    {
+      "id": "contract-reapproval-human-only",
+      "kind": "shell-forbid",
+      "scope": "whole",
+      "patterns": ["\\bharness(\\.mjs)?\\s+approve\\b[^|;&]*--confirm-contract\\b"],
+      "reason": "核心授权契约变化后的重新确认必须由人针对新内容做出",
+      "fix": "先运行不带 --yes 的 harness approve 展示契约差异，再由用户在自己的终端执行带 --confirm-contract <新hash> 的命令"
     }
   ]
 }

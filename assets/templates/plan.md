@@ -3,6 +3,7 @@
 <!-- 放在 docs/changes/<change-id>/plan.md。用户授权后按本文连续执行，每完成一步在下表标出完成与验证方式。 -->
 
 - 行为说明：同目录的 spec.md
+- 核心授权契约：同目录的 contract.md（只记录用户承诺与权限边界）
 - 验收清单：`.harness/acceptance/<分支名>.md`
 
 ## 验收与测试

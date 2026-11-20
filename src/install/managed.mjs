@@ -56,6 +56,7 @@ const RULE_SOURCES = [
   "rules/method-review.md",
   "rules/method-retrospective.md",
   "templates/acceptance.md",
+  "templates/contract.md",
   "templates/spec.md",
   "templates/plan.md",
   "templates/test-backfill.md",

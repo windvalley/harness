@@ -1,9 +1,10 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { acceptancePath, loadCurrentProject, loadGateProject, mainBranch } from "../lib/config.mjs";
 import { changedPaths, gitOk, run, showBlob } from "../lib/git.mjs";
-import { appendLedger, readRecord, writeRecord } from "../lib/store.mjs";
+import { appendLedger, dataDir, readRecord, writeRecord } from "../lib/store.mjs";
 import { approvalState } from "../plan/plan.mjs";
 import { endpointHost, loadLocalReviewers, orderReviewers } from "./reviewers.mjs";
 import { detectSessionModel } from "./session.mjs";
@@ -12,6 +13,7 @@ import { splitAcceptance } from "../lib/acceptance.mjs";
 import { redact } from "../lib/redact.mjs";
 import { planChunkedDiff, assertChunkCoverage, integrationDiff } from "./chunks.mjs";
 import { assertBranchRule } from "../policy/branch-name.mjs";
+import { assertRequiredEvidence } from "../verify/required.mjs";
 
 export const REVIEW_KIND = "review";
 // diff 上限可以在 review.maxDiffChars 里调整；提交说明与文件统计各自另有上限，不挤占 diff 的额度。
@@ -839,7 +841,27 @@ export function reviewDiff(root, baseCommit, branchCommit, maxChars = DEFAULT_MA
   };
 }
 
-export async function reviewBranch({ cwd, branch, log = console.error, reviewer = runReviewer }) {
+function findingKey(finding) {
+  const normalized = [finding.file, finding.summary, finding.scenario]
+    .map((value) => String(value ?? "").trim().replace(/\s+/g, " ").toLowerCase());
+  return `f-${createHash("sha256").update(normalized.join("\0")).digest("hex").slice(0, 16)}`;
+}
+
+function previousFindingHistory(root, branch) {
+  const dir = join(dataDir(root), "review-history");
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .filter((name) => name.endsWith(".json"))
+    .map((name) => {
+      const found = readRecord(root, "review-history", name.slice(0, -".json".length));
+      return found.ok && found.record.branch === branch ? found.record : null;
+    })
+    .filter(Boolean)
+    .sort((a, b) => String(a.reviewedAt).localeCompare(String(b.reviewedAt)))
+    .at(-1)?.findings ?? [];
+}
+
+export async function reviewBranch({ cwd, branch, log = console.error, reviewer = runReviewer, exploratory = false }) {
   const project = loadGateProject(cwd, { branch });
   assertBranchRule({ project, ref: branch });
   const root = project.root;
@@ -857,19 +879,41 @@ export async function reviewBranch({ cwd, branch, log = console.error, reviewer 
     : null;
 
   const evidence = readRecord(root, "evidence", branchCommit);
-  if (!evidence.ok || evidence.record.status !== "passed") {
+  if (!exploratory && (!evidence.ok || evidence.record.status !== "passed")) {
     throw new Error(`评审前必须先有通过的验证证据(${evidence.reason ?? evidence.record.status})，先运行 harness verify`);
   }
 
   const acceptance = readAcceptance({ project, root, branch, mainRef });
+  if (!exploratory) {
+    try {
+      assertRequiredEvidence({
+        project,
+        root,
+        branch,
+        acceptanceText: acceptance ? showBlob(root, branch, acceptance.path) ?? showBlob(root, mainRef, acceptance.path) : null,
+        evidence: evidence.record,
+      });
+    } catch (error) {
+      appendLedger(root, {
+        event: "review.preflight",
+        branch,
+        taskId: `${branch}@${baseCommit}`,
+        tree: branchCommit,
+        code: error.code,
+        problems: error.problems ?? [],
+      });
+      error.preflight = true;
+      throw error;
+    }
+  }
   const evidenceText = [
-    `状态: ${evidence.record.status}`,
-    `变更文件数: ${evidence.record.changedCount}`,
-    ...(evidence.record.checks ?? []).map((check) => `- ${check.id}: exit=${check.exit}${check.reused ? " (复用)" : ""} ${check.cmd}${check.id.startsWith("harness:") && check.note ? ` - ${check.note}` : ""}`),
-    ...(evidence.record.attested ?? []).map((item) => `- 外部证据 ${item.id}: 已登记于 ${item.attestedAt}\n  命令: ${redact(item.command)}\n  报告: ${item.report.path}（SHA-256 ${item.report.sha256}）\n  报告摘要:\n${redact(item.report.excerpt)}`),
-    ...(evidence.record.postMerge ?? []).map((item) => `- 合并后检查 ${item.id}: ${item.howToVerify}（不属于合并前证据）`),
-    ...(evidence.record.notExecuted ?? []).map((item) => `- 未执行 ${item.id}: ${item.reason}`),
-    ...(evidence.record.advisory ?? []).map((item) => `- 咨询项 ${item.id}: ${item.hint}`),
+    `状态: ${evidence.record?.status ?? "not_run"}`,
+    `变更文件数: ${evidence.record?.changedCount ?? 0}`,
+    ...(evidence.record?.checks ?? []).map((check) => `- ${check.id}: exit=${check.exit}${check.reused ? " (复用)" : ""} ${check.cmd}${check.id.startsWith("harness:") && check.note ? ` - ${check.note}` : ""}`),
+    ...(evidence.record?.attested ?? []).map((item) => `- 外部证据 ${item.id}: 已登记于 ${item.attestedAt}\n  命令: ${redact(item.command)}\n  报告: ${item.report.path}（SHA-256 ${item.report.sha256}）\n  报告摘要:\n${redact(item.report.excerpt)}`),
+    ...(evidence.record?.postMerge ?? []).map((item) => `- 合并后检查 ${item.id}: ${item.howToVerify}（不属于合并前证据）`),
+    ...(evidence.record?.notExecuted ?? []).map((item) => `- 未执行 ${item.id}: ${item.reason}`),
+    ...(evidence.record?.advisory ?? []).map((item) => `- 咨询项 ${item.id}: ${item.hint}`),
   ].join("\n");
 
   const commits = commitNotes(root, baseCommit, branchCommit);
@@ -965,14 +1009,44 @@ export async function reviewBranch({ cwd, branch, log = console.error, reviewer 
   if (chunked && (chunked.chunks.some((chunk) => chunk.verdict === "reject") ||
     chunked.integration.verdict === "reject")) verdict = "reject";
 
-  const record = writeRecord(root, REVIEW_KIND, branchCommit, {
+  const rejectionReasons = [];
+  if (blocking.length > 0) rejectionReasons.push("blocking_findings");
+  if (acceptance && structured.requirementFit?.rating === "unknown") rejectionReasons.push("requirement_unknown");
+  if (structured.requirementFit?.rating === "unmet") rejectionReasons.push("requirement_unmet");
+  if (CONFIRMED_SOURCES.has(acceptance?.source) && structured.requirementFit?.rating === "partial") rejectionReasons.push("requirement_partial");
+  if (chunked && (chunked.chunks.some((chunk) => chunk.verdict === "reject") || chunked.integration.verdict === "reject")) {
+    rejectionReasons.push("chunked_review_rejected");
+  }
+
+  const previousFindings = exploratory ? [] : previousFindingHistory(root, branch);
+  const previousByKey = new Map(previousFindings.map((item) => [item.findingKey, item]));
+  const currentFindings = structured.findings.map((item) => {
+    const key = findingKey(item);
+    const blocking = blockingFindings([item], blockSeverities).length > 0;
+    return {
+      ...item,
+      findingKey: key,
+      status: blocking ? "open" : "non_blocking",
+      rounds: blocking && previousByKey.has(key) ? (previousByKey.get(key).rounds ?? 1) + 1 : 1,
+    };
+  });
+  const currentKeys = new Set(currentFindings.map((item) => item.findingKey));
+  const findingHistory = [
+    ...currentFindings,
+    ...previousFindings.filter((item) => !currentKeys.has(item.findingKey)).map((item) => ({ ...item, status: "pending_recheck" })),
+  ];
+
+  const record = writeRecord(root, exploratory ? "review-exploratory" : REVIEW_KIND, branchCommit, {
+    outcome: exploratory ? "exploratory" : "completed",
     verdict,
+    rejectionReasons,
     reviewedBranch: branch,
     reviewedCommit: branchCommit,
     baseCommit,
     requirementFit: structured.requirementFit,
     engineeringQuality: structured.engineeringQuality,
-    findings: structured.findings,
+    findings: currentFindings,
+    findingHistory,
     blocking,
     ...(chunked ? { reviewMode: "chunked", chunked } : {}),
     acceptanceSource: acceptance?.source ?? null,
@@ -987,11 +1061,26 @@ export async function reviewBranch({ cwd, branch, log = console.error, reviewer 
     costUsd,
     reviewedAt: new Date().toISOString(),
   });
+  if (!exploratory) {
+    writeRecord(root, "review-history", `rh-${randomUUID()}`, {
+      branch,
+      reviewedCommit: branchCommit,
+      baseCommit,
+      verdict,
+      rejectionReasons,
+      findings: findingHistory,
+      reviewedAt: record.reviewedAt,
+    });
+  }
   appendLedger(root, {
     event: "review",
     branch,
+    taskId: `${branch}@${baseCommit}`,
     tree: record.reviewedCommit,
+    outcome: exploratory ? "exploratory" : "completed",
     verdict,
+    rejectionReasons,
+    findings: structured.findings.length,
     blocking: blocking.length,
     backend,
     reviewer: reviewerInfo?.name,
