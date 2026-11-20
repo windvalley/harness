@@ -580,7 +580,7 @@ function cmdApprove(argv) {
     const guidance = values["from-stages"]
       ? "已有有效方案级授权且阶段材料未变时，由 Agent 执行 --yes --from-stages 派生本阶段授权，无需用户再次授权"
       : `用户在对话中明确同意${values.stages ? "覆盖全部阶段" : "实施该方案"}后，由 Agent 执行 --yes --note "<用户原话>"${values.stages ? " --stages <阶段文件>" : ""} 记录实施授权`;
-    print(`\n以上为只读摘要。${guidance}；用户无需执行命令。未获得用户授权时停下等待，核心授权契约发生变化时仍需由人独立确认。`);
+    print(`\n以上为只读摘要。${guidance}；用户无需执行命令。未获得用户授权时停下等待；验收清单或核心授权契约发生需重新确认的变化时，先向用户说明并取得新授权；核心契约的 --confirm-contract 仍必须由人在自己的终端执行。`);
     return 0;
   }
   const outcome = approvePlan({
