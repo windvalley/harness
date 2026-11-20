@@ -591,13 +591,13 @@ describe("多阶段方案的授权交互", () => {
   test("未授权时只读摘要请用户在对话中授权，命令由 Agent 执行", () => {
     const repo = setup();
     repo.branch(C1, carrierFiles());
-    const before = ledger(repo).length;
+    const before = grantFiles(repo).length;
     const result = repo.cli("approve", "--branch", C1, "--stages", FILE);
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /用户在对话中明确同意/);
     assert.match(result.stdout, /全部阶段/);
     assert.match(result.stdout, /由 Agent 执行/);
     assert.match(result.stdout, /用户无需执行命令/);
-    assert.equal(ledger(repo).length, before, "只读摘要不得写入授权记录");
+    assert.equal(grantFiles(repo).length, before, "只读摘要不得写入授权记录");
   });
 });
