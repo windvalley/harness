@@ -288,7 +288,7 @@ export function branchStatus({ cwd, branch }) {
       const state = approvalState({ root, branch, acceptanceText: showBlob(root, branchCommit, acceptancePath(project, branch)), at: branchCommit });
       if (state.approved) add("plan", "ok", `已有实施授权（${risk.reasons.join("；")}；依据：${redact(state.record.note)}）`);
       else {
-        add("plan", "fail", `${risk.reasons.join("；")}，${state.reason}：用户同意实施后运行 harness approve --branch ${branch} --yes --note "<用户原话>"`);
+        add("plan", "fail", `${risk.reasons.join("；")}，${state.reason}：用户在对话中同意实施后，由 Agent 自行运行 harness approve --branch ${branch} --yes --note "<用户原话>"（用户无需执行命令）`);
         block("plan_unapproved", "待实施授权");
       }
     }
