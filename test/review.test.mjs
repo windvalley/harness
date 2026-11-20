@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
 import { APPROVE, commit, CONFIG, fakeCodex, fakeReviewer, git, makeRepo, sh } from "./helpers.mjs";
@@ -138,6 +138,11 @@ describe("评审", () => {
     const review = JSON.parse(repo.cli("review", "--branch", "task/a", "--exploratory", "--json").stdout);
     assert.equal(review.outcome, "exploratory");
     assert.deepEqual(JSON.parse(repo.cli("status", "--branch", "task/a", "--json").stdout), status, "探索性评审不改正式历史");
+
+    fakeReviewer(repo, { ...APPROVE, findings: [finding] });
+    assert.equal(repo.cli("review", "--branch", "task/a").status, 1);
+    const restarted = JSON.parse(repo.cli("status", "--branch", "task/a", "--json").stdout);
+    assert.equal(restarted.steps.some((item) => item.id === "review:repeated"), false, "通过之后同一发现重新从第一轮计算");
   });
 
   test("评审进程失败时说出真实原因：超出预算给出处理办法，警告不再盖住 stdout", () => {
@@ -179,9 +184,12 @@ describe("评审", () => {
     const repo = setup();
     repo.branch("task/a", { "a.txt": "a\n" });
     fakeReviewer(repo, APPROVE);
-    const review = repo.cli("review", "--branch", "task/a");
+    const review = repo.cli("review", "--branch", "task/a", "--json");
     assert.equal(review.status, 1);
-    assert.match(review.stderr, /必须先有通过的验证证据/);
+    const outcome = JSON.parse(review.stdout);
+    assert.equal(outcome.outcome, "preflight_blocked");
+    assert.equal(outcome.code, "evidence_missing");
+    assert.equal(existsSync(join(repo.root, "..", "prompt.log")), false);
   });
 });
 
@@ -351,6 +359,18 @@ describe("度量", () => {
     assert.equal(total.reviewPreflightBlocked, 1);
     assert.equal(total.planAmendments, 1);
     assert.equal(total.planReapprovals, 1);
+  });
+
+  test("探索性拒绝不计入正式评审拒绝率的分子或分母", () => {
+    const { total } = computeMetrics([
+      { at: at(5), event: "review", outcome: "completed", verdict: "approve" },
+      { at: at(5), event: "review", outcome: "exploratory", verdict: "reject" },
+      { at: at(6), event: "review", outcome: "exploratory", verdict: "reject" },
+    ]);
+    assert.equal(total.reviews, 1);
+    assert.equal(total.reviewRejected, 0);
+    assert.equal(total.reviewRejectRate, 0);
+    assert.equal(total.exploratoryReviews, 2);
   });
 
   test("按周分组，无数据时比率为空", () => {

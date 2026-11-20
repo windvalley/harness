@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { userInfo } from "node:os";
 import { join } from "node:path";
 import { acceptancePath, loadGateProject, mainBranch, trustedMainRef } from "../lib/config.mjs";
-import { acceptanceDigest, describeAcceptanceChange, hasSectionedDigest } from "../lib/acceptance.mjs";
+import { acceptanceDigest, describeAcceptanceChange, describeEvidenceChange, hasSectionedDigest } from "../lib/acceptance.mjs";
 import { matchAny } from "../lib/glob.mjs";
 import { changedPaths, git, mergeBase, refExists, resolveCommit, showBlob } from "../lib/git.mjs";
 import { redact } from "../lib/redact.mjs";
@@ -85,16 +85,18 @@ function recordKey(branch) {
  * 新任务绑定唯一 contract.md，实施细节可继续修订；旧记录没有契约时保持整份验收清单绑定。
  * 核心材料变化后须由人针对新 hash 确认；多阶段记录还要通过阶段校验，at 缺省用分支名。
  */
-export function approvalState({ root, branch, acceptanceText, at }) {
+export function approvalState({ root, branch, acceptanceText, at, contractText = undefined }) {
   const found = readRecord(root, PLAN_KIND, recordKey(branch));
   if (!found.ok) return { approved: false, reason: found.code === "missing" ? "还没有记录用户的实施授权" : found.reason };
   if (found.record.branch !== branch) return { approved: false, reason: `授权记录属于分支 ${found.record.branch}` };
   if (found.record.contractHash) {
-    const text = showBlob(root, at ?? branch, found.record.contractPath);
+    const text = contractText !== undefined ? contractText : showBlob(root, at ?? branch, found.record.contractPath);
     if (text === null) return { approved: false, reason: `缺少核心授权契约 ${found.record.contractPath}` };
     if (sha(text) !== found.record.contractHash) {
       const change = describeAcceptanceChange(found.record.contractLines ?? [], acceptanceDigest(text));
-      return { approved: false, reason: `核心授权契约在授权后改过${change ? `（${change}）` : ""}，需要向用户说明改动并由人确认新契约` };
+      const evidenceChange = describeEvidenceChange(restoreContract({ root, record: found.record }), text);
+      const detail = [change, evidenceChange].filter(Boolean).join("；");
+      return { approved: false, reason: `核心授权契约在授权后改过${detail ? `（${detail}）` : ""}，需要向用户说明改动并由人确认新契约` };
     }
   } else {
     if (acceptanceText === null || acceptanceText === undefined) return { approved: false, reason: "缺少验收清单" };
@@ -117,14 +119,13 @@ export function approvalState({ root, branch, acceptanceText, at }) {
 function describeChange({ root, record, acceptanceText }) {
   const current = acceptanceDigest(acceptanceText);
   const recorded = record.acceptanceLines;
-  if (hasSectionedDigest(recorded)) {
-    const change = describeAcceptanceChange(recorded, current);
-    return change ? `（${change}）` : "";
-  }
   const original = restoreAcceptance({ root, record });
-  if (original === null) return "";
-  const change = describeAcceptanceChange(acceptanceDigest(original), current);
-  return change ? `（${change}）` : "";
+  const change = hasSectionedDigest(recorded)
+    ? describeAcceptanceChange(recorded, current)
+    : original === null ? null : describeAcceptanceChange(acceptanceDigest(original), current);
+  const evidenceChange = original === null ? null : describeEvidenceChange(original, acceptanceText);
+  const detail = [change, evidenceChange].filter(Boolean).join("；");
+  return detail ? `（${detail}）` : "";
 }
 
 /** 授权时提交里的验收清单；记录里没写提交或对应文件取不到时返回 null。 */
@@ -138,6 +139,12 @@ function restoreAcceptance({ root, record }) {
     // 提交已被清理：按“无法还原”处理，不给差异。
   }
   return null;
+}
+
+function restoreContract({ root, record }) {
+  if (!record.branchCommit || !record.contractPath) return null;
+  const text = showBlob(root, record.branchCommit, record.contractPath);
+  return typeof text === "string" && sha(text) === record.contractHash ? text : null;
 }
 
 /** 分支的授权记录（只认能通过校验、属于这个分支的），没有时返回 null。 */
@@ -269,7 +276,10 @@ export function worktreePlanPending({ root, branch, project }) {
   if (![...tracked, ...untracked].some((path) => path && matchAny(path, settings.markers))) return false;
   const file = join(root, acceptancePath(project, branch));
   const text = existsSync(file) ? readFileSync(file, "utf8") : null;
-  return !approvalState({ root, branch, acceptanceText: text }).approved;
+  const contractPath = approvalRecord(root, branch)?.contractPath;
+  const contractFile = contractPath ? join(root, contractPath) : null;
+  const contractText = contractFile ? (existsSync(contractFile) ? readFileSync(contractFile, "utf8") : null) : undefined;
+  return !approvalState({ root, branch, acceptanceText: text, contractText }).approved;
 }
 
 /** 记录授权前的方案摘要，只读。 */
@@ -342,12 +352,27 @@ export function approvePlan({ cwd, branch, note = "", stages = null, fromStages 
     prepared = prepareGrant({ project, root: summary.root, branch, at: summary.branchCommit, file: stages, stage });
     link = { file: stages, stage: prepared.stage, role: "carrier" };
   }
+  const currentStage = prepared?.grant.stages.find((item) => item.id === prepared.stage) ?? null;
+  const authorizedContractPath = currentStage?.contract ?? summary.contractPath;
+  const authorizedContractHash = currentStage?.contractHash ?? summary.contractHash;
+  const authorizedContract = currentStage?.contract ? showBlob(summary.root, summary.branchCommit, currentStage.contract) : summary.contract;
   const confirmationHash = prepared
-    ? sha(JSON.stringify(prepared.grant.stages.map((item) => [item.id, item.contractHash ?? item.acceptanceHash])))
+    ? sha(JSON.stringify({
+      stagesHash: prepared.grant.stagesHash,
+      stage: prepared.stage,
+      topLevelContract: summary.contractPath ? { path: summary.contractPath, hash: summary.contractHash } : null,
+      stages: prepared.grant.stages.map((item) => ({
+        id: item.id,
+        acceptance: item.acceptance,
+        acceptanceHash: item.acceptanceHash,
+        contract: item.contract ?? null,
+        contractHash: item.contractHash ?? null,
+      })),
+    }))
     : summary.contractHash ?? sha(summary.acceptance);
   const previousApproval = approvalRecord(summary.root, branch);
   const hadApproval = Boolean(previousApproval);
-  const addedContract = Boolean(summary.contractPath && !previousApproval?.contractPath);
+  const addedContract = Boolean(authorizedContractPath && !previousApproval?.contractPath);
   if (hadApproval && (!summary.approval.approved || addedContract) && confirmContract !== confirmationHash) {
     throw new Error(`核心授权材料已经变化，需要人查看差异并针对新内容重新确认。运行 harness approve --branch ${branch} --yes --note "<用户针对本次差异的新确认>" --confirm-contract ${confirmationHash}${stages ? ` --stages ${stages}` : ""}`);
   }
@@ -360,11 +385,11 @@ export function approvePlan({ cwd, branch, note = "", stages = null, fromStages 
     branchCommit: summary.branchCommit,
     acceptanceHash: sha(summary.acceptance),
     acceptanceLines: acceptanceDigest(summary.acceptance),
-    ...(summary.contractPath ? {
+    ...(authorizedContractPath ? {
       authorizationVersion: 2,
-      contractPath: summary.contractPath,
-      contractHash: summary.contractHash,
-      contractLines: acceptanceDigest(summary.contract),
+      contractPath: authorizedContractPath,
+      contractHash: authorizedContractHash,
+      contractLines: acceptanceDigest(authorizedContract),
       confirmationHash,
     } : {}),
     // 记下清单路径：旧记录要按授权时的提交还原原清单才能给出章节级差异。

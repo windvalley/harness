@@ -118,7 +118,10 @@ function awaitingApproval({ root, branch, status, worktree, dirty }) {
   if (!paths.every((path) => path === acceptance || planDirs.some((dir) => path.startsWith(dir)))) return false;
   const file = worktree ? join(worktree, acceptance) : null;
   const text = file && existsSync(file) ? readFileSync(file, "utf8") : showBlob(root, status.branchCommit, acceptance);
-  return !approvalState({ root, branch, acceptanceText: text }).approved;
+  const contractPath = approvalRecord(root, branch)?.contractPath;
+  const contractFile = worktree && contractPath ? join(worktree, contractPath) : null;
+  const contractText = contractFile ? (existsSync(contractFile) ? readFileSync(contractFile, "utf8") : null) : undefined;
+  return !approvalState({ root, branch, acceptanceText: text, contractText }).approved;
 }
 
 /** 分支已被删除（例如合并后清理了 Worktree）时，只要还有到期而未登记的合并后验收义务，就仍然要接着做。 */

@@ -86,7 +86,18 @@ function ledger(repo) {
 
 const status = (repo, branch) => repo.cli("status", "--branch", branch).stdout;
 const approvedLine = /\[ok\] plan: 已有实施授权/;
-const STAGE_CONFIRM = sha(JSON.stringify(STAGES.stages.map((item) => [item.id, sha(STAGE_TEXT[item.id])])));
+const stageConfirmation = (stages) => sha(JSON.stringify({
+  stagesHash: sha(json({ stages })),
+  stage: "s1",
+  topLevelContract: null,
+  stages: stages.map((item) => ({
+    id: item.id,
+    acceptance: item.acceptance,
+    acceptanceHash: sha(STAGE_TEXT[item.id]),
+    contract: null,
+    contractHash: null,
+  })),
+}));
 
 /** 评审读取验收清单时标记的来源：approved 表示任务分支清单有有效授权。 */
 function reviewSource(repo, branch) {
@@ -184,6 +195,9 @@ describe("多阶段方案授权", () => {
       ...Object.fromEntries(Object.values(contracts).map((path) => [path, "# 核心契约\n\n- 保持权限边界\n"])),
     }));
     assert.equal(approveStages(repo, C1).status, 0);
+    const carrierGrant = JSON.parse(readFileSync(join(repo.env.HARNESS_DATA_DIR, "plan", "feat-alpha-1.json"), "utf8"));
+    assert.equal(carrierGrant.contractPath, contracts.s1, "首阶段绑定阶段文件指定的契约");
+    assert.equal(carrierGrant.contractHash, sha("# 核心契约\n\n- 保持权限边界\n"));
     landed(repo, C1);
 
     repo.branch(D2, {
@@ -330,7 +344,7 @@ describe("多阶段方案授权", () => {
     assert.notEqual(rejectedReapproval.status, 0);
     const preserved = JSON.parse(readFileSync(grantFiles(repo)[0], "utf8"));
     assert.equal(preserved.stagesHash, sha(json(STAGES)), "未确认新契约前不能覆盖旧方案授权");
-    assert.equal(approveStages(repo, C1, "--confirm-contract", STAGE_CONFIRM).status, 0);
+    assert.equal(approveStages(repo, C1, "--confirm-contract", stageConfirmation(edited.stages)).status, 0);
     assert.match(status(repo, C1), approvedLine);
     git(repo.root, "checkout", "-q", C1);
     writeFileSync(join(repo.root, "docs/changes/alpha/s3.md"), "- 阶段三验收（改）\n");

@@ -3,8 +3,8 @@ import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { redact } from "./lib/redact.mjs";
 import { rewrittenLandings } from "./lib/landed.mjs";
-import { deliverySettings, describeDelivery, loadCurrentProject, loadGateProject, loadGuardProject, loadTrustedProject, mainBranch } from "./lib/config.mjs";
-import { changedPaths, currentBranch, git, gitOk, isLinkedWorktree, mainWorktreeRoot, mergeBase, refExists, repoRoot, resolveCommit } from "./lib/git.mjs";
+import { acceptancePath, deliverySettings, describeDelivery, loadCurrentProject, loadGateProject, loadGuardProject, loadTrustedProject, mainBranch } from "./lib/config.mjs";
+import { changedPaths, currentBranch, git, gitOk, isLinkedWorktree, mainWorktreeRoot, mergeBase, refExists, repoRoot, resolveCommit, showBlob } from "./lib/git.mjs";
 import { keyStatus, readLedger, rotateKey, scanRecords } from "./lib/store.mjs";
 import { resolvePolicy, ruleStats } from "./policy/resolve.mjs";
 import { evaluateCall } from "./policy/engine.mjs";
@@ -15,6 +15,7 @@ import { dsh } from "./adapters/dsh.mjs";
 import { generic } from "./adapters/generic.mjs";
 import { planChecks, postMergeAcceptanceProblem, verify, verifyTargeted } from "./verify/verify.mjs";
 import { attestCheck } from "./verify/attestation.mjs";
+import { requiredEvidencePlanProblems } from "./verify/required.mjs";
 import { testEvidenceChecks, testEvidenceProblems, testEvidenceScope } from "./verify/testevidence.mjs";
 import { MergeError, mergeTask } from "./merge/merge.mjs";
 import { submitTask } from "./delivery/submit.mjs";
@@ -35,7 +36,7 @@ import { initProject, planUpgrade, upgradeProject } from "./install/init.mjs";
 import { unconfiguredOptions } from "./install/optional.mjs";
 import { uninstall } from "./install/uninstall.mjs";
 import { branchStatus, formatObligations, formatStatus, openPostMergeObligations } from "./status.mjs";
-import { branchHandoff, formatHandoff } from "./handoff.mjs";
+import { branchHandoff, formatHandoff, redactHandoff } from "./handoff.mjs";
 import { stopCheck } from "./stop/stop.mjs";
 import { installAll, installLocal, installVersion, listVersions, pruneVersions, publishVersion, versionDir } from "./install/install.mjs";
 import { formatSurvey } from "./install/survey.mjs";
@@ -161,6 +162,10 @@ async function cmdVerify(argv) {
     },
   });
   const cwd = process.cwd();
+  if (values.check && (values.plan || values.head)) {
+    process.stderr.write("verify --check 是定向执行模式，不能与 --plan 或 --head 组合；正式计划用 verify --plan --branch <名称>\n");
+    return 2;
+  }
   if (values.check) {
     const record = await verifyTargeted({ cwd, checkId: values.check, branch: values.branch, committed: values.committed });
     if (values.json) print(JSON.stringify(record, null, 2));
@@ -285,6 +290,12 @@ function cmdVerifyPlan({ cwd, branch, base, json }) {
     changed,
     exists: (path) => !deleted.has(path) && existsSync(join(root, path)),
   });
+  const acceptanceText = showBlob(root, head, acceptancePath(project, branch)) ?? showBlob(root, baseOfHead, acceptancePath(project, branch));
+  for (const phase of ["pre-merge", "post-merge"]) {
+    for (const item of requiredEvidencePlanProblems({ project, root, branch, at: head, acceptanceText, changed, phase })) {
+      invalid.push({ ...item, fix: item.howToVerify });
+    }
+  }
   const acceptanceProblem = postMergeAcceptanceProblem({ root, project, branch, head, base: baseCommit, postMerge });
   if (acceptanceProblem) invalid.push(acceptanceProblem);
   invalid.push(...testEvidenceProblems(project.verify));
@@ -300,7 +311,7 @@ function cmdVerifyPlan({ cwd, branch, base, json }) {
     return status;
   }
   print(`相对 ${mainRef} 变更 ${changed.length} 个文件${docOnly ? "（仅文档）" : ""}`);
-  for (const item of invalid) print(`  ERR  ${item.id}  ${item.reason}；${item.fix}`);
+  for (const item of invalid) print(`  ERR  ${item.id}${item.code ? ` [${item.code}]` : ""}  ${item.reason}；${item.fix}`);
   for (const item of plan) print(`  RUN  ${item.id}  ${item.cmd.join(" ")}${item.cwd && item.cwd !== "." ? `  (cwd ${item.cwd})` : ""}`);
   for (const item of testEvidence) {
     const scope = item.id.endsWith("tdd-red") ? `${item.files.length} 个实现文件` : `${item.files.length} 个文件的改动行`;
@@ -1205,7 +1216,7 @@ export async function main(argv) {
           return 2;
         }
         if (values.handoff) {
-          const handoff = branchHandoff({ cwd: process.cwd(), branch });
+          const handoff = redactHandoff(branchHandoff({ cwd: process.cwd(), branch }));
           print(values.json ? JSON.stringify(handoff, null, 2) : formatHandoff(handoff));
           return handoff.status.ready && handoff.status.complete !== false ? 0 : 1;
         }

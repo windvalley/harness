@@ -130,3 +130,31 @@ export function describeAcceptanceChange(before, after) {
   if (parts.length === 0) return "没有内容行变化（只有空行、标题或排版变化）";
   return parts.join("；");
 }
+
+
+export function evidenceDeclarations(text) {
+  const declarations = new Map();
+  for (const match of String(text ?? "").matchAll(/<!--\s*harness:evidence\s+([^>]+)-->/g)) {
+    const attrs = Object.fromEntries([...match[1].matchAll(/([a-zA-Z-]+)="([^"]*)"/g)].map((item) => [item[1], item[2]]));
+    if (attrs.id) declarations.set(attrs.id, attrs.phase ?? "pre-merge");
+  }
+  return declarations;
+}
+
+export function describeEvidenceChange(beforeText, afterText) {
+  const before = evidenceDeclarations(beforeText);
+  const after = evidenceDeclarations(afterText);
+  const added = [];
+  const removed = [];
+  const changed = [];
+  for (const [id, phase] of after) {
+    if (!before.has(id)) added.push(`${id}(${phase})`);
+    else if (before.get(id) !== phase) changed.push(`${id} 从 ${before.get(id)} 改为 ${phase}`);
+  }
+  for (const [id, phase] of before) if (!after.has(id)) removed.push(`${id}(${phase})`);
+  const parts = [];
+  if (added.length) parts.push(`新增必需证据 ${added.join("、")}`);
+  if (removed.length) parts.push(`删除必需证据 ${removed.join("、")}`);
+  if (changed.length) parts.push(`调整必需证据阶段 ${changed.join("、")}`);
+  return parts.join("；") || null;
+}
