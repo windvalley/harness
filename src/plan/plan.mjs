@@ -221,7 +221,7 @@ export function riskHints({ root, project, base, head, branch }) {
   if (risk.reasons.length > 0 && planEnforced(project.policy)) {
     const state = currentApproval({ root, project, branch });
     if (!state?.approved) {
-      lines.push(`RISK 要实施授权: ${risk.reasons.join("；")}。先写方案并向用户说明，用户同意后运行 harness approve --branch ${branch} --yes --note "<用户原话>"；改动本不该这么大时，现在拆小或撤掉无关改动`);
+      lines.push(`RISK 要实施授权: ${risk.reasons.join("；")}。先写方案并向用户说明，用户在对话中同意后由 Agent 自行运行 harness approve --branch ${branch} --yes --note "<用户原话>"（不让用户执行命令）；改动本不该这么大时，现在拆小或撤掉无关改动`);
     }
     // 已有记录但已失效时，最贵的错误是 Agent 以为还能合并；这里直接说出失效原因。
     const stale = staleApproval({ root, project, branch });

@@ -151,3 +151,16 @@ describe("upgrade --dry-run", () => {
     assert.equal(readFileSync(join(repo.root, ".harness/VERSION"), "utf8"), "0.0.1\n");
   });
 });
+
+
+describe("授权命令帮助区分 Agent 与人工的责任", () => {
+  test("approve 由 Agent 登记对话授权，confirm 仍由人执行", () => {
+    const repo = setup();
+    const approved = repo.rawCli("approve", "--help");
+    assert.equal(approved.status, 0, approved.stderr);
+    assert.match(approved.stdout, /对话授权后由 Agent 执行/);
+    const confirmed = repo.rawCli("confirm", "--help");
+    assert.equal(confirmed.status, 0, confirmed.stderr);
+    assert.match(confirmed.stdout, /由人在自己的终端执行/);
+  });
+});
