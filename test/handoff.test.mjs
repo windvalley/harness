@@ -115,6 +115,12 @@ describe("status --handoff", () => {
     assert.equal(readFileSync(ledgerFile, "utf8"), ledgerBefore, "不生成交接记录或额外账本事件");
     assert.equal(git(repo.root, "status", "--porcelain"), worktreeBefore, "不修改当前 Worktree");
     assert.equal(repo.cli("status", "--branch", BRANCH).stdout, ordinary.stdout, "普通 status 输出保持不变");
+
+    const jsonResult = repo.cli("status", "--handoff", "--branch", BRANCH, "--json");
+    assert.equal(jsonResult.status, ordinary.status, jsonResult.stderr);
+    const handoff = JSON.parse(jsonResult.stdout);
+    assert.match(handoff.acceptance.text, /API_KEY=\*\*\*/);
+    assert.doesNotMatch(jsonResult.stdout, /acceptance-secret|approval-secret|escalation-secret/);
   });
 
   test("缺少清单、授权、证据和 Worktree 时如实保留未决状态", () => {

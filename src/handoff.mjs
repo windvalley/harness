@@ -21,6 +21,15 @@ const EVIDENCE_STEPS = new Set([
 const clean = (value) => redact(value ?? "");
 const command = (name, branch) => `harness ${name} --branch ${branch}`;
 
+export function redactHandoff(value) {
+  if (typeof value === "string") return redact(value);
+  if (Array.isArray(value)) return value.map(redactHandoff);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, redactHandoff(item)]));
+  }
+  return value;
+}
+
 function relatedEscalations(root, branch) {
   try {
     return { items: listEscalations(root).filter((item) => item.context?.branch === branch), problem: null };

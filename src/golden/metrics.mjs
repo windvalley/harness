@@ -68,8 +68,10 @@ export function computeMetrics(events, { sinceDays } = {}) {
           break;
         case "review":
           if (event.outcome === "exploratory") bucket.exploratoryReviews += 1;
-          else bucket.reviews += 1;
-          if (event.verdict === "reject") bucket.reviewRejected += 1;
+          else {
+            bucket.reviews += 1;
+            if (event.verdict === "reject") bucket.reviewRejected += 1;
+          }
           bucket.reviewCostUsd += event.costUsd ?? 0;
           break;
         case "review.preflight":

@@ -730,6 +730,8 @@ harness merge  --branch feature/login   # 本地交付：核对证据与评审�
   `harness review --exploratory` 同样只写独立的 `review-exploratory` 记录，可用于早期探索，不要求正式证据，也不能用于交付。
 - 核心契约或验收清单可用 `<!-- harness:evidence id="browser-ui" phase="pre-merge" -->` 声明必需证据。
   评审调用评审者前检查一次，`merge` 与 `submit` 对实际集成结果再核对；缺失、未知 ID、阶段错误或报告过期返回 `evidence_incomplete`，预检阶段不会调用评审者。
+  必需检查没有命中当前改动时，计划阶段返回 `evidence_scope_mismatch`，先核对 `when` 的覆盖范围，不自动把报告塞进计划。
+  报告按具体检查定义和覆盖文件复核，新增无关配置不会让有效报告失效；只有任务与主分支合并后的实际范围才用于最终判定。
   补登记后同一提交可以重新评审；未声明的 `extended` 继续只披露，不自动阻断。
 - `review --json` 与 `status --json` 输出结构化结果，区分正式完成、预检阻塞、定向调试和探索性评审。
   正式评审的 `rejectionReasons` 可同时包含 `blocking_findings`、`requirement_partial`、`requirement_unmet`、`requirement_unknown` 等原因。
@@ -2257,6 +2259,7 @@ harness 防的是 Agent 的误操作，以及被提示注入后常见的绕过�
 | `risk_unconfirmed` | 改动命中了 `risk.paths` 的敏感路径，验证与评审已通过；Agent 展示 `harness confirm` 摘要，由人在自己的终端执行带 `--yes` 的确认，之后让 Agent 重新运行交付命令 |
 | `plan_unapproved` | 大改动没有实施授权记录，或核心授权材料发生变化；失效原因带上具体条目差异。使用契约的任务由人针对新 hash 执行 `--confirm-contract`，旧任务继续按验收清单授权 |
 | `evidence_incomplete` | 核心契约或验收清单声明的必需证据缺失或过期；按检查 ID 和 `howToVerify` 补验并用 `attest` 登记，再重新 verify、review 和交付。评审预检阶段不会调用评审者 |
+| `evidence_scope_mismatch` | 必需检查的 `when` 没命中当前改动，报告不会进入对应阶段的计划；先核对被测实现、测试、夹具和配置路径，不反复登记无效报告 |
 | `acceptance:post-merge` | 清单写了合并后条目但本次改动没有命中任何 `post-merge` 检查；按报错给出的三条路径处理。门禁检查配置只从主分支读取，改在任务分支不会生效；已有义务时删除章节也不会取消义务 |
 | `分支不存在` | 传错了分支名（常见是把验收清单文件名当成分支名）；报错会列出相近的本地分支，先用 `git branch` 或 `git worktree list` 核对 |
 | 写代码时被 `plan-before-code` 拦截 | 任务分支里有实施方案但还没有授权记录；用户还没同意就停下等，已经同意就按上一条记录；只是借用了 `docs/changes/` 下的旧方案时，把它移出这次改动 |

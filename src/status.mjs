@@ -245,7 +245,13 @@ export function branchStatus({ cwd, branch }) {
     if (recheck.length > 0) add("evidence:attested", "warn", `外部证据需重新核对：${recheck.map((item) => item.id).join("、")}，不能作为当前集成结果的有效证据`);
     if ((evidence.record.postMerge?.length ?? 0) > 0) add("evidence:postMerge", "info", `${evidence.record.postMerge.length} 项合并后验收不阻塞本次交付：${evidence.record.postMerge.map((item) => item.id).join("、")}`);
     const acceptanceText = showBlob(root, branchCommit, acceptancePath(project, branch)) ?? showBlob(root, mainCommit, acceptancePath(project, branch));
-    const required = requiredEvidenceProblems({ project, root, branch, acceptanceText, evidence: { ...evidence.record, attested: current } });
+    let integrationHead = branchCommit;
+    try {
+      integrationHead = planMergeResult({ project, root, branch }).resultCommit;
+    } catch {
+      // 有冲突时还没有实际集成结果，保留任务提交用于只读状态展示；交付会在冲突检查处拒绝。
+    }
+    const required = requiredEvidenceProblems({ project, root, branch, acceptanceText, evidence: evidence.record, head: integrationHead });
     result.requiredEvidence = required;
     for (const item of required) add("evidence:required", "fail", `${item.id}: ${item.reason}；${item.howToVerify}`);
     if (required.length > 0) block("evidence_incomplete", "必需证据不完整");

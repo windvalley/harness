@@ -28,6 +28,7 @@ import { evaluateCoverage, evaluateTdd, testEvidenceChecks, testEvidenceProblems
 import { checkFingerprint, checkPhase, checkScopeDigest, POST_MERGE } from "./checks.mjs";
 import { readAttestation } from "./attestation.mjs";
 import { hasObligation } from "./obligation.mjs";
+import { requiredEvidencePlanProblems } from "./required.mjs";
 import { assertBranchRule } from "../policy/branch-name.mjs";
 
 export { checkFingerprint } from "./checks.mjs";
@@ -467,6 +468,14 @@ export async function verify({
 
   try {
     const { plan, notExecuted, postMerge, advisory, docOnly, invalid, uncovered, requiredUncovered } = planChecks({ project, cwd: checkout, changed });
+    const acceptanceText = gateBranch
+      ? showBlob(root, headCommit, acceptancePath(project, gateBranch)) ?? showBlob(root, baseOfHead, acceptancePath(project, gateBranch))
+      : null;
+    for (const phase of ["pre-merge", "post-merge"]) {
+      for (const item of requiredEvidencePlanProblems({ project, root, branch: gateBranch, at: headCommit, acceptanceText, changed, phase })) {
+        invalid.push({ ...item, def: digest(item.id), fix: item.howToVerify });
+      }
+    }
     const attested = [];
     for (const item of [...notExecuted]) {
       const found = readAttestation({ root, branch: gateBranch, check: project.verify.checks.find((check) => check.id === item.id), head: headCommit });
@@ -514,7 +523,7 @@ export async function verify({
 
     // 写错的检查记为失败，证据不能显示通过；配置要先改，其余检查按 failFast 不再执行。
     for (const item of invalid) {
-      results.push({ id: item.id, cmd: "", def: item.def, exit: null, outcome: "failed", reasonCode: "invalid_config", configError: item.reason, tail: `${item.reason}\n改法: ${item.fix}` });
+      results.push({ id: item.id, cmd: "", def: item.def, exit: null, outcome: "failed", reasonCode: item.code ?? "invalid_config", configError: item.reason, tail: `${item.reason}\n改法: ${item.fix}` });
       log(`[verify] 配置错误 ${item.id}: ${item.reason}`);
     }
 
@@ -709,61 +718,77 @@ export async function verify({
 export async function verifyTargeted({ cwd, checkId, branch, committed = false, log = console.error }) {
   if (!checkId) throw new Error("定向验证要用 --check <检查ID>");
   const worktree = repoRoot(cwd);
-  const taskBranch = branch ?? currentBranch(worktree);
+  const actualBranch = currentBranch(worktree);
+  if (branch && !committed && branch !== actualBranch) {
+    throw new Error(`工作区定向验证必须在指定分支运行：指定 ${branch}，当前 ${actualBranch}；提交模式可加 --committed`);
+  }
+  const taskBranch = branch ?? actualBranch;
   const project = loadGateProject(cwd, { branch: taskBranch });
   const root = project.root;
   const mainRef = mainBranch(project);
-  const headCommit = committed ? resolveCommit(root, "HEAD") : null;
-  const baseCommit = committed ? mergeBase(root, resolveCommit(root, mainRef), headCommit) : mergeBase(root, resolveCommit(root, mainRef), resolveCommit(root, "HEAD"));
+  const targetRef = committed ? taskBranch : "HEAD";
+  const headCommit = committed ? resolveCommit(root, targetRef) : null;
+  const baseCommit = mergeBase(root, resolveCommit(root, mainRef), resolveCommit(root, targetRef));
   const changed = committed ? changedPaths(root, baseCommit, headCommit) : [
     ...git(root, ["diff", "--name-only", "--no-renames", "-z", baseCommit, "HEAD"]).stdout.split("\0"),
     ...git(worktree, ["diff", "--name-only", "--no-renames", "-z", "HEAD"]).stdout.split("\0"),
     ...git(worktree, ["ls-files", "--others", "--exclude-standard", "-z"]).stdout.split("\0"),
   ].filter(Boolean);
-  let checkout = worktree;
-  if (committed) {
-    const parent = checkoutRootFor(root);
-    checkout = prepareCheckout({ root, headCommit, log, parent }).checkout;
+  const sharedParent = committed ? checkoutRootFor(root) : null;
+  const releaseLock = committed ? await acquireCheckoutLock({ dir: sharedParent, log }) : null;
+  let parent = sharedParent;
+  if (committed && !releaseLock) {
+    parent = mkdtempSync(join(tmpdir(), "harness-targeted-checkout-"));
+    log("[verify] 未能获得固定检出目录的锁，本次定向验证使用临时目录");
   }
-  const { plan } = planChecks({ project, cwd: checkout, changed: [...new Set(changed)] });
-  const item = plan.find((entry) => entry.id === checkId);
-  if (!item) throw new Error(`检查 ${checkId} 没有命中当前改动，或它是需要外部执行的 extended 检查`);
-  const env = project.config.env ?? {};
-  const results = [];
-  let status = "passed";
-  const missing = (item.requires ?? []).filter((rel) => !existsSync(join(worktree, rel)) && !existsSync(join(checkout, rel)));
-  if (missing.length > 0) {
-    status = "incomplete";
-    results.push({ id: item.id, outcome: "blocked", reasonCode: "missing_dependency", reason: `缺少依赖目录 ${missing.join("、")}` });
-  } else {
-    if (committed) linkDependencies(worktree, checkout, item.requires ?? []);
-    const outcome = await execute(item.cmd[0], item.cmd.slice(1), {
-      cwd: join(checkout, item.cwd),
-      env,
-      timeoutMs: (project.config.verify?.timeoutSeconds ?? 1800) * 1000,
+  try {
+    let checkout = worktree;
+    if (committed) checkout = prepareCheckout({ root, headCommit, log, parent }).checkout;
+    const { plan } = planChecks({ project, cwd: checkout, changed: [...new Set(changed)] });
+    const item = plan.find((entry) => entry.id === checkId);
+    if (!item) throw new Error(`检查 ${checkId} 没有命中当前改动，或它是需要外部执行的 extended 检查`);
+    const env = project.config.env ?? {};
+    const results = [];
+    let status = "passed";
+    const missing = (item.requires ?? []).filter((rel) => !existsSync(join(worktree, rel)) && !existsSync(join(checkout, rel)));
+    if (missing.length > 0) {
+      status = "incomplete";
+      results.push({ id: item.id, outcome: "blocked", reasonCode: "missing_dependency", reason: `缺少依赖目录 ${missing.join("、")}` });
+    } else {
+      if (committed) linkDependencies(worktree, checkout, item.requires ?? []);
+      const outcome = await execute(item.cmd[0], item.cmd.slice(1), {
+        cwd: join(checkout, item.cwd),
+        env,
+        timeoutMs: (project.config.verify?.timeoutSeconds ?? 1800) * 1000,
+      });
+      results.push({ id: item.id, cmd: item.cmd.join(" "), ...outcome });
+      status = outcome.exit === 0 ? "passed" : outcome.outcome === "blocked" ? "incomplete" : "failed";
+    }
+    const key = taskBranch.replace(/[^0-9A-Za-z._-]+/g, "-");
+    const record = writeRecord(root, "verify-targeted", key, {
+      branch: taskBranch,
+      checkId,
+      source: committed ? `commit:${headCommit}` : "worktree",
+      targeted: true,
+      status,
+      results,
+      finishedAt: new Date().toISOString(),
     });
-    results.push({ id: item.id, cmd: item.cmd.join(" "), ...outcome });
-    status = outcome.exit === 0 ? "passed" : outcome.outcome === "blocked" ? "incomplete" : "failed";
+    appendLedger(root, {
+      event: "verify.targeted",
+      branch: taskBranch,
+      taskId: `${taskBranch}@${baseCommit}`,
+      checkId,
+      source: committed ? "commit" : "worktree",
+      status,
+      durationMs: results.reduce((total, entry) => total + (entry.durationMs ?? 0), 0),
+    });
+    return record;
+  } finally {
+    if (committed) {
+      git(root, ["worktree", "prune"]);
+      releaseLock?.();
+      if (parent !== sharedParent) rmSync(parent, { recursive: true, force: true });
+    }
   }
-  const key = taskBranch.replace(/[^0-9A-Za-z._-]+/g, "-");
-  const record = writeRecord(root, "verify-targeted", key, {
-    branch: taskBranch,
-    checkId,
-    source: committed ? `commit:${headCommit}` : "worktree",
-    targeted: true,
-    status,
-    results,
-    finishedAt: new Date().toISOString(),
-  });
-  appendLedger(root, {
-    event: "verify.targeted",
-    branch: taskBranch,
-    taskId: `${taskBranch}@${baseCommit}`,
-    checkId,
-    source: committed ? "commit" : "worktree",
-    status,
-    durationMs: results.reduce((total, entry) => total + (entry.durationMs ?? 0), 0),
-  });
-  if (committed) git(root, ["worktree", "prune"]);
-  return record;
 }

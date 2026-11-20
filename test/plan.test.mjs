@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { createHash } from "node:crypto";
-import { readFileSync, realpathSync } from "node:fs";
+import { readFileSync, realpathSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
 import { APPROVE, CONFIG, commit, fakeReviewer, git, makeRepo, sh, write } from "./helpers.mjs";
@@ -90,6 +90,39 @@ describe("先方案后实施", () => {
     assert.match(denied.stderr, /contract-reapproval-human-only/);
     assert.equal(repo.cli("approve", "--branch", BRANCH, "--yes", "--note", "确认新方案", "--confirm-contract", sha(changed)).status, 0);
     assert.match(repo.cli("status", "--branch", BRANCH).stdout, /已有实施授权/);
+  });
+
+  test("工作区契约修改或删除后，实时写入门禁立即使授权失效", () => {
+    const repo = setup();
+    const linked = linkedTask(repo);
+    const contract = "docs/changes/login/contract.md";
+    const original = "# 核心契约\n\n- 保持权限边界\n";
+    commit(linked, "docs(login): 核心契约\n\n- 明确权限边界", { [PLAN]: "# 实施方案\n", [contract]: original, [ACCEPTANCE]: "- 保持原行为\n" });
+    assert.equal(repo.cli("approve", "--branch", BRANCH, "--yes", "--note", QUOTE).status, 0);
+    write(linked, contract, "# 核心契约\n\n- 改为扩大权限\n");
+    assert.equal(writeHook(repo, linked, "src/app.js").status, 2);
+    write(linked, contract, original);
+    assert.equal(writeHook(repo, linked, "src/app.js").status, 0);
+    rmSync(join(linked, contract));
+    assert.equal(writeHook(repo, linked, "src/app.js").status, 2);
+  });
+
+  test("授权差异列出必需证据 ID 与阶段变化，不误报为纯排版", () => {
+    const repo = setup();
+    repo.branch(BRANCH, {
+      "src/big.js": code(10),
+      [ACCEPTANCE]: '## 应该发生\n\n- 甲\n\n<!-- harness:evidence id="browser" phase="pre-merge" -->\n',
+    });
+    assert.equal(repo.cli("approve", "--branch", BRANCH, "--yes", "--note", QUOTE).status, 0);
+    git(repo.root, "checkout", "-q", BRANCH);
+    commit(repo.root, "docs(login): 调整必需证据\n\n- 更换检查并后置", {
+      [ACCEPTANCE]: '## 应该发生\n\n- 甲\n\n<!-- harness:evidence id="smoke" phase="post-merge" -->\n',
+    });
+    git(repo.root, "checkout", "-q", "main");
+    const text = repo.cli("status", "--branch", BRANCH).stdout;
+    assert.match(text, /删除必需证据 browser\(pre-merge\)/);
+    assert.match(text, /新增必需证据 smoke\(post-merge\)/);
+    assert.doesNotMatch(text, /（没有内容行变化（只有空行、标题或排版变化））/);
   });
 
   test("旧任务新增核心契约也须由人确认，不能静默改变授权来源", () => {

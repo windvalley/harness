@@ -418,8 +418,8 @@ export async function checkGates({ project, root, branch, log = console.error, d
       project,
       root,
       branch,
-      at: branchCommit,
-      acceptanceText: branchAcceptance.status === 0 ? branchAcceptance.stdout : mainAcceptance.stdout,
+      at: newHead,
+      acceptanceText: showBlob(root, newHead, acceptancePath(project, branch)) ?? "",
     });
     const hasRequiredEvidence = requiredDefinitions.requirements.some((item) => item.phase === "pre-merge") || requiredDefinitions.problems.length > 0;
     if (evidence.ok && reuse.evidenceReusable && !hasRequiredEvidence) {
@@ -454,9 +454,10 @@ export async function checkGates({ project, root, branch, log = console.error, d
         project,
         root,
         branch,
-        at: branchCommit,
-        acceptanceText: branchAcceptance.status === 0 ? branchAcceptance.stdout : mainAcceptance.stdout,
+        at: newHead,
+        acceptanceText: showBlob(root, newHead, acceptancePath(project, branch)) ?? "",
         evidence: evidence.record,
+        head: newHead,
       });
     } catch (error) {
       throw new MergeError(`必需证据不完整(${error.code})：\n${error.message}`, "evidence_incomplete");

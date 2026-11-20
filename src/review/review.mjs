@@ -880,7 +880,13 @@ export async function reviewBranch({ cwd, branch, log = console.error, reviewer 
 
   const evidence = readRecord(root, "evidence", branchCommit);
   if (!exploratory && (!evidence.ok || evidence.record.status !== "passed")) {
-    throw new Error(`评审前必须先有通过的验证证据(${evidence.reason ?? evidence.record.status})，先运行 harness verify`);
+    const code = evidence.ok ? "evidence_failed" : "evidence_missing";
+    const error = new Error(`评审前必须先有通过的验证证据(${evidence.reason ?? evidence.record.status})，先运行 harness verify`);
+    error.code = code;
+    error.preflight = true;
+    error.problems = [{ id: "evidence", code, reason: error.message, howToVerify: `harness verify --branch ${branch}` }];
+    appendLedger(root, { event: "review.preflight", branch, taskId: `${branch}@${baseCommit}`, tree: branchCommit, code, problems: error.problems });
+    throw error;
   }
 
   const acceptance = readAcceptance({ project, root, branch, mainRef });
@@ -892,6 +898,7 @@ export async function reviewBranch({ cwd, branch, log = console.error, reviewer 
         branch,
         acceptanceText: acceptance ? showBlob(root, branch, acceptance.path) ?? showBlob(root, mainRef, acceptance.path) : null,
         evidence: evidence.record,
+        head: branchCommit,
       });
     } catch (error) {
       appendLedger(root, {
@@ -1027,7 +1034,7 @@ export async function reviewBranch({ cwd, branch, log = console.error, reviewer 
       ...item,
       findingKey: key,
       status: blocking ? "open" : "non_blocking",
-      rounds: blocking && previousByKey.has(key) ? (previousByKey.get(key).rounds ?? 1) + 1 : 1,
+      rounds: blocking && previousByKey.get(key)?.status === "open" ? (previousByKey.get(key).rounds ?? 1) + 1 : 1,
     };
   });
   const currentKeys = new Set(currentFindings.map((item) => item.findingKey));
