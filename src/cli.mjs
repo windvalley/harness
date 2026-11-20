@@ -64,8 +64,8 @@ const USAGE = `harness <命令> [参数]    任一命令加 --help 查看该命�
   status   --branch <名称> [--json]                   只读汇总：还差哪几步才能合并
   status   --handoff [--branch <名称>]                生成 Markdown 交接视图，复用现有 Git、Worktree 与签名记录，不另写状态
   status   --post-merge [--branch <名称>]            列出到期而未登记的合并后验收义务；有待办时退出码为 1
-  confirm  --branch <名称> [--yes]                   查看门禁改动；--yes 记录人工确认
-  approve  --branch <名称> [--yes --note <原话>]     查看任务方案；用户同意实施后加 --yes，--note 照录用户原话
+  confirm  --branch <名称> [--yes]                   查看门禁改动；--yes 仅由人在自己的终端执行
+  approve  --branch <名称> [--yes --note <原话>]     查看任务方案；对话授权后由 Agent 执行 --yes 并照录原话
            [--stages <阶段文件> [--stage <阶段>]]     用户同意覆盖全部阶段时，同时记录方案级授权
            --yes --from-stages <阶段文件> --stage <阶段>  按方案级授权为后续阶段分支记录授权，原话照搬
   amend    --branch <名称> --reason <原因>              记录核心契约范围内的重要技术修订；plan.md 日常更新无需登记
@@ -548,7 +548,7 @@ async function cmdConfirm(argv) {
   }
   if (!values.yes) {
     print(formatSummary(confirmSummary({ cwd: process.cwd(), branch: values.branch })));
-    print("\n以上为只读摘要。确认无误后加 --yes 记录本次确认。");
+    print("\n以上为只读摘要。Agent 只展示摘要；带 --yes 的人工确认须由人在自己的终端执行，对话同意不能代替。");
     return 0;
   }
   const { summary } = approveConfirm({ cwd: process.cwd(), branch: values.branch, note: values.note ?? "" });
@@ -577,7 +577,10 @@ function cmdApprove(argv) {
   }
   if (!values.yes) {
     print(formatPlanSummary(planSummary({ cwd: process.cwd(), branch: values.branch })));
-    print("\n以上为只读摘要。用户表达开始实施的意思后，加 --yes --note \"<用户原话>\" 记录授权；验收清单之后再改，要重新取得同意。");
+    const guidance = values["from-stages"]
+      ? "已有有效方案级授权且阶段材料未变时，由 Agent 执行 --yes --from-stages 派生本阶段授权，无需用户再次授权"
+      : `用户在对话中明确同意${values.stages ? "覆盖全部阶段" : "实施该方案"}后，由 Agent 执行 --yes --note "<用户原话>"${values.stages ? " --stages <阶段文件>" : ""} 记录实施授权`;
+    print(`\n以上为只读摘要。${guidance}；用户无需执行命令。未获得用户授权时停下等待，核心授权契约发生变化时仍需由人独立确认。`);
     return 0;
   }
   const outcome = approvePlan({
