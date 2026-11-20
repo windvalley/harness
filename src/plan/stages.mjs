@@ -43,7 +43,10 @@ export function parseStages(text, file) {
     }
     if (seen.has(item.id)) throw new Error(`阶段文件 ${file} 的阶段 id 重复: ${item.id}`);
     seen.add(item.id);
-    return { id: item.id, title: item.title, branch: item.branch, acceptance: item.acceptance };
+    if (item.contract !== undefined && (typeof item.contract !== "string" || item.contract.trim() === "")) {
+      throw new Error(`阶段文件 ${file} 第 ${index + 1} 个阶段的 contract 必须是非空字符串`);
+    }
+    return { id: item.id, title: item.title, branch: item.branch, acceptance: item.acceptance, ...(item.contract ? { contract: item.contract } : {}) };
   });
 }
 
@@ -62,7 +65,14 @@ export function prepareGrant({ project, root, branch, at, file, stage }) {
   const hashed = stages.map((item) => {
     const content = showBlob(root, at, item.acceptance);
     if (content === null) throw new Error(`阶段 ${item.id} 的验收清单 ${item.acceptance} 还没有提交到分支 ${branch}`);
-    return { ...item, acceptanceHash: sha256(content), acceptanceLines: acceptanceDigest(content) };
+    const contract = item.contract ? showBlob(root, at, item.contract) : null;
+    if (item.contract && contract === null) throw new Error(`阶段 ${item.id} 的核心授权契约 ${item.contract} 还没有提交到分支 ${branch}`);
+    return {
+      ...item,
+      acceptanceHash: sha256(content),
+      acceptanceLines: acceptanceDigest(content),
+      ...(item.contract ? { contractHash: sha256(contract), contractLines: acceptanceDigest(contract) } : {}),
+    };
   });
   return { grant: { file, stagesHash: sha256(text), stages: hashed }, stage: current, hints: nameHints(project, stages) };
 }
@@ -146,6 +156,15 @@ export function stageApprovalProblem({ root, branch, link, acceptanceText, at })
     const text = showBlob(root, ref, link.file);
     if (text === null || sha256(text) !== grant.stagesHash) return `${MATERIAL_CHANGED}（${describeStagesChange(grant, text)}）`;
     for (const item of grant.stages) {
+      if (item.contractHash) {
+        const contract = showBlob(root, ref, item.contract);
+        if (contract === null) return `${MATERIAL_CHANGED}（阶段 ${item.id} 的核心授权契约 ${item.contract} 已删除）`;
+        if (sha256(contract) !== item.contractHash) {
+          const change = describeAcceptanceChange(item.contractLines ?? [], acceptanceDigest(contract));
+          return `${MATERIAL_CHANGED}（阶段 ${item.id} 的核心授权契约${change ? `：${change}` : "内容已变化"}）`;
+        }
+        continue;
+      }
       const content = showBlob(root, ref, item.acceptance);
       if (content === null) return `${MATERIAL_CHANGED}（阶段 ${item.id} 的验收清单 ${item.acceptance} 已删除）`;
       if (sha256(content) !== item.acceptanceHash) {
@@ -157,6 +176,15 @@ export function stageApprovalProblem({ root, branch, link, acceptanceText, at })
   }
   const stage = grant.stages.find((item) => item.id === link.stage);
   if (!stage) return `方案 ${link.file} 的授权里没有阶段 ${link.stage}，需要向用户说明并重新授权`;
+  if (stage.contractHash) {
+    const contract = showBlob(root, at ?? branch, stage.contract);
+    if (contract === null) return `阶段 ${link.stage} 缺少核心授权契约 ${stage.contract}`;
+    if (sha256(contract) !== stage.contractHash) {
+      const change = describeAcceptanceChange(stage.contractLines ?? [], acceptanceDigest(contract));
+      return `阶段 ${link.stage} 的核心授权契约与方案授权不一致${change ? `（${change}）` : ""}，需要向用户说明并由人确认新契约`;
+    }
+    return null;
+  }
   if (acceptanceText === null || acceptanceText === undefined || sha256(acceptanceText) !== stage.acceptanceHash) {
     const change = acceptanceText !== null && acceptanceText !== undefined && stage.acceptanceLines
       ? describeAcceptanceChange(stage.acceptanceLines, acceptanceDigest(acceptanceText))
@@ -227,7 +255,7 @@ export function nextStageStep({ project, progress, mainRef }) {
   const next = progress.next;
   return (
     `从 ${mainRef} 创建分支 ${next.branch}（不符合当前分支命名规则时改用合规名称），` +
-    `把 ${next.acceptance} 复制为该分支的验收清单 ${acceptancePath(project, next.branch)} 并提交，` +
+    `把 ${next.acceptance} 复制为该分支的验收清单 ${acceptancePath(project, next.branch)} ${next.contract ? `并复制核心授权契约 ${next.contract}，提交后` : "并提交，"}` +
     `再运行 harness approve --branch ${next.branch} --yes --from-stages ${progress.file} --stage ${next.id}`
   );
 }

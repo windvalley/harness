@@ -4,7 +4,7 @@ import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "no
 import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
 import { pathToFileURL } from "node:url";
-import { APPROVE, CONFIG, PACKAGE_ROOT, fakeReviewer, git, makeRepo, sh } from "./helpers.mjs";
+import { APPROVE, CONFIG, PACKAGE_ROOT, commit, fakeReviewer, git, makeRepo, sh } from "./helpers.mjs";
 
 let repos = [];
 afterEach(() => {
@@ -86,6 +86,7 @@ function ledger(repo) {
 
 const status = (repo, branch) => repo.cli("status", "--branch", branch).stdout;
 const approvedLine = /\[ok\] plan: 已有实施授权/;
+const STAGE_CONFIRM = sha(JSON.stringify(STAGES.stages.map((item) => [item.id, sha(STAGE_TEXT[item.id])])));
 
 /** 评审读取验收清单时标记的来源：approved 表示任务分支清单有有效授权。 */
 function reviewSource(repo, branch) {
@@ -172,6 +173,33 @@ describe("多阶段方案授权", () => {
     const events = ledger(repo).filter((event) => event.event === "plan.approve" && event.stages === FILE);
     assert.equal(events.length, 2, "每次授权都在账本留痕");
     assert.deepEqual([events[0].stage, events[0].role], ["s1", "carrier"]);
+  });
+
+  test("多阶段核心契约允许阶段验收细化，派生阶段仍绑定各自契约", () => {
+    const repo = setup();
+    const contracts = Object.fromEntries(STAGES.stages.map((item) => [item.id, `docs/changes/alpha/${item.id}-contract.md`]));
+    const staged = { stages: STAGES.stages.map((item) => ({ ...item, contract: contracts[item.id] })) };
+    repo.branch(C1, carrierFiles({
+      [FILE]: json(staged),
+      ...Object.fromEntries(Object.values(contracts).map((path) => [path, "# 核心契约\n\n- 保持权限边界\n"])),
+    }));
+    assert.equal(approveStages(repo, C1).status, 0);
+    landed(repo, C1);
+
+    repo.branch(D2, {
+      ...stageFiles(D2, STAGE_TEXT.s2, "alpha2"),
+      [contracts.s2]: "# 核心契约\n\n- 保持权限边界\n",
+    });
+    assert.equal(derive(repo, D2, "s2").status, 0);
+    git(repo.root, "checkout", "-q", D2);
+    commit(repo.root, "docs(alpha): 细化阶段验收\n\n- 保持核心契约不变", { [acc(D2)]: "- 阶段二验收\n- 失败时可以重试\n" });
+    git(repo.root, "checkout", "-q", "main");
+    assert.match(status(repo, D2), approvedLine);
+
+    git(repo.root, "checkout", "-q", D2);
+    commit(repo.root, "docs(alpha): 调整阶段契约\n\n- 需要重新确认", { [contracts.s2]: "# 核心契约\n\n- 改为扩大权限\n" });
+    git(repo.root, "checkout", "-q", "main");
+    assert.match(status(repo, D2), /核心授权契约在授权后改过/);
   });
 
   test("approve --stages 拒绝阶段 id 重复、阶段文件或阶段清单未提交、路径不在约定里与未知阶段", () => {
@@ -298,7 +326,11 @@ describe("多阶段方案授权", () => {
     assert.notEqual(reviewSource(repo, C1), "approved");
     assert.equal(stop(repo), null, "失效后等用户重新授权，收尾检查放行");
 
-    assert.equal(approveStages(repo, C1).status, 0);
+    const rejectedReapproval = approveStages(repo, C1);
+    assert.notEqual(rejectedReapproval.status, 0);
+    const preserved = JSON.parse(readFileSync(grantFiles(repo)[0], "utf8"));
+    assert.equal(preserved.stagesHash, sha(json(STAGES)), "未确认新契约前不能覆盖旧方案授权");
+    assert.equal(approveStages(repo, C1, "--confirm-contract", STAGE_CONFIRM).status, 0);
     assert.match(status(repo, C1), approvedLine);
     git(repo.root, "checkout", "-q", C1);
     writeFileSync(join(repo.root, "docs/changes/alpha/s3.md"), "- 阶段三验收（改）\n");

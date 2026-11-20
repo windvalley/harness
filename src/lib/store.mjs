@@ -191,9 +191,13 @@ export function verifySignature(record, secret) {
 // 记录失效时告诉人该重跑哪一步，而不是只说“签名不匹配”。
 const RERUN = {
   evidence: "harness verify --branch <分支>",
+  "verify-targeted": "harness verify --check <检查ID>",
   review: "harness review --branch <分支>",
+  "review-exploratory": "harness review --branch <分支> --exploratory",
+  "review-history": "harness review --branch <分支>",
   confirm: "harness confirm --branch <分支> --yes",
   plan: "harness approve --branch <分支> --yes",
+  "plan-amend": "harness amend --branch <分支> --reason <修订原因>",
   "plan-stages": "harness approve --branch <分支> --yes --note <用户原话> --stages <阶段文件>",
   obligation: "harness attest --branch <分支> --check <检查ID> --command <实际命令> --report <报告>",
 };

@@ -147,6 +147,11 @@ test("DSH 本机插件取得会话工作区后仍拒绝危险命令", () => {
   const result = runPlugin(repo, DANGEROUS);
   assert.equal(result.decisions[0].kind, "deny");
   assert.match(result.decisions[0].reason, /会丢弃未提交改动/);
+  assert.match(result.decisions[0].reason, /对象: git reset --hard/);
+  assert.match(result.decisions[0].reason, /正确做法: 先用 git status 确认范围/);
+  assert.match(result.decisions[0].reason, /规则: git-discard-changes/);
+  assert.match(result.decisions[0].reason, /客户端: dsh/);
+  assert.equal((result.decisions[0].reason.match(/\[harness\]/g) ?? []).length, 1);
   assert.equal(result.forwarded, 0);
 });
 

@@ -13,7 +13,7 @@ import { claude } from "./adapters/claude.mjs";
 import { codex } from "./adapters/codex.mjs";
 import { dsh } from "./adapters/dsh.mjs";
 import { generic } from "./adapters/generic.mjs";
-import { planChecks, postMergeAcceptanceProblem, verify } from "./verify/verify.mjs";
+import { planChecks, postMergeAcceptanceProblem, verify, verifyTargeted } from "./verify/verify.mjs";
 import { attestCheck } from "./verify/attestation.mjs";
 import { testEvidenceChecks, testEvidenceProblems, testEvidenceScope } from "./verify/testevidence.mjs";
 import { MergeError, mergeTask } from "./merge/merge.mjs";
@@ -23,7 +23,7 @@ import { describePlan, planReviewers, projectReviewConfig, projectReviewerNote, 
 import { reviewerCommand } from "./review/reviewers-cmd.mjs";
 import { loadLocalReviewers, reviewersFile } from "./review/reviewers.mjs";
 import { approveConfirm, confirmSummary, formatSummary } from "./confirm/confirm.mjs";
-import { approvePlan, formatPlanSummary, planSummary, riskHints } from "./plan/plan.mjs";
+import { amendPlan, approvePlan, formatPlanSummary, planSummary, riskHints } from "./plan/plan.mjs";
 import { DEFAULT_PLAN_ATTEMPT_TIMEOUT_SECONDS, DEFAULT_PLAN_MAX_QUERIES, DEFAULT_PLAN_TIMEOUT_SECONDS, reviewPlan } from "./plan/planreview.mjs";
 import { checkCommitMessage, checkStaged, guardReference } from "./githook.mjs";
 import { branchMessageProblems, commitRuleErrorAt } from "./policy/commit-message.mjs";
@@ -50,20 +50,24 @@ const ADAPTERS = { claude, codex, dsh, generic };
 const USAGE = `harness <命令> [参数]    任一命令加 --help 查看该命令的用法
 
 工程流程
-  verify   [--head <ref>] [--base <ref>] [--branch <名称>] [--no-reuse] [--plan]   对分支验证并写签名证据；--plan 只列出会执行的检查
+  verify   [--head <ref>] [--base <ref>] [--branch <名称>] [--no-reuse] [--plan] [--json]
+                                                    对分支验证并写签名证据；--plan 只列出会执行的检查
+  verify   --check <检查ID> [--branch <名称>] [--committed] [--json]
+                                                    定向调试验证，默认读当前工作区；结果不作为正式证据
   attest   --branch <名称> --check <检查ID> --command <实际命令> --report <报告> [--note <摘要>] [--at <提交>]
                                                     登记已成功的外部检查，绑定检查定义与覆盖文件；合并后检查用 --at 指定被测的主分支提交
-  review   --branch <名称>                          独立评审
+  review   --branch <名称> [--exploratory] [--json]   独立评审；探索性结果与正式证据隔离
   review-plan --branch <名称> [--all]               方案评审：只给建议，默认只展示 high 及以上，--all 展示全部
               [--timeout-seconds <秒>] [--attempt-timeout-seconds <秒>] [--max-queries <次>]
                                                     总时限默认 ${DEFAULT_PLAN_TIMEOUT_SECONDS} 秒，单次默认 ${DEFAULT_PLAN_ATTEMPT_TIMEOUT_SECONDS} 秒，读仓库最多 ${DEFAULT_PLAN_MAX_QUERIES} 次
-  status   --branch <名称>                           只读汇总：还差哪几步才能合并
+  status   --branch <名称> [--json]                   只读汇总：还差哪几步才能合并
   status   --handoff [--branch <名称>]                生成 Markdown 交接视图，复用现有 Git、Worktree 与签名记录，不另写状态
   status   --post-merge [--branch <名称>]            列出到期而未登记的合并后验收义务；有待办时退出码为 1
   confirm  --branch <名称> [--yes]                   查看门禁改动；--yes 记录人工确认
   approve  --branch <名称> [--yes --note <原话>]     查看任务方案；用户同意实施后加 --yes，--note 照录用户原话
            [--stages <阶段文件> [--stage <阶段>]]     用户同意覆盖全部阶段时，同时记录方案级授权
            --yes --from-stages <阶段文件> --stage <阶段>  按方案级授权为后续阶段分支记录授权，原话照搬
+  amend    --branch <名称> --reason <原因>              记录核心契约范围内的重要技术修订；plan.md 日常更新无需登记
   merge    --branch <名称> [--dry-run]               受控合并到主分支（本地交付）
   submit   --branch <名称>                           推送核对过的提交并创建或更新 PR/MR（远程交付）
   sync     [--remote <远程>]                         把本地主分支快进到远程主分支；--remote 只在首次接入时使用
@@ -151,10 +155,21 @@ async function cmdVerify(argv) {
       branch: { type: "string" },
       plan: { type: "boolean", default: false },
       "no-reuse": { type: "boolean", default: false },
+      check: { type: "string" },
+      committed: { type: "boolean", default: false },
       json: { type: "boolean", default: false },
     },
   });
   const cwd = process.cwd();
+  if (values.check) {
+    const record = await verifyTargeted({ cwd, checkId: values.check, branch: values.branch, committed: values.committed });
+    if (values.json) print(JSON.stringify(record, null, 2));
+    else {
+      process.stderr.write(`定向验证结果: ${record.status}\n  source: ${record.source}\n`);
+      for (const item of record.results) process.stderr.write(`  ${item.exit === 0 ? "PASS" : "FAIL"} ${item.id}${item.reason ? `: ${item.reason}` : ""}\n${item.tail ?? ""}\n`);
+    }
+    return record.status === "passed" ? 0 : 1;
+  }
   // 分支解析不到时给候选，而不是把 git 的 fatal 原文抛出去：常见原因是把验收清单文件名当成了分支名。
   if (values.branch) {
     const problem = missingBranchProblem(cwd, values.branch);
@@ -320,7 +335,7 @@ function printReviewerHint() {
 }
 
 async function cmdReview(argv) {
-  const { values } = parseArgs({ args: argv, options: { branch: { type: "string" } } });
+  const { values } = parseArgs({ args: argv, options: { branch: { type: "string" }, json: { type: "boolean", default: false }, exploratory: { type: "boolean", default: false } } });
   if (!values.branch) {
     process.stderr.write("用法: harness review --branch <名称>\n");
     return 2;
@@ -329,9 +344,15 @@ async function cmdReview(argv) {
   const blocked = messageGate({ cwd: process.cwd(), branch: values.branch, label: "评审" });
   if (blocked) return blocked;
   try {
-    const record = await reviewBranch({ cwd: process.cwd(), branch: values.branch });
+    const record = await reviewBranch({ cwd: process.cwd(), branch: values.branch, exploratory: values.exploratory });
+    if (values.json) {
+      print(JSON.stringify(record, null, 2));
+      return record.verdict === "approve" ? 0 : 1;
+    }
     const lines = [
       `评审结论: ${record.verdict}`,
+      `  结果类型: ${record.outcome === "exploratory" ? "探索性评审，不是正式交付证据" : "正式评审"}`,
+      ...(record.rejectionReasons?.length ? [`  拒绝原因: ${record.rejectionReasons.join(", ")}`] : []),
       `  需求符合度: ${record.requirementFit?.rating} - ${record.requirementFit?.evidence ?? ""}`,
       `  工程质量: ${record.engineeringQuality?.rating} - ${record.engineeringQuality?.evidence ?? ""}`,
       `  验收清单来源: ${record.acceptanceSource ?? "无"}`,
@@ -345,7 +366,12 @@ async function cmdReview(argv) {
     process.stderr.write(`${lines.join("\n")}\n`);
     return record.verdict === "approve" ? 0 : 1;
   } catch (error) {
-    process.stderr.write(error.code === "branch_name_rule_invalid" ? `评审被拒绝(${error.code}): ${error.message}\n` : `评审失败: ${error.message}\n`);
+    if (values.json && error.preflight) {
+      print(JSON.stringify({ outcome: "preflight_blocked", code: error.code, problems: error.problems ?? [] }, null, 2));
+    } else {
+      const prefix = error.preflight ? `评审预检拒绝(${error.code})，未调用评审者` : error.code === "branch_name_rule_invalid" ? `评审被拒绝(${error.code})` : "评审失败";
+      process.stderr.write(`${prefix}: ${error.message}\n`);
+    }
     return 1;
   }
 }
@@ -529,6 +555,7 @@ function cmdApprove(argv) {
       stages: { type: "string" },
       "from-stages": { type: "string" },
       stage: { type: "string" },
+      "confirm-contract": { type: "string" },
     },
   });
   const usage = "用法: harness approve --branch <名称> [--yes --note <用户同意实施的原话> [--stages <阶段文件> [--stage <阶段>]]]\n" +
@@ -549,6 +576,7 @@ function cmdApprove(argv) {
     stages: values.stages ?? null,
     fromStages: values["from-stages"] ?? null,
     stage: values.stage ?? null,
+    confirmContract: values["confirm-contract"] ?? null,
   });
   if (outcome.derived) {
     print(`已按方案 ${outcome.derived.file} 的授权记录 ${values.branch} 的阶段 ${outcome.derived.stage} 授权（依据：${outcome.record.note}；验收清单 ${outcome.summary.acceptancePath}）。`);
@@ -1159,15 +1187,16 @@ export async function main(argv) {
         return 0;
       }
       case "status": {
-        const { values } = parseArgs({ args: rest, options: { branch: { type: "string" }, handoff: { type: "boolean", default: false }, "post-merge": { type: "boolean", default: false } } });
+        const { values } = parseArgs({ args: rest, options: { branch: { type: "string" }, handoff: { type: "boolean", default: false }, "post-merge": { type: "boolean", default: false }, json: { type: "boolean", default: false } } });
         if (values.handoff && values["post-merge"]) {
           process.stderr.write("status --handoff 与 --post-merge 不能同时使用\n");
           return 2;
         }
         if (values["post-merge"]) {
-          const { open } = openPostMergeObligations({ cwd: process.cwd() });
+          const { mainRef, open } = openPostMergeObligations({ cwd: process.cwd() });
           const shown = values.branch ? open.filter((item) => item.branch === values.branch) : open;
-          for (const line of formatObligations(shown)) print(line);
+          if (values.json) print(JSON.stringify({ mainRef, open: shown }, null, 2));
+          else for (const line of formatObligations(shown)) print(line);
           return shown.length > 0 ? 1 : 0;
         }
         const branch = values.branch ?? currentBranchForStatus();
@@ -1177,11 +1206,11 @@ export async function main(argv) {
         }
         if (values.handoff) {
           const handoff = branchHandoff({ cwd: process.cwd(), branch });
-          print(formatHandoff(handoff));
+          print(values.json ? JSON.stringify(handoff, null, 2) : formatHandoff(handoff));
           return handoff.status.ready && handoff.status.complete !== false ? 0 : 1;
         }
         const status = branchStatus({ cwd: process.cwd(), branch });
-        print(formatStatus(status));
+        print(values.json ? JSON.stringify(status, null, 2) : formatStatus(status));
         return status.ready && status.complete !== false ? 0 : 1;
       }
       case "uninstall": {
@@ -1275,6 +1304,16 @@ export async function main(argv) {
         return cmdConfirm(rest);
       case "approve":
         return cmdApprove(rest);
+      case "amend": {
+        const { values } = parseArgs({ args: rest, options: { branch: { type: "string" }, reason: { type: "string" } } });
+        if (!values.branch) {
+          process.stderr.write("用法: harness amend --branch <名称> --reason <原契约范围内的修订原因>\n");
+          return 2;
+        }
+        const record = amendPlan({ cwd: process.cwd(), branch: values.branch, reason: values.reason ?? "" });
+        print(`已记录原核心契约范围内的修订（${record.contractPath}，依据原授权：${record.originalNote}）。`);
+        return 0;
+      }
       case "worktree":
         return cmdWorktree(rest);
       case "githook":

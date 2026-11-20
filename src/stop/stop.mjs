@@ -23,6 +23,7 @@ const AGENT_STEPS = [
   "bad_branch_name",
   "evidence_failed",
   "evidence_missing",
+  "evidence_incomplete",
   "review_rejected",
   "review_stale",
   "review_missing",
@@ -58,6 +59,8 @@ function nextStep(code, { branch, mainRef, evidenceNextStep }) {
       return evidenceNextStep || `修好失败的检查后运行 harness verify --branch ${branch}`;
     case "evidence_missing":
       return `harness verify --branch ${branch}`;
+    case "evidence_incomplete":
+      return `按 status 列出的检查 ID 补验并用 harness attest 登记，再重新 harness verify、review --branch ${branch}`;
     case "review_rejected":
       return `按评审发现修复并提交，再重新 harness verify、harness review --branch ${branch}`;
     case "review_stale":

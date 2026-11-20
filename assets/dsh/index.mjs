@@ -91,12 +91,23 @@ async function decide(ctx, exec) {
   if (found.reason) return found.reason;
   if (!found.dir) return null;
   const adapters = join(found.dir, "src", "adapters");
-  const { guard } = await import(pathToFileURL(join(adapters, "index.mjs")).href);
+  const adapterIndex = await import(pathToFileURL(join(adapters, "index.mjs")).href);
+  const { guard } = adapterIndex;
   const { dsh } = await import(pathToFileURL(join(adapters, "dsh.mjs")).href);
   // session_id 让门禁记下这个会话推进过哪些任务分支，收尾检查据此核对；不认识它的旧版本会忽略。
   const payload = { name: exec.name, arguments: exec.arguments, cwd: found.cwd, session_id: sessionOf(exec.agent) };
   const outcome = guard({ adapter: dsh, payload });
-  if (outcome.decision === "deny") return outcome.result.reason;
+  if (outcome.decision === "deny") {
+    // renderDenial 不是最早版本承诺的跨版本接口，缺席时仍用记录里的字段完整拒绝。
+    if (typeof adapterIndex.renderDenial === "function") {
+      const rendered = adapterIndex.renderDenial({ result: outcome.result, adapter: dsh });
+      return rendered.decision?.reason ?? rendered.stderr?.trimEnd() ?? outcome.result.reason;
+    }
+    const { reason, detail, fix, rule } = outcome.result;
+    if (!detail && !fix && !rule) return reason;
+    return [`已拦截: ${reason}`, detail && `对象: ${detail}`, fix && `正确做法: ${fix}`, rule && `规则: ${rule}`, "客户端: dsh"]
+      .filter(Boolean).join("\n");
+  }
   if (outcome.decision === "error") return `门禁无法加载项目配置: ${outcome.message}`;
   return null;
 }
@@ -139,7 +150,7 @@ export function apply(ctx) {
     } catch (error) {
       reason = `门禁执行出错: ${error.message}`;
     }
-    return reason ? { kind: "deny", reason: `[harness] ${reason}` } : next();
+    return reason ? { kind: "deny", reason: reason.startsWith("[harness]") ? reason : `[harness] ${reason}` } : next();
   });
   ctx.on("agent/turn-stopping", async ({ agent, signal }) => {
     if (isSubagent(agent)) return;

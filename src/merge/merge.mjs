@@ -42,6 +42,7 @@ import { ensureHooksPath } from "../install/install.mjs";
 import { REVIEW_KIND, reviewerSummary } from "../review/review.mjs";
 import { chunkedRecordProblem } from "../review/chunks.mjs";
 import { approvalState, assessRisk, planEnforced } from "../plan/plan.mjs";
+import { assertRequiredEvidence, requiredEvidenceDefinitions } from "../verify/required.mjs";
 import { MERGE_TOKEN_ENV, mainUpdateToken } from "../githook.mjs";
 import { divergedGuidance, fetchRemoteMain, pushMain } from "../delivery/remote.mjs";
 import { commitRangeProblems, commitRuleErrorAt } from "../policy/commit-message.mjs";
@@ -413,13 +414,22 @@ export async function checkGates({ project, root, branch, log = console.error, d
       ? reuseDecision({ project, root, evidence: evidence.record, mainCommit })
       : { evidenceReusable: false, rerunChecks: [], configChanged: false };
 
-    if (evidence.ok && reuse.evidenceReusable) {
+    const requiredDefinitions = requiredEvidenceDefinitions({
+      project,
+      root,
+      branch,
+      at: branchCommit,
+      acceptanceText: branchAcceptance.status === 0 ? branchAcceptance.stdout : mainAcceptance.stdout,
+    });
+    const hasRequiredEvidence = requiredDefinitions.requirements.some((item) => item.phase === "pre-merge") || requiredDefinitions.problems.length > 0;
+    if (evidence.ok && reuse.evidenceReusable && !hasRequiredEvidence) {
       log(
         `[${label}] 复用已验证证据: 主分支新增改动未触及任何已执行的检查` +
           (evidence.record.reusedChecks?.length ? `(其中 ${evidence.record.reusedChecks.length} 项为再复用)` : ""),
       );
     } else {
-      if (evidence.ok && reuse.configChanged) log(`[${label}] 检查配置在验证之后有变化，按当前配置重新验证`);
+      if (evidence.ok && hasRequiredEvidence) log(`[${label}] 按实际集成结果重新核对必需外部证据，未受影响的自动检查继续复用`);
+      else if (evidence.ok && reuse.configChanged) log(`[${label}] 检查配置在验证之后有变化，按当前配置重新验证`);
       else if (evidence.ok) log(`[${label}] 主分支改动波及 ${reuse.rerunChecks.join(", ") || "多项检查"}，重新验证`);
       else log(`[${label}] 没有针对该分支的验证证据(${evidence.reason})，先验证`);
       const outcome = await verify({ cwd: root, head: newHead, recordKey: branchCommit, base: mainRef, gateBranch: branch, log });
@@ -439,6 +449,18 @@ export async function checkGates({ project, root, branch, log = console.error, d
       throw new MergeError(`证据无效: ${evidence.reason ?? evidence.record.status}`, "evidence_invalid");
     }
     evidenceRecord = evidence.record;
+    try {
+      assertRequiredEvidence({
+        project,
+        root,
+        branch,
+        at: branchCommit,
+        acceptanceText: branchAcceptance.status === 0 ? branchAcceptance.stdout : mainAcceptance.stdout,
+        evidence: evidence.record,
+      });
+    } catch (error) {
+      throw new MergeError(`必需证据不完整(${error.code})：\n${error.message}`, "evidence_incomplete");
+    }
 
     if (policy.requireReview !== false) {
       // 不只信 verdict：记录里存在阻断级发现时，即使评审写了 approve 也不能放行。

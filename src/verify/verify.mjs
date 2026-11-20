@@ -9,12 +9,14 @@ import { splitAcceptance } from "../lib/acceptance.mjs";
 import { matchAny, matches } from "../lib/glob.mjs";
 import {
   changedPaths,
+  currentBranch,
   git,
   gitOk,
   isAncestor,
   mainWorktreeRoot,
   mergeBase,
   resolveCommit,
+  repoRoot,
   run,
   showBlob,
   treeOf,
@@ -683,10 +685,16 @@ export async function verify({
     });
     appendLedger(root, {
       event: "verify",
+      branch: gateBranch ?? null,
+      taskId: gateBranch ? `${gateBranch}@${baseCommit}` : null,
+      mode: "full",
       status,
       tree,
       head: headCommit,
+      baseCommit,
       checks: results.length,
+      executed: results.filter((item) => !item.reused && !item.skipped).length,
+      durationMs: results.reduce((total, item) => total + (item.reused ? 0 : item.durationMs ?? 0), 0),
       reused: reusedChecks.length,
       failed: failed.map((item) => item.id),
     });
@@ -696,4 +704,66 @@ export async function verify({
     if (releaseLock) releaseLock();
     if (parent !== sharedParent) rmSync(parent, { recursive: true, force: true });
   }
+}
+
+export async function verifyTargeted({ cwd, checkId, branch, committed = false, log = console.error }) {
+  if (!checkId) throw new Error("定向验证要用 --check <检查ID>");
+  const worktree = repoRoot(cwd);
+  const taskBranch = branch ?? currentBranch(worktree);
+  const project = loadGateProject(cwd, { branch: taskBranch });
+  const root = project.root;
+  const mainRef = mainBranch(project);
+  const headCommit = committed ? resolveCommit(root, "HEAD") : null;
+  const baseCommit = committed ? mergeBase(root, resolveCommit(root, mainRef), headCommit) : mergeBase(root, resolveCommit(root, mainRef), resolveCommit(root, "HEAD"));
+  const changed = committed ? changedPaths(root, baseCommit, headCommit) : [
+    ...git(root, ["diff", "--name-only", "--no-renames", "-z", baseCommit, "HEAD"]).stdout.split("\0"),
+    ...git(worktree, ["diff", "--name-only", "--no-renames", "-z", "HEAD"]).stdout.split("\0"),
+    ...git(worktree, ["ls-files", "--others", "--exclude-standard", "-z"]).stdout.split("\0"),
+  ].filter(Boolean);
+  let checkout = worktree;
+  if (committed) {
+    const parent = checkoutRootFor(root);
+    checkout = prepareCheckout({ root, headCommit, log, parent }).checkout;
+  }
+  const { plan } = planChecks({ project, cwd: checkout, changed: [...new Set(changed)] });
+  const item = plan.find((entry) => entry.id === checkId);
+  if (!item) throw new Error(`检查 ${checkId} 没有命中当前改动，或它是需要外部执行的 extended 检查`);
+  const env = project.config.env ?? {};
+  const results = [];
+  let status = "passed";
+  const missing = (item.requires ?? []).filter((rel) => !existsSync(join(worktree, rel)) && !existsSync(join(checkout, rel)));
+  if (missing.length > 0) {
+    status = "incomplete";
+    results.push({ id: item.id, outcome: "blocked", reasonCode: "missing_dependency", reason: `缺少依赖目录 ${missing.join("、")}` });
+  } else {
+    if (committed) linkDependencies(worktree, checkout, item.requires ?? []);
+    const outcome = await execute(item.cmd[0], item.cmd.slice(1), {
+      cwd: join(checkout, item.cwd),
+      env,
+      timeoutMs: (project.config.verify?.timeoutSeconds ?? 1800) * 1000,
+    });
+    results.push({ id: item.id, cmd: item.cmd.join(" "), ...outcome });
+    status = outcome.exit === 0 ? "passed" : outcome.outcome === "blocked" ? "incomplete" : "failed";
+  }
+  const key = taskBranch.replace(/[^0-9A-Za-z._-]+/g, "-");
+  const record = writeRecord(root, "verify-targeted", key, {
+    branch: taskBranch,
+    checkId,
+    source: committed ? `commit:${headCommit}` : "worktree",
+    targeted: true,
+    status,
+    results,
+    finishedAt: new Date().toISOString(),
+  });
+  appendLedger(root, {
+    event: "verify.targeted",
+    branch: taskBranch,
+    taskId: `${taskBranch}@${baseCommit}`,
+    checkId,
+    source: committed ? "commit" : "worktree",
+    status,
+    durationMs: results.reduce((total, entry) => total + (entry.durationMs ?? 0), 0),
+  });
+  if (committed) git(root, ["worktree", "prune"]);
+  return record;
 }
