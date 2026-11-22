@@ -12,6 +12,7 @@ import { collectObligations } from "../verify/obligation.mjs";
 import { checkoutsDir } from "../verify/verify.mjs";
 import { platformRepo } from "../delivery/platform.mjs";
 import { hasReadySubmit } from "../delivery/record.mjs";
+import { agentAfterConsent, noNextAction } from "../lib/next-step.mjs";
 
 const CLEANUP_TIMEOUT_MS = 10 * 60 * 1000;
 // 建好后一直没有新提交的 Worktree，这段时间内当作刚开始的任务保留，过了就没有独有的内容，可以清理。
@@ -404,12 +405,22 @@ export function formatCleanPlan(plan) {
     for (const command of plan.cleanup) lines.push(`  ${command.join(" ")}`);
   }
   if (!plan.processCheck) lines.push("", "注意: 本机无法查看进程的工作目录，没有检查是否有进程停在 Worktree 里");
-  lines.push(
-    "",
-    plan.removable.length > 0
-      ? "以上为预览，没有删除任何东西。确认后加 --yes 删除：Worktree 不加 --force 删除，分支用 git branch -d 删除。"
-      : "没有可清理的 Worktree。",
-  );
+  const withLocalFiles = plan.removable.some((item) => (item.localFiles?.length ?? 0) > 0);
+  lines.push("", "以上为预览，没有删除任何东西。");
+  if (plan.removable.length > 0) {
+    lines.push(
+      agentAfterConsent(
+        withLocalFiles ? "确认上述对象及本机文件删除" : "确认上述对象",
+        `harness worktree clean --yes${withLocalFiles ? " --with-local-files" : ""}`,
+      ),
+      "Worktree 不加 --force 删除，分支用 git branch -d 删除。",
+    );
+  } else {
+    lines.push(noNextAction("当前没有可清理的 Worktree"));
+  }
+  if (plan.skipped.some((item) => item.reason.includes("含有本机文件"))) {
+    lines.push("含本机文件的跳过对象需要单独授权；确需删除时，先运行 harness worktree clean --with-local-files 重新预览，再由用户确认具体对象。");
+  }
   return lines.join("\n");
 }
 

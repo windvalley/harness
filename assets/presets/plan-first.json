@@ -11,7 +11,7 @@
       "allow": ["docs/changes/**", ".harness/acceptance/**"],
       "allowIgnored": true,
       "reason": "这个任务的方案还没有实施授权记录：记录之前只能写方案与验收清单，不能写测试和代码",
-      "fix": "用户还没有同意实施时，交出方案后停下等待，只在对话中询问，不要求用户执行 approve 命令；用户已经表达开始实施的意思时，由 Agent 将方案提交到任务分支并自行运行 harness approve --branch <任务分支> --yes --note \"<用户原话>\" 记录授权，然后连续实施到完成；多阶段完整方案得到一次授权后由 Agent 使用 --stages 登记、--from-stages 继承，不需要用户逐阶段确认；confirm --yes 与核心契约重新确认仍必须由人独立执行"
+      "fix": "用户还没有同意实施时，交出方案后停下等待，只在对话中询问，不要求用户执行 approve 命令；用户在对话中明确同意实施该方案后，由 Agent 执行：harness approve --branch <任务分支> --yes --note \"<用户原话>\"，然后连续实施到完成；多阶段完整方案得到一次授权后由 Agent 使用 --stages 登记、--from-stages 继承，不需要用户逐阶段确认；harness confirm --branch <分支> --yes 与 harness approve --branch <分支> --yes --confirm-contract <新hash> 仍必须由人独立执行"
     }
   ]
 }

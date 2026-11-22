@@ -8,6 +8,7 @@ harness 是一套面向 AI 编程 Agent 的 AI-Native 研发流程与交付门�
 必须由人执行的命令会单独标明。
 
 - [工作原理](#工作原理)
+- [授权与执行矩阵](#授权与执行矩阵)
 - [安装](#安装)
 - [接入一个项目](#接入一个项目)
 - [日常使用](#日常使用)
@@ -53,7 +54,7 @@ Agent 调用工具 ----> [1] 实时拦截：读写文件、执行命令之前按
    它只验证已提交的内容，工作区里未提交的改动不在其中。
 2. `review`：启动一个不了解实现过程的评审进程，只给它验收清单、证据摘要、提交说明、改动文件统计和 diff，从需求符合度与工程质量两个维度给出结论。
 3. `confirm`：改动涉及门禁本身（配置、规则、入口、钩子）时，由人看过摘要后确认一次。
-   Agent 执行带 `--yes` 的确认会被拦截。
+   Agent 执行 `harness confirm --branch <分支> --yes` 会被拦截，执行主体与保障方式见[授权与执行矩阵](#授权与执行矩阵)。
    启用 `plan-first` 时，大改动还要有你同意实施的记录，见“任务分级与实施授权”。
    改动命中 `risk.paths` 配置的敏感路径时，同样要人确认，见“风险分级”。
 4. 交付：本地交付用 `merge`，核对上面的记录仍然有效，再更新本地主分支；远程交付用 `submit`，核对同样的条件后推送任务分支并创建或更新 PR/MR，见“交付方式：本地与远程”。
@@ -94,6 +95,29 @@ Agent 调用工具 ----> [1] 实时拦截：读写文件、执行命令之前按
 | `~/.local/share/harness/evidence.key` | 签名密钥，权限 600 | 否 |
 | `~/.local/share/harness/dsh-plugin/` | DeepSeek Harness 插件，本机所有项目共用，按项目锁定的版本转发 | 否 |
 | `~/.cache/harness/checkouts/<哈希>/work` | verify 的固定检出，以分离头指针的 Linked Worktree 出现在 `git worktree list` 里；设置环境变量 `HARNESS_CACHE_DIR` 时位于 `$HARNESS_CACHE_DIR/checkouts/` | 否 |
+
+## 授权与执行矩阵
+
+`--yes` 只表示从预览切换为执行，不代表所有命令共用一种授权方式。
+“需要人决定”说明授权来源，“需要人亲自执行”说明执行通道限制，“Agent 可在用户同意后执行”说明委托执行。
+其他章节引用本表，不把同一种授权语义另写成不同的规则。
+
+| 场景 | 预览方式 | 写入命令 | 人的决定 | 执行主体 | 授权绑定对象 | 现有保障 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 门禁或高风险改动确认 | `harness confirm --branch <分支>` | `harness confirm --branch <分支> --yes` | 需要人核对并确认 | 人 | 合并结果 tree，结果变化后确认失效 | `confirm-human-only` 实时拦截 Agent；确认记录签名并绑定 tree |
+| 普通实施授权 | `harness approve --branch <分支>` | `harness approve --branch <分支> --yes --note "<用户原话>"` | 需要人在对话中明确同意实施 | Agent | 用户原话、验收清单；有核心契约时同时绑定契约 | 授权记录签名并绑定内容哈希；普通 `approve --yes` 不被人工规则拦截 |
+| 全部阶段授权 | `harness approve --branch <分支> --stages <阶段文件>` | `harness approve --branch <分支> --yes --note "<用户原话>" --stages <阶段文件> [--stage <阶段>]` | 需要人在对话中明确同意覆盖全部阶段 | Agent | 用户原话、阶段文件和全部阶段清单及契约 | 方案级授权记录签名并绑定全部阶段材料，材料变化后失效 |
+| 后续阶段派生授权 | `harness approve --branch <新分支> --from-stages <阶段文件> --stage <阶段>` | `harness approve --branch <新分支> --yes --from-stages <阶段文件> --stage <阶段>` | 不需要新决定，继承有效方案级授权 | Agent | 已有方案级授权、本阶段清单和契约 | 派生时核对阶段材料与前序阶段；普通 `approve --yes` 不被人工规则拦截 |
+| 核心契约重新确认 | `harness approve --branch <分支>` 查看差异 | `harness approve --branch <分支> --yes --note "<用户针对本次差异的新确认>" --confirm-contract <新hash>` | 需要人针对新内容重新确认 | 人 | 新核心契约或阶段材料的确认 hash、用户新确认 | `contract-reapproval-human-only` 实时拦截 Agent；执行时核对 hash |
+| 清理任务 Worktree | `harness worktree clean` | `harness worktree clean --yes` | 需要人在对话中确认预览列出的具体对象 | Agent | 流程要求绑定预览中的 Worktree、分支和连带删除文件 | 执行时重新检查清理条件；目前没有预览计划 ID 或对象清单哈希绑定，也没有专门拦截 Agent 的规则 |
+| 清理含本机文件的 Worktree | `harness worktree clean --with-local-files` | `harness worktree clean --yes --with-local-files` | 需要人另行明确同意删除本机文件 | Agent | 上一行的对象及预览列出的本机文件 | 默认跳过含本机文件的对象；执行时重新检查，目前没有预览计划绑定 |
+| 轮换证据密钥 | `harness key rotate` | `harness key rotate --yes` | 需要人确认全部既有记录将失效 | 人 | 本机密钥轮换及全部既有验证、评审、授权和确认记录 | `key-rotate-human-only` 实时拦截 Agent；轮换后旧记录签名校验失效 |
+| 覆盖托管文件冲突升级 | `harness upgrade --dry-run` | `harness upgrade --force` | 需要人明确同意覆盖预览列出的冲突 | 人 | 预览列出的托管文件冲突 | **只有流程规范约束，没有专门的 Agent 拦截规则**；托管哈希与非普通文件检查仍然生效 |
+| 本机评审者配置 | `harness reviewer list` | `harness reviewer set`、`remove`、`prefer` | 人决定模型、端点和 key，也可委托 Agent 按决定操作 | Agent 或人 | 本机 `reviewers.json`，不绑定仓库提交 | 有意允许 Agent 操作；文件权限、key 标准输入和输出脱敏提供保护，不触发门禁确认 |
+
+表中的“实时拦截”依赖已接入并生效的客户端钩子，不能理解为对本机所有进程的强制隔离。
+文档写明由人执行、但没有对应机器拦截的场景必须按上表理解为已知限制，不能声称存在机器保障。
+`worktree clean` 当前把用户确认具体对象作为流程边界，执行时重新计算计划；它尚不具备 `confirm` 那样的内容绑定确认。
 
 ## 安装
 
@@ -1230,7 +1254,7 @@ Agent 按“正确做法”改道即可，实时拦截每次都会记进账本�
 入口与钩子（`.harness/bin/`、客户端配置、钩子目录）Agent 不能手改，只能在任务分支运行 `harness install`、`init` 或 `upgrade` 重新生成。
 
 Agent 运行 `harness confirm --branch <分支>` 并展示只读摘要：涉及哪些门禁文件、生效规则的增删与改动（包括只改 `disabled` 关掉某条预设规则）、检查项的增删。
-人确认无误后，在自己的终端运行 Agent 给出的带 `--yes` 的同一条命令，可以加 `--note <说明>`。
+人确认无误后，在自己的终端运行 `harness confirm --branch <分支> --yes`，可以加 `--note <说明>`。
 对话里的“同意”不能替代这条人工命令。
 确认只在账本里记下这一次确认，不会合并，主分支上也不会出现新提交；告诉 Agent 已确认后，由它按交付方式继续：本地交付完成已获授权的本地合并，远程交付提交 PR/MR。
 确认绑定合并结果的 tree：分支再提交，或者主分支前进让合并结果变了，都要重新确认。
@@ -1535,6 +1559,7 @@ git commit -m "chore(harness): 升级到 <版本>" -m "- 更新入口锁定的�
 如果文件在上次托管写入后被修改，或者是符号链接、非普通文件，预览与正式升级都会列出冲突并停止，不能跟随符号链接写入目标。
 旧项目还没有清单时，harness 用 `.harness/VERSION` 对应的已安装资源判断文件是否被本地修改；无法确定归属时同样按冲突停止。
 先把项目自己的说明迁到 `AGENTS.md` 托管块之外；确认要用当前版本覆盖冲突文件时，由人在自己的终端明确运行 `upgrade --force`，Agent 不得自行使用。
+这项“由人执行”目前只有流程规范约束，没有专门的 Agent 拦截规则，不能把它描述成机器保障，见[授权与执行矩阵](#授权与执行矩阵)。
 `--force` 只覆盖托管规则、模板与清单，不改变配置文件的保留规则，也不会穿过符号链接父目录。
 `upgrade --dry-run` 列出会新增、更新或删除的托管文件、版本标记、入口与 `AGENTS.md` 托管块，以及会被移除的黄金任务旧副本；它不写文件、不安装版本目录，钩子与客户端配置在正式升级时才重新生成，预览里不逐项比对。
 预览有冲突时退出码为 1；`upgrade` 只接受 `--dry-run` 与 `--force`，其他参数一律报错，不会被忽略。
@@ -2163,6 +2188,7 @@ Agent 完成任务后的汇报里要带一行代码评审的评审者，方案�
 ## 命令速查
 
 运行 `harness help` 查看全部命令与参数，`harness <命令> --help`（或 `-h`、`harness help <命令>`）只看某个命令的用法，不会执行该命令。
+命令的授权主体和保障方式统一见[授权与执行矩阵](#授权与执行矩阵)。
 命令的选项写错时报错并以退出码 2 结束，不会被忽略后继续执行。
 
 | 命令 | 用途 |
@@ -2176,13 +2202,16 @@ Agent 完成任务后的汇报里要带一行代码评审的评审者，方案�
 | `status [--branch <分支>] [--json]` | 只读汇总还差哪几步才能交付，默认看当前分支；已合入但合并后验收待完成时退出码为 1 |
 | `status --handoff [--branch <分支>]` | 从现有 Git、Worktree 与签名记录生成 Markdown 交接视图，不另写状态；退出语义与普通 `status` 相同 |
 | `status --post-merge [--branch <分支>]` | 列出到期而未登记的合并后验收义务，有待办时退出码为 1 |
-| `confirm --branch <分支> [--yes] [--note <说明>]` | 查看门禁改动摘要；带 `--yes` 由人记录确认 |
-| `approve --branch <分支> [--yes --note <原话>] [--confirm-contract <新hash>]` | 查看任务方案与授权状态；核心契约变化后由人针对新 hash 重新确认 |
+| `confirm --branch <分支> [--yes] [--note <说明>]` | 查看门禁改动摘要；`--yes` 由人在自己的终端执行并记录确认 |
+| `approve --branch <分支> [--yes --note <原话>]` | 查看任务方案与授权状态；用户对话授权后由 Agent 记录普通实施授权 |
+| `approve --branch <分支> --yes --note <原话> --stages <阶段文件> [--stage <阶段>]` | 用户同意覆盖全部阶段后，由 Agent 记录方案级授权 |
+| `approve --branch <新分支> --yes --from-stages <阶段文件> --stage <阶段>` | Agent 继承有效方案级授权，无需用户再次决定 |
+| `approve --branch <分支> --yes --note <新确认> --confirm-contract <新hash>` | 核心契约变化后，由人针对新 hash 重新确认 |
 | `amend --branch <分支> --reason <原因>` | 记录核心契约范围内的重要技术修订；`plan.md` 日常更新无需登记 |
 | `merge --branch <分支> [--dry-run]` | 受控合并到主分支（本地交付） |
 | `submit --branch <分支>` | 推送核对过的提交并创建或更新 PR/MR（远程交付） |
 | `sync [--remote <远程>]` | 把本地主分支快进到远程主分支，核对门禁改动并刷新本机安装；`--remote` 只在首次接入时使用 |
-| `worktree clean [--yes] [--with-local-files]` | 预览已合并的任务 Worktree；`--yes` 删除 Worktree 与分支 |
+| `worktree clean [--yes] [--with-local-files]` | 预览已合并的任务 Worktree；用户确认具体对象后由 Agent 执行 `--yes`，本机文件需单独同意 |
 | `doctor [--check-remote]` | 安装与接入自检。远程交付可指定参数只读核对目标仓库的 PR/MR 查询，写权限在交付时核对 |
 | `rules` | 列出解析后的生效规则 |
 | `check --kind <shell\|write\|read\|search\|commit> ...` | 手工判定一次调用：`shell` 用 `--command <命令>`，其余用 `--path <路径>`，可加 `--content`、`--glob`，以及 `--on-main`、`--linked-worktree`、`--ignored` 指定位置 |
@@ -2209,7 +2238,7 @@ harness 防的是 Agent 的误操作，以及被提示注入后常见的绕过�
 - 签名密钥在你的用户目录里，能读到它的进程就能伪造记录。
   `harness key status` 查看密钥指纹、权限，以及本仓库有多少记录能被当前密钥校验。
   密钥损坏或怀疑泄露时，由人在自己的终端运行 `harness key rotate --yes`：旧密钥移入 `retired/`，已有记录全部作废，进行中的分支重新 verify 与 review，涉及门禁的重新 confirm。
-  Agent 只能运行不带 `--yes` 的预览。
+  Agent 只能运行不带 `--yes` 的预览；`--yes` 只对 `key rotate` 有意义，`key status` 始终是只读命令。
 - `HARNESS_MAIN_BYPASS`、`HARNESS_STORE`、`HARNESS_VERSION` 等环境变量与 `core.hooksPath` 设置能让门禁失效，只能由人在自己的终端使用，Agent 设置或读取它们会被拦截。
 - 默认的 `.git/hooks` 不入库，目前没有规则阻止 Agent 直接改写或删除其中的钩子，也没有拦截 `harness uninstall`。
   钩子被删除或摘掉 harness 的块时，`harness doctor` 会报出来。
@@ -2219,12 +2248,13 @@ harness 防的是 Agent 的误操作，以及被提示注入后常见的绕过�
   这两种情况都会留下记录（上报内容、`stop.unresolved`），由人在 `harness status`、合并输出或上报列表里核对。
   会话经手的分支靠实时拦截记录，客户端没有接上实时拦截、或者 Agent 用无法静态推算目录的命令改了别的 Worktree，收尾检查就不知道这个分支。
 - 本机共用的 DSH 插件和版本目录都在用户目录里，目前没有规则阻止 Agent 用命令改写它们。
-- 本机评审者文件 `~/.config/harness/reviewers.json` 允许 Agent 通过 `harness reviewer` 修改，key 也存在这个文件里。
+- 本机评审者文件 `~/.config/harness/reviewers.json` 有意允许 Agent 通过 `harness reviewer` 修改，key 也存在这个文件里，见[授权与执行矩阵](#授权与执行矩阵)。
   所以评审的强弱在本机是可调的：Agent 可以把评审者换成更弱的模型，甚至换成一条直接输出“通过”的命令。
   harness 能做的是把它记下来：评审记录、`harness status`、合并输出和 PR/MR 描述都写明由谁、用什么模型和端点评审，由人核对。
   key 是明文存放的，读到这个文件的进程就拿到了 key，文件权限为 600，Agent 应当用 `harness reviewer list` 查看而不是直接读取它。
 - `harness worktree clean` 判断有没有会话在用某个 Worktree，只看进程的工作目录，DeepSeek Harness 这类客户端看不出来，要靠锁定保护。
   删除前只停得掉项目在 `worktree.cleanup` 里写明的服务与数据库。
+  当前用户确认具体对象是流程边界，执行会重新计算清理计划，但没有预览计划 ID 或对象清单哈希绑定，见[授权与执行矩阵](#授权与执行矩阵)。
 - 任务分级与先红后绿的判断仍由 Agent 做出，门禁只兜底可以机械判定的部分：
   写了方案的任务在记录授权前改不了代码，超过阈值或改了库表的分支没有授权记录合不进去。
   授权记录由 Agent 写入，门禁能保证它存在、照录了原话并且清单没有再改，但无法核实你是否真的说过这句话，要靠你在合并输出或 `harness status` 里核对。
@@ -2239,7 +2269,7 @@ harness 防的是 Agent 的误操作，以及被提示注入后常见的绕过�
   默认的 `intent.plan.triggers` 只认 `migrations/` 与 `.sql`，Rails 的 `db/migrate` 一类要项目自己补；
   依赖变化只看清单文件有没有改，不解析内容。
 - 命令规则按去掉引号与反斜杠后的写法再匹配一次，`harness "confirm" --yes` 这类拆写会被拦下；
-  但命令规则终究是文本匹配，用变量拼接、`eval` 等更隐蔽的写法仍可能绕过，所以带 `--yes` 的确认真正的保证是由人在自己的终端执行，规则只是让误操作当场被拦下。
+  但命令规则终究是文本匹配，用变量拼接、`eval` 等更隐蔽的写法仍可能绕过，所以 `harness confirm --branch <分支> --yes` 真正的保证是由人在自己的终端执行，规则只是让误操作当场被拦下。
 
 ## 常见问题
 
@@ -2252,11 +2282,11 @@ harness 防的是 Agent 的误操作，以及被提示注入后常见的绕过�
 | `branch_name_rule_invalid` | 分支命名规则配置错误；按 `doctor` 或拒绝提示修正 policy，不绕过检查把错误规则合入主分支 |
 | `主 Worktree 当前不在 main 分支` 或 `存在未提交或未跟踪文件` | Agent 先核对状态并保留已有改动，再按项目规则准备主 Worktree；需要处置用户改动时说明具体对象并取得授权，不能直接丢弃 |
 | `本机没有安装门禁锁定的版本` | Agent 工具调用被拦截时，由人在项目目录运行 `node ~/github/harness/bin/harness.mjs install --local`，再让 Agent 继续诊断 |
-| `gate_change_unconfirmed` | Agent 展示确认摘要；由人在自己的终端执行它给出的带 `--yes` 的确认命令 |
+| `gate_change_unconfirmed` | Agent 展示 `harness confirm --branch <分支>` 摘要；由人在自己的终端执行 `harness confirm --branch <分支> --yes` |
 | 运行 `confirm --yes` 后主分支没有新提交 | 确认只记录，不合并；告诉 Agent 已确认，让它按交付方式继续：本地交付完成合并，远程交付提交 PR/MR |
 | `harness:tdd-red` 失败 | 看失败输出里的原因：没有新增或修改测试，就补会先失败的测试；测试在还原实现后仍然通过，说明它对旧实现也成立，要改成真正约束新行为的断言；测试在当前实现上就不通过，先修测试。行为不变的重构在提交信息里写 `Tdd-Waiver: 原因`，不要为了过检查凑一个对旧实现也成立的测试 |
 | `harness:changed-line-coverage` 失败 | 输出里列出了没被执行的改动行：补测试覆盖它们；整个文件“不在覆盖率报告里”时，检查覆盖率命令是否包含该文件，没有可执行代码的文件用 `include.exclude` 排除；不要靠调低 `threshold` 或改成 `observe` 过关，这类改动要人确认 |
-| `risk_unconfirmed` | 改动命中了 `risk.paths` 的敏感路径，验证与评审已通过；Agent 展示 `harness confirm` 摘要，由人在自己的终端执行带 `--yes` 的确认，之后让 Agent 重新运行交付命令 |
+| `risk_unconfirmed` | 改动命中了 `risk.paths` 的敏感路径，验证与评审已通过；Agent 展示 `harness confirm --branch <分支>` 摘要，由人在自己的终端执行 `harness confirm --branch <分支> --yes`，之后让 Agent 重新运行交付命令 |
 | `plan_unapproved` | 大改动没有实施授权记录，或核心授权材料发生变化；失效原因带上具体条目差异。使用契约的任务由人针对新 hash 执行 `--confirm-contract`，旧任务继续按验收清单授权 |
 | `evidence_incomplete` | 核心契约或验收清单声明的必需证据缺失或过期；按检查 ID 和 `howToVerify` 补验并用 `attest` 登记，再重新 verify、review 和交付。评审预检阶段不会调用评审者 |
 | `evidence_scope_mismatch` | 必需检查的 `when` 没命中当前改动，报告不会进入对应阶段的计划；先核对被测实现、测试、夹具和配置路径，不反复登记无效报告 |

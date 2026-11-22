@@ -13,6 +13,7 @@ import {
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { commonDir } from "./git.mjs";
+import { agentAfterConsent, humanExecutes } from "./next-step.mjs";
 
 const OWNER_FILE = "owner.json";
 
@@ -111,7 +112,7 @@ export function loadKey({ create = true } = {}) {
   const key = readFileSync(file, "utf8").trim();
   // 空文件或被截断的密钥依然能算出 HMAC，但强度没有保证，宁可报错也不静默使用。
   if (!KEY_PATTERN.test(key)) {
-    throw new KeyError("invalid", `证据密钥 ${file} 格式不正确，需要由人运行 harness key rotate --yes 重新生成`);
+    throw new KeyError("invalid", `证据密钥 ${file} 格式不正确，${humanExecutes("harness key rotate --yes")}，以重新生成`);
   }
   return key;
 }
@@ -196,15 +197,19 @@ const RERUN = {
   "review-exploratory": "harness review --branch <分支> --exploratory",
   "review-history": "harness review --branch <分支>",
   confirm: "harness confirm --branch <分支> --yes",
-  plan: "harness approve --branch <分支> --yes",
+  plan: "harness approve --branch <分支> --yes --note \"<用户原话>\"",
   "plan-amend": "harness amend --branch <分支> --reason <修订原因>",
-  "plan-stages": "harness approve --branch <分支> --yes --note <用户原话> --stages <阶段文件>",
+  "plan-stages": "harness approve --branch <分支> --yes --note \"<用户原话>\" --stages <阶段文件>",
   obligation: "harness attest --branch <分支> --check <检查ID> --command <实际命令> --report <报告>",
 };
 export const RECORD_KINDS = Object.keys(RERUN);
 
 function rerunHint(kind) {
-  return RERUN[kind] ?? `重新生成 ${kind} 记录`;
+  const command = RERUN[kind] ?? `重新生成 ${kind} 记录`;
+  if (kind === "confirm") return humanExecutes(command);
+  if (kind === "plan") return agentAfterConsent("重新同意实施", command);
+  if (kind === "plan-stages") return agentAfterConsent("重新同意授权覆盖全部阶段", command);
+  return `重新运行 ${command}`;
 }
 
 function recordPath(cwd, kind, key) {
@@ -231,8 +236,8 @@ export function checkRecord(record, kind, key) {
   } catch (error) {
     const recover =
       error.code === "missing"
-        ? `密钥丢失后旧记录全部作废；重新运行 ${rerunHint(kind)} 会生成新密钥并重新签名`
-        : "由人运行 harness key rotate --yes 重新生成密钥后再重跑";
+        ? `密钥丢失后旧记录全部作废；${rerunHint(kind)}，会生成新密钥并重新签名`
+        : `${humanExecutes("harness key rotate --yes")}，重新生成密钥后再重跑`;
     return { ok: false, code: `key_${error.code ?? "error"}`, reason: `${kind} 记录无法校验: ${error.message}。${recover}` };
   }
   const current = keyFingerprint(secret);
@@ -240,11 +245,11 @@ export function checkRecord(record, kind, key) {
     return {
       ok: false,
       code: "key_rotated",
-      reason: `${kind} 记录由另一把密钥签发(指纹 ${record.keyId}，当前 ${current})，密钥已轮换或记录来自别的机器。重新运行 ${rerunHint(kind)}`,
+      reason: `${kind} 记录由另一把密钥签发(指纹 ${record.keyId}，当前 ${current})，密钥已轮换或记录来自别的机器。${rerunHint(kind)}`,
     };
   }
   if (!verifySignature(record, secret)) {
-    return { ok: false, code: "signature", reason: `${kind} 记录签名不匹配，内容可能被改动过。重新运行 ${rerunHint(kind)}` };
+    return { ok: false, code: "signature", reason: `${kind} 记录签名不匹配，内容可能被改动过。${rerunHint(kind)}` };
   }
   if (record.key !== key || record.kind !== kind) {
     return { ok: false, code: "mismatch", reason: `${kind} 记录与目标不一致` };

@@ -85,6 +85,7 @@ describe("先方案后实施", () => {
     const unconfirmed = repo.cli("approve", "--branch", BRANCH, "--yes", "--note", "确认新方案");
     assert.notEqual(unconfirmed.status, 0);
     assert.match(unconfirmed.stderr, /--confirm-contract/);
+    assert.match(unconfirmed.stderr, /由人在自己的终端执行：harness approve --branch feat\/login --yes --note/);
     const denied = bashHook(repo, linked, `.harness/bin/harness approve --branch ${BRANCH} --yes --note "确认新方案" --confirm-contract ${sha(changed)}`);
     assert.equal(denied.status, 2);
     assert.match(denied.stderr, /contract-reapproval-human-only/);
@@ -163,6 +164,7 @@ describe("先方案后实施", () => {
     assert.match(summary.stdout, /docs\/changes\/login\/plan\.md/);
     assert.match(summary.stdout, /登录成功后进入首页/);
     assert.match(summary.stdout, /还没有记录用户的实施授权/);
+    assert.match(summary.stdout, /用户在对话中明确同意实施该方案后，由 Agent 执行：harness approve --branch feat\/login --yes --note/);
     const approved = repo.cli("approve", "--branch", BRANCH, "--yes", "--note", QUOTE);
     assert.equal(approved.status, 0, approved.stderr);
     assert.match(repo.cli("approve", "--branch", BRANCH).stdout, new RegExp(`已记录实施授权（依据：${QUOTE}`));

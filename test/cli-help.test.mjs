@@ -112,8 +112,19 @@ describe("upgrade --dry-run", () => {
     assert.doesNotMatch(result.stdout, /(新增|更新)\s+\.harness\/rules\/harness\.md/, "没变化的文件不列");
     assert.match(result.stdout, /没有写入任何文件/);
     assert.match(result.stdout, /config\.json、policy\.json、verify\.json/);
+    assert.match(result.stdout, /Agent 可直接继续执行：harness upgrade/);
     assert.deepEqual(snapshot(repo), before);
     assert.equal(existsSync(join(repo.root, ".harness/rules/core.md")), false);
+  });
+
+  test("冲突预览明确由人执行 force 覆盖", () => {
+    const repo = setup();
+    write(repo.root, ".harness/rules/core.md", "# 项目自己的修改\n");
+    const result = repo.rawCli("upgrade", "--dry-run");
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /冲突\s+\.harness\/rules\/core\.md/);
+    assert.match(result.stdout, /由人在自己的终端执行：harness upgrade --force/);
+    assert.match(readFileSync(join(repo.root, ".harness/rules/core.md"), "utf8"), /项目自己的修改/);
   });
 
   test("已是最新时说明没有文件需要改", () => {
@@ -124,6 +135,7 @@ describe("upgrade --dry-run", () => {
     assert.equal(result.status, 0, result.stderr);
     assert.doesNotMatch(result.stdout, /^\s*(新增|更新)\s/m);
     assert.match(result.stdout, /已是最新/);
+    assert.match(result.stdout, /无需继续执行：/);
   });
 
   test("预告将移除的黄金任务旧副本，不改 tasks.json", () => {
@@ -159,8 +171,16 @@ describe("授权命令帮助区分 Agent 与人工的责任", () => {
     const approved = repo.rawCli("approve", "--help");
     assert.equal(approved.status, 0, approved.stderr);
     assert.match(approved.stdout, /对话授权后由 Agent 执行/);
+    assert.match(approved.stdout, /--from-stages/);
+    assert.match(approved.stdout, /--confirm-contract/);
     const confirmed = repo.rawCli("confirm", "--help");
     assert.equal(confirmed.status, 0, confirmed.stderr);
     assert.match(confirmed.stdout, /由人在自己的终端执行/);
+    const cleaned = repo.rawCli("worktree", "clean", "--help");
+    assert.equal(cleaned.status, 0, cleaned.stderr);
+    assert.match(cleaned.stdout, /用户确认具体对象后由 Agent 执行/);
+    const rotated = repo.rawCli("key", "rotate", "--help");
+    assert.equal(rotated.status, 0, rotated.stderr);
+    assert.match(rotated.stdout, /由人在自己的终端执行/);
   });
 });

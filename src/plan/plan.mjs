@@ -7,6 +7,7 @@ import { acceptanceDigest, describeAcceptanceChange, describeEvidenceChange, has
 import { matchAny } from "../lib/glob.mjs";
 import { changedPaths, git, mergeBase, refExists, resolveCommit, showBlob } from "../lib/git.mjs";
 import { redact } from "../lib/redact.mjs";
+import { agentAfterConsent, humanExecutes } from "../lib/next-step.mjs";
 import { appendLedger, readRecord, writeRecord } from "../lib/store.mjs";
 import { postMergeHits } from "../verify/checks.mjs";
 import { prepareGrant, readGrant, stageApprovalProblem, stageLanding, writeGrant } from "./stages.mjs";
@@ -221,14 +222,14 @@ export function riskHints({ root, project, base, head, branch }) {
   if (risk.reasons.length > 0 && planEnforced(project.policy)) {
     const state = currentApproval({ root, project, branch });
     if (!state?.approved) {
-      lines.push(`RISK 要实施授权: ${risk.reasons.join("；")}。先写方案并向用户说明，用户在对话中同意后由 Agent 自行运行 harness approve --branch ${branch} --yes --note "<用户原话>"（不让用户执行命令）；改动本不该这么大时，现在拆小或撤掉无关改动`);
+      lines.push(`RISK 要实施授权: ${risk.reasons.join("；")}。先写方案并向用户说明，${agentAfterConsent("同意实施", `harness approve --branch ${branch} --yes --note "<用户原话>"`)}，用户无需执行命令；改动本不该这么大时，现在拆小或撤掉无关改动`);
     }
     // 已有记录但已失效时，最贵的错误是 Agent 以为还能合并；这里直接说出失效原因。
     const stale = staleApproval({ root, project, branch });
     if (stale) lines.push(`RISK 实施授权已失效: ${stale}。向用户说明改动并重新取得同意后再 approve`);
   }
   if (risk.confirmReasons.length > 0) {
-    lines.push(`RISK 要人确认: ${risk.confirmReasons.join("；")}。验证与评审通过后运行 harness confirm --branch ${branch} 展示摘要，由人在自己的终端带 --yes 确认`);
+    lines.push(`RISK 要人确认: ${risk.confirmReasons.join("；")}。验证与评审通过后，Agent 先运行 harness confirm --branch ${branch} 展示摘要；${humanExecutes(`harness confirm --branch ${branch} --yes`)}`);
   }
   return lines;
 }
@@ -374,7 +375,7 @@ export function approvePlan({ cwd, branch, note = "", stages = null, fromStages 
   const hadApproval = Boolean(previousApproval);
   const addedContract = Boolean(authorizedContractPath && !previousApproval?.contractPath);
   if (hadApproval && (!summary.approval.approved || addedContract) && confirmContract !== confirmationHash) {
-    throw new Error(`核心授权材料已经变化，需要人查看差异并针对新内容重新确认。运行 harness approve --branch ${branch} --yes --note "<用户针对本次差异的新确认>" --confirm-contract ${confirmationHash}${stages ? ` --stages ${stages}` : ""}`);
+    throw new Error(`核心授权材料已经变化，需要人查看差异并针对新内容重新确认。${humanExecutes(`harness approve --branch ${branch} --yes --note "<用户针对本次差异的新确认>" --confirm-contract ${confirmationHash}${stages ? ` --stages ${stages}` : ""}`)}`);
   }
   if (prepared) {
     // 先确认新契约，再写方案级授权；失败时旧授权保持不变。

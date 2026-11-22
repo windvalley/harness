@@ -122,6 +122,6 @@ git worktree add -b fix/payment ../project-payment main</code></pre></div>
     <h3 id="cleanup">清理任务 Worktree</h3>
     <p>默认在合并后保留任务 Worktree 和分支，因为会话可能还停在里面。需要手工清理时向 Agent 发起请求：</p>
     <div class="code"><span class="label">清理需求示例</span><pre class="prompt"><code>我想清理已经完成的任务工作区。</code></pre></div>
-    <p>Agent 应先给出预览，列出具体目录、分支、会连带删除的本机文件和跳过原因，不立即删除。看过预览并明确确认具体对象后再清理；含本机文件的目录需要单独明确同意，主 Worktree、命令所在 Worktree 和验证检出会保留。</p>
+    <p>Agent 应先给出预览，列出具体目录、分支、会连带删除的本机文件和跳过原因，不立即删除。看过预览并明确确认具体对象后，由 Agent 执行清理；含本机文件的目录需要单独明确同意，主 Worktree、命令所在 Worktree 和验证检出会保留。当前预览尚未绑定计划 ID，详见<a href="https://github.com/windvalley/harness/blob/main/docs/reference.md#授权与执行矩阵">授权与执行矩阵</a>。</p>
     <p>预览还会检查提交是否已合并、新任务保护、未提交文件、进程和锁定情况。详细条件和命令见<a href="https://github.com/windvalley/harness/blob/main/docs/reference.md#清理任务-worktree">清理参考</a>。</p>
     <p>也可以在主分支配置 <code>worktree.autoClean: true</code>，持续授权交付后的自动清理。每次只处理本次任务，远程交付等合入并 <code>sync</code> 后才执行；合并后义务未关闭、有本机文件、进程不可知或其他条件不满足时保留。配置改动仍需人工确认。</p>

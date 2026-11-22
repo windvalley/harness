@@ -5,6 +5,7 @@ import { acceptanceDigest, describeAcceptanceChange } from "../lib/acceptance.mj
 import { matchAny } from "../lib/glob.mjs";
 import { refExists, resolveCommit, showBlob } from "../lib/git.mjs";
 import { landedIn } from "../lib/landed.mjs";
+import { agentContinues } from "../lib/next-step.mjs";
 import { dataDir, readLedger, readRecord, sha256, writeRecord } from "../lib/store.mjs";
 import { resolveBranchRule, branchNameProblems } from "../policy/branch-name.mjs";
 import { resolvePolicy } from "../policy/resolve.mjs";
@@ -256,6 +257,6 @@ export function nextStageStep({ project, progress, mainRef }) {
   return (
     `从 ${mainRef} 创建分支 ${next.branch}（不符合当前分支命名规则时改用合规名称），` +
     `把 ${next.acceptance} 复制为该分支的验收清单 ${acceptancePath(project, next.branch)} ${next.contract ? `并复制核心授权契约 ${next.contract}，提交后` : "并提交，"}` +
-    `再由 Agent 运行 harness approve --branch ${next.branch} --yes --from-stages ${progress.file} --stage ${next.id}（继承已有方案授权，不需用户再次授权或执行命令）`
+    `${agentContinues(`harness approve --branch ${next.branch} --yes --from-stages ${progress.file} --stage ${next.id}`)}（继承已有方案授权，不需用户再次授权或执行命令）`
   );
 }

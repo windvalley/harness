@@ -45,6 +45,7 @@ import { doctor, formatDoctor } from "./install/doctor.mjs";
 import { conformance, formatConformance } from "./conformance.mjs";
 import { cleanWorktrees, formatCleanPlan, formatCleanResult, planCleanup } from "./worktree/clean.mjs";
 import { packageVersion } from "./install/managed.mjs";
+import { agentAfterConsent, agentContinues, humanExecutes, noNextAction } from "./lib/next-step.mjs";
 
 const ADAPTERS = { claude, codex, dsh, generic };
 
@@ -67,12 +68,14 @@ const USAGE = `harness <命令> [参数]    任一命令加 --help 查看该命�
   confirm  --branch <名称> [--yes]                   查看门禁改动；--yes 仅由人在自己的终端执行
   approve  --branch <名称> [--yes --note <原话>]     查看任务方案；对话授权后由 Agent 执行 --yes 并照录原话
            [--stages <阶段文件> [--stage <阶段>]]     用户同意覆盖全部阶段时，同时记录方案级授权
-           --yes --from-stages <阶段文件> --stage <阶段>  按方案级授权为后续阶段分支记录授权，原话照搬
+           --yes --from-stages <阶段文件> --stage <阶段>  Agent 按方案级授权为后续阶段分支记录授权，原话照搬
+           --yes --confirm-contract <新hash>          核心契约变化后，仅由人针对新 hash 重新确认
   amend    --branch <名称> --reason <原因>              记录核心契约范围内的重要技术修订；plan.md 日常更新无需登记
   merge    --branch <名称> [--dry-run]               受控合并到主分支（本地交付）
   submit   --branch <名称>                           推送核对过的提交并创建或更新 PR/MR（远程交付）
   sync     [--remote <远程>]                         把本地主分支快进到远程主分支；--remote 只在首次接入时使用
-  worktree clean [--yes] [--with-local-files]       预览已合并的任务 Worktree；--yes 才删除，含 .env 这类本机文件的要再加 --with-local-files
+  worktree clean [--yes] [--with-local-files]       预览已合并的任务 Worktree；用户确认具体对象后由 Agent 执行 --yes
+                                                    含 .env 这类本机文件时需单独同意并加 --with-local-files
 
 体检与度量
   doctor  [--check-remote]                            安装与接入自检；指定时只读查询远程仓库的 PR/MR
@@ -91,7 +94,8 @@ const USAGE = `harness <命令> [参数]    任一命令加 --help 查看该命�
   prune    [--keep <v,...>] [--dry-run]              清理旧版本，默认只保留当前版本
   publish  [--version <v>]                           把当前代码装进版本目录
   version                                            打印版本
-  key      <status|rotate> [--yes]                   证据密钥现状；rotate 由人执行，会作废全部已有记录
+  key      status                                    查看证据密钥现状
+  key      rotate [--yes]                            预览密钥轮换；--yes 仅由人在自己的终端执行，会作废全部已有记录
 
 客户端与钩子入口
   githook  <pre-commit|commit-msg|reference-transaction>   由 git 钩子调用
@@ -548,7 +552,7 @@ async function cmdConfirm(argv) {
   }
   if (!values.yes) {
     print(formatSummary(confirmSummary({ cwd: process.cwd(), branch: values.branch })));
-    print("\n以上为只读摘要。Agent 只展示摘要；带 --yes 的人工确认须由人在自己的终端执行，对话同意不能代替。");
+    print(`\n以上为只读摘要。Agent 只展示摘要，对话同意不能代替人工确认。\n${humanExecutes(`harness confirm --branch ${values.branch} --yes`)}`);
     return 0;
   }
   const { summary } = approveConfirm({ cwd: process.cwd(), branch: values.branch, note: values.note ?? "" });
@@ -570,17 +574,25 @@ function cmdApprove(argv) {
     },
   });
   const usage = "用法: harness approve --branch <名称> [--yes --note <用户同意实施的原话> [--stages <阶段文件> [--stage <阶段>]]]\n" +
-    "      harness approve --branch <名称> --yes --from-stages <阶段文件> --stage <阶段>\n";
+    "      harness approve --branch <名称> --yes --from-stages <阶段文件> --stage <阶段>\n" +
+    "      harness approve --branch <名称> --yes --note <用户针对差异的新确认> --confirm-contract <新hash> [--stages <阶段文件>]\n";
   if (!values.branch || (values.stages && values["from-stages"]) || (values.stage && !values.stages && !values["from-stages"])) {
     process.stderr.write(usage);
     return 2;
   }
   if (!values.yes) {
     print(formatPlanSummary(planSummary({ cwd: process.cwd(), branch: values.branch })));
+    const stageSuffix = values.stage ? ` --stage ${values.stage}` : "";
+    const command = values["from-stages"]
+      ? `harness approve --branch ${values.branch} --yes --from-stages ${values["from-stages"]} --stage ${values.stage ?? "<阶段>"}`
+      : `harness approve --branch ${values.branch} --yes --note "<用户原话>"${values.stages ? ` --stages ${values.stages}${stageSuffix}` : ""}`;
     const guidance = values["from-stages"]
-      ? "已有有效方案级授权且阶段材料未变时，由 Agent 执行 --yes --from-stages 派生本阶段授权，无需用户再次授权"
-      : `用户在对话中明确同意${values.stages ? "覆盖全部阶段" : "实施该方案"}后，由 Agent 执行 --yes --note "<用户原话>"${values.stages ? " --stages <阶段文件>" : ""} 记录实施授权`;
-    print(`\n以上为只读摘要。${guidance}；用户无需执行命令。未获得用户授权时停下等待；验收清单或核心授权契约发生需重新确认的变化时，先向用户说明并取得新授权；核心契约的 --confirm-contract 仍必须由人在自己的终端执行。`);
+      ? `已有有效方案级授权且阶段材料未变时，${agentContinues(command)}，无需用户再次授权；授权或阶段材料失效时停下，由用户重新授权`
+      : `${agentAfterConsent(values.stages ? "明确同意授权覆盖全部阶段" : "明确同意实施该方案", command)}，用户无需执行命令；未获得用户授权时停下等待`;
+    print(`\n以上为只读摘要。${guidance}。`);
+    if (!values["from-stages"]) {
+      print(`验收清单或核心授权契约发生需重新确认的变化时，先向用户说明并取得新授权。核心契约重新确认时，${humanExecutes(`harness approve --branch ${values.branch} --yes --note "<用户针对本次差异的新确认>" --confirm-contract <新hash>${values.stages ? ` --stages ${values.stages}` : ""}`)}。`);
+    }
     return 0;
   }
   const outcome = approvePlan({
@@ -946,7 +958,7 @@ function cmdKey(argv) {
           "此后所有已有的验证证据、独立评审与门禁确认都会失效，进行中的分支需要重新 verify、review，涉及门禁的还要重新 confirm。",
           "适用场景: 密钥可能泄露、密钥文件损坏，或者需要统一作废旧记录。",
           scan ?? "",
-          "确认后加 --yes 执行。",
+          humanExecutes("harness key rotate --yes"),
         ]
           .filter(Boolean)
           .join("\n"),
@@ -959,7 +971,7 @@ function cmdKey(argv) {
     print("已有记录全部失效：进行中的分支需要重新运行 harness verify 与 harness review。");
     return 0;
   }
-  process.stderr.write("用法: harness key <status|rotate> [--yes]\n");
+  process.stderr.write("用法: harness key status\n      harness key rotate [--yes]\n");
   return 2;
 }
 
@@ -1022,7 +1034,7 @@ function cmdInit(argv) {
   print("  默认分支命名仅为起始值：项目已有明确命名规范时优先沿用，先将其写入 .harness/policy.json 的 branch-name 规则，再提交接入改动。");
   if (report.harnessOnMain) {
     print(`  1. 在任务分支提交本次改动后按日常任务流程交付：harness verify / review / ${deliver} --branch ${onMain ? "<任务分支>" : branch}`);
-    print("     涉及门禁配置、规则、入口或钩子时，Agent 展示 harness confirm 摘要，带 --yes 的确认由人在自己的终端执行。");
+    print(`     涉及门禁配置、规则、入口或钩子时，Agent 展示 harness confirm --branch <任务分支> 摘要；${humanExecutes("harness confirm --branch <任务分支> --yes")}。`);
   } else if (onMain) {
     print("  Agent：当前在主分支上，先核对已有改动，按项目规则准备接入分支，例如 git switch -c chore/harness-onboard 后提交，");
     print(`  再走 harness verify / review / confirm / ${deliver}，${delivery.mode === "remote" ? "平台合入后 harness sync" : "合并时"}会把这份配置变成主分支的信任根。`);
@@ -1031,7 +1043,7 @@ function cmdInit(argv) {
     print(`  1. 检查并提交本次接入改动（需要包含 .harness/bin/harness，保留用户原有改动）`);
     print(`  2. harness verify --branch ${branch}`);
     print(`  3. harness review --branch ${branch}`);
-    print(`  4. Agent 展示摘要：harness confirm --branch ${branch}；看过后由人在自己的终端执行带 --yes 的确认，自然语言同意不能替代`);
+    print(`  4. Agent 展示摘要：harness confirm --branch ${branch}；自然语言同意不能替代，${humanExecutes(`harness confirm --branch ${branch} --yes`)}`);
     print(
       delivery.mode === "remote"
         ? `  5. harness submit --branch ${branch}，平台合入后在主 Worktree 运行 harness sync`
@@ -1077,9 +1089,11 @@ function cmdUpgrade(argv) {
     print("git 钩子与客户端配置（.claude、.codex、DSH 插件）在正式升级时重新生成，预览不逐项比对。");
     print("以上为预览，没有写入任何文件，也没有安装版本目录。config.json、policy.json、verify.json 升级时同样不会改动。");
     if (plan.conflicts.length > 0) {
-      print("存在托管文件冲突，正式升级会拒绝。先迁移项目自己的说明；确认用当前版本覆盖时，由人明确运行 upgrade --force。");
+      print(`存在托管文件冲突，正式升级会拒绝。先迁移项目自己的说明；确认用当前版本覆盖时，${humanExecutes("harness upgrade --force")}。`);
       return 1;
     }
+    if (plan.files.length === 0 && plan.golden.removed.length === 0) print(noNextAction("规则、模板、入口与 AGENTS.md 托管块已是最新"));
+    else print(agentContinues("harness upgrade"));
     return 0;
   }
   const result = upgradeProject({ force });

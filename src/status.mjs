@@ -2,6 +2,7 @@ import { acceptancePath, deliveryAt, deliverySettings, gatePaths, loadGateProjec
 import { matchAny } from "./lib/glob.mjs";
 import { changedPaths, gitOk, isAncestor, mainWorktreeRoot, refExists, showBlob } from "./lib/git.mjs";
 import { redact } from "./lib/redact.mjs";
+import { agentAfterConsent, humanExecutes } from "./lib/next-step.mjs";
 import { readRecord } from "./lib/store.mjs";
 import { EVIDENCE_KIND } from "./verify/verify.mjs";
 import { readAttestation } from "./verify/attestation.mjs";
@@ -288,7 +289,7 @@ export function branchStatus({ cwd, branch }) {
       const state = approvalState({ root, branch, acceptanceText: showBlob(root, branchCommit, acceptancePath(project, branch)), at: branchCommit });
       if (state.approved) add("plan", "ok", `已有实施授权（${risk.reasons.join("；")}；依据：${redact(state.record.note)}）`);
       else {
-        add("plan", "fail", `${risk.reasons.join("；")}，${state.reason}：用户在对话中同意实施后，由 Agent 自行运行 harness approve --branch ${branch} --yes --note "<用户原话>"（用户无需执行命令）`);
+        add("plan", "fail", `${risk.reasons.join("；")}，${state.reason}：${agentAfterConsent("同意实施", `harness approve --branch ${branch} --yes --note "<用户原话>"`)}，用户无需执行命令`);
         block("plan_unapproved", "待实施授权");
       }
     }
@@ -300,7 +301,7 @@ export function branchStatus({ cwd, branch }) {
     const confirms = confirmFor(project, root, branch);
     if (confirms.ok) add("gate", "ok", "首次接入的门禁配置已确认");
     else {
-      add("gate", "fail", `首次接入，${when}需要人确认这份门禁配置：harness confirm --branch ${branch}`);
+      add("gate", "fail", `首次接入，${when}需要人确认这份门禁配置：Agent 先运行 harness confirm --branch ${branch} 展示摘要；${humanExecutes(`harness confirm --branch ${branch} --yes`)}`);
       block("bootstrap_unconfirmed", "首次接入待确认");
     }
     if (delivery.mode === "remote") submitStep({ result, add, block, root });
@@ -315,7 +316,7 @@ export function branchStatus({ cwd, branch }) {
   if (openingRemote) {
     if (deliveryConfirmed) add("gate", "ok", "切换远程交付已确认");
     else {
-      add("gate", "fail", `切换远程交付，提交前需要人工确认：harness confirm --branch ${branch}`);
+      add("gate", "fail", `切换远程交付，提交前需要人工确认：Agent 先运行 harness confirm --branch ${branch} 展示摘要；${humanExecutes(`harness confirm --branch ${branch} --yes`)}`);
       block("gate_unconfirmed", "远程交付设置待确认");
     }
   } else if (gateTouched.length === 0) {
@@ -325,7 +326,7 @@ export function branchStatus({ cwd, branch }) {
     const anyConfirm = confirms.ok;
     if (anyConfirm) add("gate", "ok", `门禁改动已确认（${gateTouched.length} 个文件）`);
     else {
-      add("gate", "fail", `改动涉及门禁 ${gateTouched.length} 个文件，${when}需要人工确认：harness confirm --branch ${branch}`);
+      add("gate", "fail", `改动涉及门禁 ${gateTouched.length} 个文件，${when}需要人工确认：Agent 先运行 harness confirm --branch ${branch} 展示摘要；${humanExecutes(`harness confirm --branch ${branch} --yes`)}`);
       block("gate_unconfirmed", "门禁改动待确认");
     }
   }
@@ -335,7 +336,7 @@ export function branchStatus({ cwd, branch }) {
     else if (risk.confirmReasons.length === 0) add("risk", "ok", "没有命中需要人确认的风险信号");
     else if (confirmFor(project, root, branch).ok) add("risk", "ok", `风险改动已确认（${risk.confirmReasons.join("；")}）`);
     else {
-      add("risk", "fail", `${risk.confirmReasons.join("；")}，${when}需要人工确认：harness confirm --branch ${branch}`);
+      add("risk", "fail", `${risk.confirmReasons.join("；")}，${when}需要人工确认：Agent 先运行 harness confirm --branch ${branch} 展示摘要；${humanExecutes(`harness confirm --branch ${branch} --yes`)}`);
       block("risk_unconfirmed", "风险改动待确认");
     }
   }

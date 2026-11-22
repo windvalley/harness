@@ -300,7 +300,7 @@ describe("配置与默认行为", () => {
     assert.notEqual(refused.status, 0);
     assert.match(refused.stderr, /gate_change_unconfirmed/);
     assert.match(refused.stderr, /合并前确认一次/);
-    assert.match(refused.stderr, /确认后重新运行 harness merge --branch chore\/enable/);
+    assert.match(refused.stderr, /确认后，Agent 可直接继续执行：harness merge --branch chore\/enable/);
     assert.match(refused.stderr, /交付设置/);
     assert.equal(repo.cli("confirm", "--branch", "chore/enable", "--yes").status, 0);
     const merged = repo.cli("merge", "--branch", "chore/enable");
@@ -1527,7 +1527,7 @@ describe("开启、关闭与首次接入", () => {
     assert.notEqual(refused.status, 0);
     assert.match(refused.stderr, /gate_change_unconfirmed/);
     assert.match(refused.stderr, /提交前确认一次/, "submit 的拒绝说提交前，不说合并前");
-    assert.match(refused.stderr, /确认后重新运行 harness submit --branch chore\/enable-remote/);
+    assert.match(refused.stderr, /确认后，Agent 可直接继续执行：harness submit --branch chore\/enable-remote/);
     assert.equal(refused.stderr.includes("合并前"), false, refused.stderr);
     assert.equal(remoteRef(remote, "refs/heads/chore/enable-remote"), null);
 

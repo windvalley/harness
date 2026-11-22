@@ -20,7 +20,7 @@
 
 <script src="assets/docs.js?v=acdbbf2b96" defer></script>
 </head>
-<body data-page="architecture" data-index="1173346546">
+<body data-page="architecture" data-index="397fe93eef">
 <a class="skip-link" href="#main-content">跳到主要内容</a>
 <header class="topbar">
   <div class="topbar-inner">
@@ -240,7 +240,7 @@
     </figure>
     <ul>
       <li>门禁文件包括 <code>.harness/</code> 下的配置、规则、用例与入口，客户端配置和钩子目录，以及 <code>governance.gatePaths</code> 追加的路径。</li>
-      <li>Agent 执行带 <code>--yes</code> 的确认会被拦截，确认必须由人执行；确认后如果分支再提交或主分支前进导致合并结果变化，要重新确认。</li>
+      <li>Agent 执行 <code>harness confirm --branch &lt;分支&gt; --yes</code> 会被拦截，确认必须由人执行；确认后如果分支再提交或主分支前进导致合并结果变化，要重新确认。详见<a href="https://github.com/windvalley/harness/blob/main/docs/reference.md#授权与执行矩阵">授权与执行矩阵</a>。</li>
       <li>首次接入时主分支上还没有配置，这时按接入分支提议的配置执行，并且无论改了什么都要人确认；确认后以快进方式合入，这份配置从此成为信任根。</li>
       <li>改规则之前可以用 <code>harness golden --worktree</code> 按工作区的配置重放黄金任务，确认新规则的判定符合预期。</li>
     </ul>
