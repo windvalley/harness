@@ -21,7 +21,7 @@
       </li>
       <li>
         <h4>亲自确认门禁改动，再让 Agent 继续</h4>
-        <p>接入时 Agent 会和你确定交付方式，默认本地交付；主分支在平台上、合并走 PR/MR 时见<a href="#delivery-modes">两种交付方式</a>。首次接入交付前，Agent 展示涉及的门禁文件、将生效的规则与检查项，并给出包含实际路径和分支的确认命令。看过摘要后，由你在自己的终端执行 <code>harness confirm --branch &lt;接入分支&gt; --yes</code>；在 Claude Code 中也可以用 <code>!</code> 前缀亲自执行。执行主体与保障方式见<a href="https://github.com/windvalley/harness/blob/main/docs/reference.md#授权与执行矩阵">授权与执行矩阵</a>。</p>
+        <p>接入时 Agent 会和你确定交付方式，默认本地交付；主分支在平台上、合并走 PR/MR 时见<a href="#delivery-modes">两种交付方式</a>。首次接入交付前，Agent 展示涉及的门禁文件、将生效的规则与检查项，并给出包含实际路径和分支的确认命令。看过摘要后，由你在自己的终端执行 <code>.harness/bin/harness confirm --branch &lt;接入分支&gt; --yes</code>；在 Claude Code 中也可以用 <code>!</code> 前缀亲自执行。执行主体与保障方式见<a href="https://github.com/windvalley/harness/blob/main/docs/reference.md#授权与执行矩阵">授权与执行矩阵</a>。</p>
         <p>对话里的同意不能代替这条人工确认。执行后告诉 Agent“已确认，请继续”：本地交付由它完成已获授权的本地合并；远程交付由它提交 PR/MR，你在平台上合并后再由它同步。它会汇报结果。</p>
       </li>
       <li>

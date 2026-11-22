@@ -12,7 +12,7 @@ import { readSubmit, saveSubmit } from "./record.mjs";
 /** 由命令、status、交接与 Stop 共用的后续动作。 */
 export function submitContinuation(record) {
   const { branch, provider, remote, stage, failure } = record;
-  const command = `harness submit --branch ${branch}`;
+  const command = `.harness/bin/harness submit --branch ${branch}`;
   if (failure === "remote_changed" || failure === "request_changed") {
     const object = failure === "remote_changed" ? "远端任务分支" : "原 PR/MR 的状态";
     return { human: true, summary: "远端状态已变化", next: `由人核对${object}，确认后再运行 ${command}` };

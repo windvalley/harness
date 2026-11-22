@@ -834,7 +834,7 @@ function cmdEscalate(argv) {
         const raw = values.file ? readFileSync(values.file, "utf8") : readFileSync(0, "utf8");
         const record = openEscalation(root, JSON.parse(raw));
         print(JSON.stringify(record, null, 2));
-        process.stderr.write(`已创建 ${record.id}。答复: harness escalate answer --id ${record.id} --choice <${record.options.map((o) => o.id).join("|")}>\n`);
+        process.stderr.write(`已创建 ${record.id}。${humanExecutes(`harness escalate answer --id ${record.id} --choice <${record.options.map((o) => o.id).join("|")}>`)}\n`);
         return 0;
       }
       case "list":

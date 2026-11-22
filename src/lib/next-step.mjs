@@ -1,5 +1,6 @@
 export function humanExecutes(command) {
-  return `由人在自己的终端执行：${command}`;
+  const projectCommand = command.replace(/^harness(?=\s|$)/, ".harness/bin/harness");
+  return `由人在自己的终端执行：${projectCommand}`;
 }
 
 export function agentAfterConsent(decision, command) {

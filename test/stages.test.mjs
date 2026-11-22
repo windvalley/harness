@@ -342,7 +342,7 @@ describe("多阶段方案授权", () => {
 
     const preview = repo.cli("approve", "--branch", C1, "--stages", FILE, "--stage", "s1");
     assert.equal(preview.status, 0, preview.stderr);
-    assert.match(preview.stdout, new RegExp(`由人在自己的终端执行：harness approve --branch feat/alpha-1 --yes --note "<用户针对本次差异的新确认>" --confirm-contract ${stageConfirmation(edited.stages)} --stages docs/changes/alpha/stages.json --stage s1`));
+    assert.ok(preview.stdout.includes(`由人在自己的终端执行：.harness/bin/harness approve --branch feat/alpha-1 --yes --note "<用户针对本次差异的新确认>" --confirm-contract ${stageConfirmation(edited.stages)} --stages docs/changes/alpha/stages.json --stage s1`));
     assert.match(text, /Agent 先运行 harness approve --branch feat\/alpha-1 --stages docs\/changes\/alpha\/stages\.json --stage s1 展示授权差异/);
     assert.doesNotMatch(text, /用户无需执行命令/);
     const rejectedReapproval = approveStages(repo, C1);

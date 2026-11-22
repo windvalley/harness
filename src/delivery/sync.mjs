@@ -107,7 +107,7 @@ export async function syncTask({ cwd, remote: requestedRemote = null, log = cons
       throw new MergeError(
         [
           `首次接入：从 ${remote}/${mainRef} 取得的配置写的是远程 ${proposed.remote}、主分支 ${mainBranch(project)}，与本次同步的来源不一致。`,
-          `按配置里的远程重试: harness sync --remote ${proposed.remote}；主分支名不一致时先在接入分支修正 mainBranch。`,
+          `按配置里的远程重试: .harness/bin/harness sync --remote ${proposed.remote}；主分支名不一致时先在接入分支修正 mainBranch。`,
         ].join("\n"),
         "bootstrap_mismatch",
       );
@@ -158,7 +158,7 @@ export async function syncTask({ cwd, remote: requestedRemote = null, log = cons
     throw new MergeError(
       [
         `目标提交锁定 harness ${pinned}，本机版本目录里没有可用的一份（已装: ${listVersions().join("、") || "无"}）。`,
-        `由人在项目目录运行 node <harness 仓库>/bin/harness.mjs install --version ${pinned}（不改项目文件），然后重新运行 harness sync。`,
+        `由人在项目目录运行 node <harness 仓库>/bin/harness.mjs install --version ${pinned}（不改项目文件），然后重新运行 .harness/bin/harness sync。`,
         "在装好之前不更新本地主分支，避免本机钩子与新主分支的门禁版本对不上。",
       ].join("\n"),
       "version_missing",

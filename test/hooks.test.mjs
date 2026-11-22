@@ -646,7 +646,7 @@ describe("安装与自检", () => {
     const refused = repo.cli("upgrade");
     assert.equal(refused.status, 1);
     assert.match(refused.stderr, /托管文件冲突[\s\S]*\.harness\/rules\/core\.md/);
-    assert.match(refused.stderr, /由人在自己的终端执行：harness upgrade --force/);
+    assert.match(refused.stderr, /由人在自己的终端执行：\.harness\/bin\/harness upgrade --force/);
     assert.equal(readFileSync(file, "utf8"), before, "普通升级不覆盖本地修改");
     const forced = repo.cli("upgrade", "--force");
     assert.equal(forced.status, 0, forced.stderr);
@@ -892,7 +892,7 @@ describe("证据密钥", () => {
     const original = readFileSync(keyFile, "utf8");
     const preview = repo.cli("key", "rotate");
     assert.equal(preview.status, 0, preview.stderr);
-    assert.match(preview.stdout, /由人在自己的终端执行：harness key rotate --yes/);
+    assert.match(preview.stdout, /由人在自己的终端执行：\.harness\/bin\/harness key rotate --yes/);
     assert.equal(readFileSync(keyFile, "utf8"), original);
 
     const rotated = repo.cli("key", "rotate", "--yes");

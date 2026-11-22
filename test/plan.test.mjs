@@ -87,7 +87,7 @@ describe("先方案后实施", () => {
     assert.doesNotMatch(staleStatus.stdout, /用户无需执行命令/);
     const preview = repo.cli("approve", "--branch", BRANCH);
     assert.equal(preview.status, 0, preview.stderr);
-    assert.match(preview.stdout, new RegExp(`由人在自己的终端执行：harness approve --branch feat/login --yes --note "<用户针对本次差异的新确认>" --confirm-contract ${sha(changed)}`));
+    assert.ok(preview.stdout.includes(`由人在自己的终端执行：.harness/bin/harness approve --branch feat/login --yes --note "<用户针对本次差异的新确认>" --confirm-contract ${sha(changed)}`));
     const handoff = repo.cli("status", "--handoff", "--branch", BRANCH);
     assert.match(handoff.stdout, /Agent 先运行 harness approve --branch feat\/login 展示授权差异/);
     const blockedMerge = repo.cli("merge", "--branch", BRANCH);
@@ -98,7 +98,7 @@ describe("先方案后实施", () => {
     const unconfirmed = repo.cli("approve", "--branch", BRANCH, "--yes", "--note", "确认新方案");
     assert.notEqual(unconfirmed.status, 0);
     assert.match(unconfirmed.stderr, /--confirm-contract/);
-    assert.match(unconfirmed.stderr, /由人在自己的终端执行：harness approve --branch feat\/login --yes --note/);
+    assert.match(unconfirmed.stderr, /由人在自己的终端执行：\.harness\/bin\/harness approve --branch feat\/login --yes --note/);
     const denied = bashHook(repo, linked, `.harness/bin/harness approve --branch ${BRANCH} --yes --note "确认新方案" --confirm-contract ${sha(changed)}`);
     assert.equal(denied.status, 2);
     assert.match(denied.stderr, /contract-reapproval-human-only/);

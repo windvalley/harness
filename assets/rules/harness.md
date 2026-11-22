@@ -26,7 +26,7 @@
   用户要配置时，按提示里的 `harness reviewer set` 命令操作，key 由用户提供并经 `--api-key-stdin` 从标准输入传入，不写进命令行参数、提交说明或文档。
   用户暂不配置时，按提示里说明的缺省评审者继续，之后随时可以配置。
 - 写入并提交接入改动，执行验证和独立评审，展示 `harness confirm --branch <接入分支>` 的摘要。
-  `harness confirm --branch <接入分支> --yes` 由人在自己的终端执行，自然语言同意不能替代，Agent 不代为执行。
+  `.harness/bin/harness confirm --branch <接入分支> --yes` 由人在自己的终端执行，自然语言同意不能替代，Agent 不代为执行。
 - 人完成确认后按交付方式继续：本地交付完成已获授权的本地合并；远程交付运行 `harness submit --branch <接入分支>`，平台合入后在主 Worktree 运行 `harness sync`。
   然后列出当前客户端所需的重启、信任或注册操作。
   用户完成后再运行诊断，区分配置就位和当前客户端实际调用已验证，不把初始化成功作为全部接入完成。
@@ -279,8 +279,10 @@ harness review-plan --branch <任务分支> [--all]
 - 提交后运行 `harness verify --plan --branch <任务分支>` 或 `harness verify` 时，输出里的 `RISK` 行会提前告诉你命中了哪些信号；要实施授权的，趁早补方案或把改动拆小，不要等到合并才发现。
 - 风险确认排在验证与评审之后：先把验证和评审做完，再运行 `harness confirm --branch <任务分支>` 展示只读摘要，摘要列出命中的风险信号，然后停下，说明要人做什么。
 - 合并或提交被拒时，输出会一并列出其他还没满足的人工项，一次告诉用户，不要分多轮追问。
-- `harness confirm --branch <任务分支> --yes` 只能由人在自己的终端执行，Agent 不得执行，也不得用引号、变量等写法拆开命令绕过；对话里的“同意”不能替代。
+- `.harness/bin/harness confirm --branch <任务分支> --yes` 只能由人在自己的终端执行，Agent 不得执行，也不得用引号、变量等写法拆开命令绕过；对话里的“同意”不能替代。
 - 停下请人确认时，给出填好分支名、可整行粘贴的完整命令；在 Claude Code 里加 `!` 前缀，人在输入框粘贴即可执行，不必切到终端。
+- 向人提供可复制执行的命令时，使用项目入口 `.harness/bin/harness`，不要写成依赖 PATH 的裸 `harness`；当前目录不是对应 Worktree 根目录时，同时给出实际的 `cd <路径> && ...` 命令。
+- 初始化、安装等能由 Agent 执行的步骤不列为用户待办；只有缺少锁定版本导致实时拦截拒绝 Agent 工具调用时，才请人在项目目录执行提示里的安装命令。
 - 确认绑定合并结果的 tree，分支再提交或主分支前进让结果变了，要重新确认。
 - 要授权与要确认的信号各管各的：一次改动同时命中两类时，两个要求都要满足，确认不能替代授权，授权也不能替代确认。
 - 判定读主分支的配置；任务分支改了 `risk` 或 `intent.plan` 属于门禁改动，确认摘要会列出改前改后。
@@ -328,7 +330,7 @@ git 钩子调用主 Worktree 的入口，任务分支改不了门禁代码自己
 阻塞任务分支时在 `context.branch` 填分支名；在任务分支运行而未填写时自动使用当前分支，`open` 绑定该分支实际 HEAD，不能自行提供另一提交冒充当前状态。
 未解除的上报只对绑定的分支和 HEAD 生效，旧记录缺少 HEAD 时不按时间推测放行。
 
-人用 `harness escalate answer --id <编号> --choice <选项>` 作出决定，续跑前用 `harness escalate resume --id <编号>` 读取。
+人用 `.harness/bin/harness escalate answer --id <编号> --choice <选项>` 作出决定，续跑前由 Agent 用 `harness escalate resume --id <编号>` 读取。
 没有用户决定时，不得用 `answer` 把技术恢复记录成人工豁免。
 阻塞因环境修复、补齐数据或合法的等价验收证据消除后，Agent 可运行 `harness escalate resolve --id <编号> --reason "<解除原因>" --evidence "<证据引用>"`。
 `reason` 与 `evidence` 均须非空，证据引用应指向可复核的命令结果、报告或记录。

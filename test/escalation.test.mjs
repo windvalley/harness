@@ -79,6 +79,7 @@ describe("上报版本绑定与技术消除", () => {
     const head = repo.branch("task/cli", { "src/a.js": "a\n" });
     const opened = sh(repo.root, join(repo.root, ".harness/bin/harness"), ["escalate", "open"], repo.env, JSON.stringify({ ...INPUT, context: { branch: "task/cli" } }));
     assert.equal(opened.status, 0, opened.stderr);
+    assert.match(opened.stderr, /由人在自己的终端执行：\.harness\/bin\/harness escalate answer/);
     const record = JSON.parse(opened.stdout);
     assert.equal(record.context.head, head);
     assert.notEqual(repo.cli("escalate", "resolve", "--id", record.id, "--reason", "工具恢复").status, 0);
