@@ -20,7 +20,7 @@
 
 <script src="assets/docs.js?v=acdbbf2b96" defer></script>
 </head>
-<body data-page="limits" data-index="66b639c83d">
+<body data-page="limits" data-index="1ba7d08a67">
 <a class="skip-link" href="#main-content">跳到主要内容</a>
 <header class="topbar">
   <div class="topbar-inner">
@@ -40,7 +40,7 @@
   <main id="main-content"><header class="page-header"><p class="eyebrow">核心概念</p><h1 tabindex="-1" id="limits">信任模型与限制</h1><p class="lead">明确本机门禁的保护边界、使用前提和已知限制。</p></header>
     <p>harness 防的是 Agent 的误操作，以及被提示注入后常见的绕过写法；<strong>不防</strong>拥有本机权限、有意破坏的人或进程。</p>
     <ul>
-      <li>签名密钥在你的用户目录里，能读到它的进程就能伪造记录。密钥损坏或怀疑泄露时，由人运行 <code>harness key rotate --yes</code>，已有记录全部作废。各命令的执行主体与机器保障见<a href="https://github.com/windvalley/harness/blob/main/docs/reference.md#授权与执行矩阵">授权与执行矩阵</a>。</li>
+      <li>签名密钥在你的用户目录里，能读到它的进程就能伪造记录。密钥损坏或怀疑泄露时，由人运行 <code>.harness/bin/harness key rotate --yes</code>，已有记录全部作废。各命令的执行主体与机器保障见<a href="https://github.com/windvalley/harness/blob/main/docs/reference.md#授权与执行矩阵">授权与执行矩阵</a>。</li>
       <li><code>HARNESS_MAIN_BYPASS</code> 等环境变量与 <code>core.hooksPath</code> 能让门禁失效，只能由人使用，Agent 设置或读取会被拦截。</li>
       <li>路径规则只约束写文件、读文件类的工具调用；用 shell 命令读写同一个文件，要靠命令规则覆盖。</li>
       <li>Codex 没有信任钩子时没有实时拦截；DeepSeek Harness 的本机插件尚未在运行中的客户端里端到端实测；Claude 桌面版只做了静态确认。git 层对它们都生效。</li>

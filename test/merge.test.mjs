@@ -656,7 +656,7 @@ describe("合并门禁", () => {
     const summary = repo.cli("confirm", "--branch", "task/gate");
     assert.equal(summary.status, 0, summary.stderr);
     assert.match(summary.stdout, /拦截规则/);
-    assert.match(summary.stdout, /由人在自己的终端执行：harness confirm --branch task\/gate --yes/);
+    assert.match(summary.stdout, /由人在自己的终端执行：\.harness\/bin\/harness confirm --branch task\/gate --yes/);
 
     const approved = repo.cli("confirm", "--branch", "task/gate", "--yes");
     assert.equal(approved.status, 0, approved.stderr);

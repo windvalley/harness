@@ -123,7 +123,7 @@ describe("upgrade --dry-run", () => {
     const result = repo.rawCli("upgrade", "--dry-run");
     assert.equal(result.status, 1);
     assert.match(result.stdout, /冲突\s+\.harness\/rules\/core\.md/);
-    assert.match(result.stdout, /由人在自己的终端执行：harness upgrade --force/);
+    assert.match(result.stdout, /由人在自己的终端执行：\.harness\/bin\/harness upgrade --force/);
     assert.match(readFileSync(join(repo.root, ".harness/rules/core.md"), "utf8"), /项目自己的修改/);
   });
 
