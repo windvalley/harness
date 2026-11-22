@@ -109,15 +109,15 @@ Agent 调用工具 ----> [1] 实时拦截：读写文件、执行命令之前按
 | 全部阶段授权 | `harness approve --branch <分支> --stages <阶段文件>` | `harness approve --branch <分支> --yes --note "<用户原话>" --stages <阶段文件> [--stage <阶段>]` | 需要人在对话中明确同意覆盖全部阶段 | Agent | 用户原话、阶段文件和全部阶段清单及契约 | 方案级授权记录签名并绑定全部阶段材料，材料变化后失效 |
 | 后续阶段派生授权 | `harness approve --branch <新分支> --from-stages <阶段文件> --stage <阶段>` | `harness approve --branch <新分支> --yes --from-stages <阶段文件> --stage <阶段>` | 不需要新决定，继承有效方案级授权 | Agent | 已有方案级授权、本阶段清单和契约 | 派生时核对阶段材料与前序阶段；普通 `approve --yes` 不被人工规则拦截 |
 | 核心契约重新确认 | `harness approve --branch <分支>` 查看差异 | `harness approve --branch <分支> --yes --note "<用户针对本次差异的新确认>" --confirm-contract <新hash>` | 需要人针对新内容重新确认 | 人 | 新核心契约或阶段材料的确认 hash、用户新确认 | `contract-reapproval-human-only` 实时拦截 Agent；执行时核对 hash |
-| 清理任务 Worktree | `harness worktree clean` | `harness worktree clean --yes` | 需要人在对话中确认预览列出的具体对象 | Agent | 流程要求绑定预览中的 Worktree、分支和连带删除文件 | 执行时重新检查清理条件；目前没有预览计划 ID 或对象清单哈希绑定，也没有专门拦截 Agent 的规则 |
-| 清理含本机文件的 Worktree | `harness worktree clean --with-local-files` | `harness worktree clean --yes --with-local-files` | 需要人另行明确同意删除本机文件 | Agent | 上一行的对象及预览列出的本机文件 | 默认跳过含本机文件的对象；执行时重新检查，目前没有预览计划绑定 |
+| 清理任务 Worktree | `harness worktree clean` | `harness worktree clean --yes` | 需要人授权安全清理，异常对象由 Agent 保留 | Agent | 安全清理类别及逐项状态检查，不绑定预览对象清单 | 执行前和关联清理命令后逐项复查，异常对象自动保留；没有专门拦截 Agent 的规则 |
+| 清理含本机文件的 Worktree | `harness worktree clean --with-local-files` | `harness worktree clean --yes --with-local-files` | 需要人另行明确同意删除本机文件 | Agent | 本机文件删除授权及逐项状态检查 | 默认跳过含本机文件的对象；获得单独授权后仍逐项复查 |
 | 轮换证据密钥 | `harness key rotate` | `harness key rotate --yes` | 需要人确认全部既有记录将失效 | 人 | 本机密钥轮换及全部既有验证、评审、授权和确认记录 | `key-rotate-human-only` 实时拦截 Agent；轮换后旧记录签名校验失效 |
 | 覆盖托管文件冲突升级 | `harness upgrade --dry-run` | `harness upgrade --force` | 需要人明确同意覆盖预览列出的冲突 | 人 | 预览列出的托管文件冲突 | **只有流程规范约束，没有专门的 Agent 拦截规则**；托管哈希与非普通文件检查仍然生效 |
 | 本机评审者配置 | `harness reviewer list` | `harness reviewer set`、`remove`、`prefer` | 人决定模型、端点和 key，也可委托 Agent 按决定操作 | Agent 或人 | 本机 `reviewers.json`，不绑定仓库提交 | 有意允许 Agent 操作；文件权限、key 标准输入和输出脱敏提供保护，不触发门禁确认 |
 
 表中的“实时拦截”依赖已接入并生效的客户端钩子，不能理解为对本机所有进程的强制隔离。
 文档写明由人执行、但没有对应机器拦截的场景必须按上表理解为已知限制，不能声称存在机器保障。
-`worktree clean` 当前把用户确认具体对象作为流程边界，执行时重新计算计划；它尚不具备 `confirm` 那样的内容绑定确认。
+`worktree clean` 由用户授权安全清理，Agent 负责逐项判断；它不使用 `confirm` 那样的内容绑定确认，而是在执行前和关联清理命令后复查，异常对象自动保留。
 
 ## 安装
 
@@ -855,8 +855,8 @@ Agent 先做最小诊断：
 ```
 
 Agent 应先给出预览，列出具体目录、分支、会连带删除的本机文件和跳过原因，不立即删除。
-看过预览后，明确确认要删除的具体对象，再由 Agent 执行清理。
-预览中含本机文件的目录，需要你明确同意删除这些文件；不同意的目录保留。
+用户授权安全清理后，Agent 逐项检查并执行，异常对象自动保留，其他安全对象继续处理。
+含本机文件的目录需要你明确同意删除这些文件；不同意的目录保留。
 下面是 Agent 使用的命令参考：
 
 ```bash
@@ -866,6 +866,7 @@ harness worktree clean --yes --with-local-files   # 含本机文件的也一起�
 ```
 
 预览要逐个读取每个 Worktree 的状态，上百个 Worktree 需要二三十秒，开始时会先输出正在检查多少个。
+批量执行时，每个对象在运行关联清理命令前和真正删除前都会重新检查；出现未提交文件、本机文件、未合并提交、进程或锁定时，只保留该对象，其他安全对象继续处理。
 每个 Worktree 要删掉几万个文件，还要运行清理命令，一个常常需要好几秒。
 删除时每处理一个就在 stderr 输出一行进度和用时，结果汇总写到 stdout。
 中途按 Ctrl-C，会处理完当前这个 Worktree 再停下，并列出已完成的部分；再按一次立即退出。
@@ -901,6 +902,7 @@ git -C <主 Worktree> worktree unlock <Worktree 路径>
 ```
 
 命令在 Worktree 里依次运行，可以用 `{worktree}`、`{main}`、`{branch}` 占位符，或同义的 `HARNESS_WORKTREE`、`HARNESS_MAIN`、`HARNESS_BRANCH` 环境变量。
+这些受信命令属于任务环境的正常清理动作，用户授权安全清理后由 Agent 执行，不需要逐项另行确认。
 任一命令失败就保留那个 Worktree，结果里写明原因。
 命令跑的是那个 Worktree 自己检出的文件，较早的检出里可能还没有这些目标，命令失败后那个 Worktree 会一直留着；这种情况先判断目标存在再执行：
 
@@ -2211,7 +2213,7 @@ Agent 完成任务后的汇报里要带一行代码评审的评审者，方案�
 | `merge --branch <分支> [--dry-run]` | 受控合并到主分支（本地交付） |
 | `submit --branch <分支>` | 推送核对过的提交并创建或更新 PR/MR（远程交付） |
 | `sync [--remote <远程>]` | 把本地主分支快进到远程主分支，核对门禁改动并刷新本机安装；`--remote` 只在首次接入时使用 |
-| `worktree clean [--yes] [--with-local-files]` | 预览已合并的任务 Worktree；用户确认具体对象后由 Agent 执行 `--yes`，本机文件需单独同意 |
+| `worktree clean [--yes] [--with-local-files]` | 预览已合并的任务 Worktree；用户同意安全清理后由 Agent 逐项检查并执行 `--yes`，本机文件需单独同意 |
 | `doctor [--check-remote]` | 安装与接入自检。远程交付可指定参数只读核对目标仓库的 PR/MR 查询，写权限在交付时核对 |
 | `rules` | 列出解析后的生效规则 |
 | `check --kind <shell\|write\|read\|search\|commit> ...` | 手工判定一次调用：`shell` 用 `--command <命令>`，其余用 `--path <路径>`，可加 `--content`、`--glob`，以及 `--on-main`、`--linked-worktree`、`--ignored` 指定位置 |
@@ -2254,7 +2256,7 @@ harness 防的是 Agent 的误操作，以及被提示注入后常见的绕过�
   key 是明文存放的，读到这个文件的进程就拿到了 key，文件权限为 600，Agent 应当用 `harness reviewer list` 查看而不是直接读取它。
 - `harness worktree clean` 判断有没有会话在用某个 Worktree，只看进程的工作目录，DeepSeek Harness 这类客户端看不出来，要靠锁定保护。
   删除前只停得掉项目在 `worktree.cleanup` 里写明的服务与数据库。
-  当前用户确认具体对象是流程边界，执行会重新计算清理计划，但没有预览计划 ID 或对象清单哈希绑定，见[授权与执行矩阵](#授权与执行矩阵)。
+  当前由用户授权安全清理，Agent 在执行前和关联清理命令后逐项复查，异常对象自动保留，见[授权与执行矩阵](#授权与执行矩阵)。
 - 任务分级与先红后绿的判断仍由 Agent 做出，门禁只兜底可以机械判定的部分：
   写了方案的任务在记录授权前改不了代码，超过阈值或改了库表的分支没有授权记录合不进去。
   授权记录由 Agent 写入，门禁能保证它存在、照录了原话并且清单没有再改，但无法核实你是否真的说过这句话，要靠你在合并输出或 `harness status` 里核对。

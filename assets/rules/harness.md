@@ -205,8 +205,8 @@ harness 保证它提交的 PR/MR 通过了本机门禁；平台上最终合入�
 
 - 自动清理只处理本次任务分支，有未完成的合并后义务、未提交文件、本机文件、未合并提交、锁定或进程时保留；无法检查进程时也保留，清理失败不改变交付结果。
 - `harness merge` 的输出写明任务 Worktree 保留在哪里，以及已合并但还没清理的 Worktree 有几个；汇报时把这两点转告用户。
-- 用户要求手工清理时，先运行 `harness worktree clean` 把预览交给用户：哪些可以删、会连带删掉哪些被忽略的文件，哪些跳过以及原因。
-- 用户在对话中确认预览里的具体对象后，由 Agent 运行 `harness worktree clean --yes`；含 `.env` 这类本机文件的对象要先加 `--with-local-files` 重新预览，并取得用户对删除这些文件的单独同意。
+- 用户要求手工清理时，先运行 `harness worktree clean` 汇总哪些可以删、会连带删掉哪些被忽略的文件，哪些跳过以及原因。
+- 用户在对话中同意安全清理后，由 Agent 逐项检查并运行 `harness worktree clean --yes`，异常对象自动保留，其他安全对象继续处理；含 `.env` 这类本机文件时仍需取得用户对删除这些文件的单独同意，才加 `--with-local-files`。
 - 不要绕开这个命令自己删除：`git worktree remove --force` 与 `git branch -D` 会被拦截，它们会丢掉未提交的改动或未合并的提交。
 - 不在会话里删除会话所在的 Worktree，`harness worktree clean` 也会跳过命令所在的 Worktree。
 

@@ -20,7 +20,7 @@
 
 <script src="assets/docs.js?v=acdbbf2b96" defer></script>
 </head>
-<body data-page="cheatsheet" data-index="397fe93eef">
+<body data-page="cheatsheet" data-index="66b639c83d">
 <a class="skip-link" href="#main-content">跳到主要内容</a>
 <header class="topbar">
   <div class="topbar-inner">
@@ -56,7 +56,7 @@
         <tr><td><code><span class="arg">merge</span> <span class="arg">--branch</span> <span class="arg">&lt;分支&gt;</span> <span class="arg">[--dry-run]</span></code></td><td>受控合并到主分支（本地交付）</td></tr>
         <tr><td><code><span class="arg">submit</span> <span class="arg">--branch</span> <span class="arg">&lt;分支&gt;</span></code></td><td>推送核对过的提交并创建或更新 PR/MR（远程交付）</td></tr>
         <tr><td><code><span class="arg">sync</span> <span class="arg">[--remote</span> <span class="arg">&lt;远程&gt;]</span></code></td><td>把本地主分支快进到远程主分支；<code>--remote</code> 只在首次接入时使用</td></tr>
-        <tr><td><code><span class="arg">worktree</span> <span class="arg">clean</span> <span class="arg">[--yes]</span> <span class="arg">[--with-local-files]</span></code></td><td>预览并清理已合并的任务 Worktree；用户确认具体对象后由 Agent 执行，含本机文件的目录需加 <code>--with-local-files</code> 单独同意</td></tr>
+        <tr><td><code><span class="arg">worktree</span> <span class="arg">clean</span> <span class="arg">[--yes]</span> <span class="arg">[--with-local-files]</span></code></td><td>预览并清理已合并的任务 Worktree；用户同意安全清理后由 Agent 逐项检查并执行，含本机文件的目录需加 <code>--with-local-files</code> 单独同意</td></tr>
         <tr><td><code><span class="arg">doctor</span> <span class="arg">[--check-remote]</span></code></td><td>安装与接入自检。可只读核对远程交付的目标仓库查询。</td></tr>
         <tr><td><code><span class="arg">conformance</span></code></td><td>按“配置就位、行为已验证、运行稳定”三层判定 L3 判据，缺证据的项标 <code>PEND</code></td></tr>
         <tr><td><code><span class="arg">metrics</span> <span class="arg">[--days</span> <span class="arg">&lt;n&gt;]</span></code></td><td>按周统计合并、验证、评审与拦截情况</td></tr>

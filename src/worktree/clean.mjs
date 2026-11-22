@@ -109,6 +109,16 @@ function processCwds() {
   return found.filter((item) => item.cwd);
 }
 
+function processHolders() {
+  let processes;
+  return (path) => {
+    if (processes === undefined) processes = processCwds();
+    if (processes === null) return null;
+    const real = realOrResolved(path);
+    return processes.filter((item) => item.pid !== process.pid && (item.cwd === real || item.cwd.startsWith(`${real}${sep}`)));
+  };
+}
+
 /** Worktree 检出的提交：有分支看分支，分离头指针看 HEAD。 */
 function tipOf(entry) {
   return entry.branch ? `refs/heads/${entry.branch}` : entry.head;
@@ -213,13 +223,7 @@ export function planCleanup({ cwd, withLocalFiles = false, branch = null, requir
   const entries = worktreeEntries(root);
   const linked = entries.slice(1).filter((entry) => !branch || entry.branch === branch);
   log(`[worktree] 正在检查 ${linked.length} 个 Linked Worktree，数量多时需要几十秒`);
-  let processes;
-  const holders = (path) => {
-    if (processes === undefined) processes = processCwds();
-    if (processes === null) return null;
-    const real = realOrResolved(path);
-    return processes.filter((item) => item.pid !== process.pid && (item.cwd === real || item.cwd.startsWith(`${real}${sep}`)));
-  };
+  const holders = processHolders();
   const ctx = { root, mainRef, mainCommit, cache: checkoutsDir(), current: root, patterns: localFilePatterns(project), withLocalFiles, holders, requireProcessCheck, allowFresh };
   const removable = [];
   const skipped = [];
@@ -227,7 +231,41 @@ export function planCleanup({ cwd, withLocalFiles = false, branch = null, requir
     const verdict = inspect(entry, ctx);
     (verdict.reason ? skipped : removable).push({ path: entry.path, branch: entry.branch, head: entry.head, ...verdict });
   }
-  return { root, mainRoot: entries[0].path, mainRef, removable, skipped, cleanup, processCheck: processes !== null };
+  return {
+    root,
+    mainRoot: entries[0].path,
+    mainRef,
+    removable,
+    skipped,
+    cleanup,
+    processCheck: linked.length === 0 || holders("__process_check__") !== null,
+    cache: ctx.cache,
+    current: ctx.current,
+    patterns: ctx.patterns,
+    withLocalFiles,
+    requireProcessCheck,
+    allowFresh,
+  };
+}
+
+function recheckCleanupItem(plan, item) {
+  const entry = worktreeEntries(plan.root).find((candidate) => samePath(candidate.path, item.path));
+  if (!entry) return { reason: "Worktree 记录已不存在，可能已被其他命令清理" };
+  if (entry.branch !== item.branch) return { reason: `分支已从 ${item.branch ?? "(分离 HEAD)"} 变为 ${entry.branch ?? "(分离 HEAD)"}` };
+  const ctx = {
+    root: plan.root,
+    mainRef: plan.mainRef,
+    mainCommit: resolveCommit(plan.root, plan.mainRef),
+    cache: plan.cache,
+    current: plan.current,
+    patterns: plan.patterns,
+    withLocalFiles: plan.withLocalFiles,
+    holders: processHolders(),
+    requireProcessCheck: plan.requireProcessCheck,
+    allowFresh: plan.allowFresh,
+  };
+  const verdict = inspect(entry, ctx);
+  return verdict.reason ? verdict : { item: { ...item, ...verdict, branch: entry.branch, head: entry.head } };
 }
 
 async function runCleanup(plan, item) {
@@ -257,9 +295,8 @@ async function removeTree(plan, item) {
   }
   const failure = await runCleanup(plan, item);
   if (failure) return failure;
-  // 清理命令可能留下文件，按最终状态再确认一次；不加 --force，git 遇到未提交或未跟踪的文件同样会拒绝。
-  const status = git(item.path, ["status", "--porcelain", "--untracked-files=normal"]);
-  if (status.status !== 0 || status.stdout.trim()) return "清理命令之后出现了未提交或未跟踪的文件";
+  const rechecked = recheckCleanupItem(plan, item);
+  if (rechecked.reason) return rechecked.reason;
   const removed = await gitAsync(plan.mainRoot, ["worktree", "remove", item.path]);
   return removed.status === 0 ? null : `git worktree remove 失败: ${lastLine(removed.stderr)}`;
 }
@@ -278,6 +315,7 @@ function branchNote(item) {
 
 /**
  * 删除可清理的 Worktree 与分支。分支用 git branch -d，没有完全合并时 git 会拒绝，分支保留。
+ * 每个对象在执行前和关联清理命令后重新检查，出现风险时只保留该对象，不影响其他安全对象。
  * 每处理一个输出一行进度；收到第一次 Ctrl-C 时处理完当前这个再停，第二次立即退出。
  */
 export async function cleanWorktrees({ cwd, withLocalFiles = false, branch = null, requireProcessCheck = false, allowFresh = false, log = () => {} }) {
@@ -296,7 +334,8 @@ export async function cleanWorktrees({ cwd, withLocalFiles = false, branch = nul
       if (interrupted) break;
       const started = Date.now();
       log(`[worktree] [${index + 1}/${plan.removable.length}] ${label(item)}`);
-      const outcome = await cleanOne(plan, item);
+      const rechecked = recheckCleanupItem(plan, item);
+      const outcome = rechecked.reason ? { ...item, reason: rechecked.reason } : await cleanOne(plan, rechecked.item);
       const took = `${((Date.now() - started) / 1000).toFixed(1)}s`;
       if (outcome.reason) {
         failed.push(outcome);
@@ -410,16 +449,16 @@ export function formatCleanPlan(plan) {
   if (plan.removable.length > 0) {
     lines.push(
       agentAfterConsent(
-        withLocalFiles ? "确认上述对象及本机文件删除" : "确认上述对象",
+        withLocalFiles ? "明确同意删除本机文件" : "同意安全清理",
         `harness worktree clean --yes${withLocalFiles ? " --with-local-files" : ""}`,
       ),
-      "Worktree 不加 --force 删除，分支用 git branch -d 删除。",
+      "Agent 逐项复查，异常对象自动保留；Worktree 不加 --force 删除，分支用 git branch -d 删除。",
     );
   } else {
     lines.push(noNextAction("当前没有可清理的 Worktree"));
   }
   if (plan.skipped.some((item) => item.reason.includes("含有本机文件"))) {
-    lines.push("含本机文件的跳过对象需要单独授权；确需删除时，先运行 harness worktree clean --with-local-files 重新预览，再由用户确认具体对象。");
+    lines.push("含本机文件的跳过对象需要单独授权；确需删除时，由 Agent 重新检查，并在用户明确同意删除本机文件后加 --with-local-files。");
   }
   return lines.join("\n");
 }
