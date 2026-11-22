@@ -57,7 +57,7 @@ describe("harness worktree clean", () => {
     assert.match(preview.stdout, /task\/dirty.*1 个未提交或未跟踪的文件/);
     assert.match(preview.stdout, /task\/fresh.*建好不到 24 小时，还没有新的提交/);
     assert.match(preview.stdout, /task\/locked.*已锁定/);
-    assert.match(preview.stdout, /用户在对话中确认上述对象后，由 Agent 执行：harness worktree clean --yes/);
+    assert.match(preview.stdout, /用户在对话中同意安全清理后，由 Agent 执行：harness worktree clean --yes/);
     assert.ok(existsSync(done), "预览不删除");
     assert.ok(branchExists(repo, "task/done"));
   });
@@ -162,7 +162,7 @@ describe("harness worktree clean", () => {
     assert.equal(existsSync(deps), false);
 
     const localPreview = clean(repo, "--with-local-files");
-    assert.match(localPreview.stdout, /用户在对话中确认上述对象及本机文件删除后，由 Agent 执行：harness worktree clean --yes --with-local-files/);
+    assert.match(localPreview.stdout, /用户在对话中明确同意删除本机文件后，由 Agent 执行：harness worktree clean --yes --with-local-files/);
     const forced = clean(repo, "--yes", "--with-local-files");
     assert.equal(forced.status, 0, forced.stderr);
     assert.equal(existsSync(local), false);
@@ -195,6 +195,39 @@ describe("harness worktree clean", () => {
     assert.match(result.stdout, /task\/bad.*清理命令失败/);
     const lines = readFileSync(join(root, "..", "cleanup.log"), "utf8").trim().split("\n");
     assert.ok(lines.includes(`${ok}|${root}|${ok}|task/ok`), lines.join("\n"));
+  });
+
+  test("批量清理中后续对象变脏时自动保留，且不再运行它的关联清理命令", () => {
+    const config = {
+      ...CONFIG,
+      worktree: {
+        cleanup: [["sh", "-c", 'printf "%s\\n" "$HARNESS_BRANCH" >> "$1/../cleanup.log"; if [ "$HARNESS_BRANCH" = task/first ]; then printf "new\\n" > "$1/../second/notes.txt"; fi', "_", "{main}"]],
+      },
+    };
+    const { repo, root } = setup(config);
+    const first = task(repo, root, "first");
+    const second = task(repo, root, "second");
+
+    const result = clean(repo, "--yes");
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(existsSync(first), false, result.stdout + result.stderr);
+    assert.ok(existsSync(second), "后续对象出现未提交文件后应保留");
+    const lines = readFileSync(join(root, "..", "cleanup.log"), "utf8").trim().split("\n");
+    assert.deepEqual(lines, ["task/first"], "变脏对象不应再执行关联清理命令");
+    assert.match(result.stdout, /task\/second.*1 个未提交或未跟踪的文件/);
+  });
+
+  test("关联清理命令新生成本机文件时，未授权的对象不会被删除", () => {
+    const config = { ...CONFIG, worktree: { cleanup: [["sh", "-c", 'printf "TOKEN=local\\n" > .env', "_"]] } };
+    const { repo, root } = setup(config);
+    const first = task(repo, root, "first");
+    const second = task(repo, root, "second");
+
+    const result = clean(repo, "--yes");
+    assert.equal(result.status, 0, result.stderr);
+    assert.ok(existsSync(first), "清理命令产生的 .env 不能被静默删除");
+    assert.ok(existsSync(second), "后续对象同样保留");
+    assert.match(result.stdout, /含有本机文件 \.env/);
   });
 
   test("删除时逐个输出进度与结果，预览开始时说明正在检查", () => {

@@ -74,7 +74,7 @@ const USAGE = `harness <命令> [参数]    任一命令加 --help 查看该命�
   merge    --branch <名称> [--dry-run]               受控合并到主分支（本地交付）
   submit   --branch <名称>                           推送核对过的提交并创建或更新 PR/MR（远程交付）
   sync     [--remote <远程>]                         把本地主分支快进到远程主分支；--remote 只在首次接入时使用
-  worktree clean [--yes] [--with-local-files]       预览已合并的任务 Worktree；用户确认具体对象后由 Agent 执行 --yes
+  worktree clean [--yes] [--with-local-files]       预览已合并的任务 Worktree；用户同意安全清理后由 Agent 逐项检查并执行 --yes
                                                     含 .env 这类本机文件时需单独同意并加 --with-local-files
 
 体检与度量

@@ -28,7 +28,7 @@ test("授权矩阵覆盖全部 --yes 场景并区分机器保障与流程约束"
   ];
   for (const scenario of scenarios) assert.ok(reference.includes(`| ${scenario} |`), `授权矩阵缺少场景: ${scenario}`);
   assert.match(reference, /只有流程规范约束，没有专门的 Agent 拦截规则/);
-  assert.match(reference, /没有预览计划 ID 或对象清单哈希绑定/);
+  assert.match(reference, /执行前和关联清理命令后逐项复查/);
   assert.match(reference, /本机评审者配置/);
 });
 

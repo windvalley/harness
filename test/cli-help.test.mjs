@@ -179,7 +179,7 @@ describe("授权命令帮助区分 Agent 与人工的责任", () => {
     assert.match(confirmed.stdout, /由人在自己的终端执行/);
     const cleaned = repo.rawCli("worktree", "clean", "--help");
     assert.equal(cleaned.status, 0, cleaned.stderr);
-    assert.match(cleaned.stdout, /用户确认具体对象后由 Agent 执行/);
+    assert.match(cleaned.stdout, /用户同意安全清理后由 Agent 逐项检查并执行/);
     const rotated = repo.rawCli("key", "rotate", "--help");
     assert.equal(rotated.status, 0, rotated.stderr);
     assert.match(rotated.stdout, /由人在自己的终端执行/);
