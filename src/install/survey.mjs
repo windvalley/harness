@@ -47,14 +47,22 @@ function readJson(file) {
 
 function foreignAgentHooks(root) {
   const result = [];
-  for (const rel of CLIENT_FILES) {
-    const config = readJson(join(root, rel));
-    for (const entry of config?.hooks?.PreToolUse ?? []) {
+  const collect = (rel, entries) => {
+    for (const entry of entries ?? []) {
       for (const item of entry.hooks ?? []) {
         if (!item.command || isHarnessClientHook(item.command)) continue;
         result.push({ file: rel, command: item.command, refs: referencedPaths(root, item.command) });
       }
     }
+  };
+  for (const rel of CLIENT_FILES) {
+    const config = readJson(join(root, rel));
+    collect(rel, config?.hooks?.PreToolUse);
+  }
+  const rel = ".agents/hooks.json";
+  const config = readJson(join(root, rel));
+  for (const group of Object.values(config ?? {})) {
+    if (group && typeof group === "object" && !Array.isArray(group)) collect(rel, group.PreToolUse);
   }
   return result;
 }

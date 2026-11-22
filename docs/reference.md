@@ -87,7 +87,7 @@ Agent 调用工具 ----> [1] 实时拦截：读写文件、执行命令之前按
 | `.harness/acceptance/` | 验收清单 | 是 |
 | `.harness/pitfalls.md` | 本项目反复踩的坑与做法，由 `harness pitfall` 维护；项目自有，`upgrade` 不覆盖，不属于门禁文件 | 是 |
 | `.harness/bin/harness`、`.harness/VERSION` | 入口与锁定的版本号 | 是 |
-| `.claude/settings.json`、`.codex/hooks.json` | 客户端的实时拦截配置 | 是 |
+| `.agents/hooks.json`、`.claude/settings.json`、`.codex/hooks.json` | 客户端的实时拦截与收尾检查配置 | 是 |
 | `AGENTS.md` 里的托管块 | Agent 每次都会加载的硬性要求：先读规范、任务分级、先红后绿、按门禁流程合并 | 是 |
 | `.git/hooks/` 或 `core.hooksPath` 指向的目录 | `pre-commit`、`commit-msg`、`reference-transaction` 三个钩子 | 默认不入库 |
 | `.git/harness/` | 证据、评审、确认、实施授权、上报记录与账本 `ledger.jsonl`，所有 Worktree 共用；被其他工具占用时改用 `.git/harness.d/` | 否 |
@@ -252,7 +252,7 @@ node ~/github/harness/bin/harness.mjs sync                                    # 
 5. `pre-commit`、`commit-msg`、`reference-transaction` 三个 git 钩子。
    harness 的块插在原有脚本之前，调用主 Worktree 的入口，只在主分支上已有 `.harness/config.json` 时生效。
    配置了 `git.hooksDir` 时改为整份生成在那个目录，见“由 harness 接管 git 钩子目录”。
-6. `.claude/settings.json` 与 `.codex/hooks.json` 里的 `PreToolUse` 拦截，文件里的其他设置原样保留。
+6. `.agents/hooks.json`、`.claude/settings.json` 与 `.codex/hooks.json` 里的 `PreToolUse` 拦截和 `Stop` 收尾检查，文件里的其他设置原样保留。
    `policy.json` 启用 `secrets`、`git-safety`、`gate-self` 与 `plan-first` 四个预设。
 7. `AGENTS.md` 里的托管块；项目的 `.gitignore` 会连带忽略入口时（例如全局忽略 `bin/`），自动放行入口。
 8. 本机共用的 DeepSeek Harness 插件 `~/.local/share/harness/dsh-plugin/`，见“客户端那一侧”。
@@ -266,7 +266,7 @@ node ~/github/harness/bin/harness.mjs sync                                    # 
 | --- | --- | --- |
 | git 钩子里原有的脚本（lint、提交信息校验等） | 保留，harness 的检查插在最前面 | 同左 |
 | `reference-transaction` 里原有的主分支保护 | 保留；合并时若被它拒绝，提示加 `--take-over` 重来 | 移除，由 harness 接管 |
-| `.claude/settings.json`、`.codex/hooks.json` 里原有的 Agent 拦截 | 保留，两套拦截同时生效 | 移除，由 harness 接管 |
+| `.agents/hooks.json`、`.claude/settings.json`、`.codex/hooks.json` 里原有的 Agent 拦截 | 保留，两套拦截同时生效 | 移除，由 harness 接管 |
 | `.gitignore` 会连带忽略入口（例如全局的 `bin/`） | 自动放行入口 | 同左 |
 | `.git/harness` 已被其他工具占用 | harness 的数据改放 `.git/harness.d`，原有数据不动 | 同左 |
 | 被钩子或 `AGENTS.md` 托管块引用的目录 | 列为可退役，不自动删除 | 同左 |
@@ -290,6 +290,8 @@ harness 不认识原有工具的配置格式，也不自动转换。
 
 有几件事 harness 没法代劳，接入或合并结束时会列出来：
 
+- Antigravity：安装器写入工作区级 `.agents/hooks.json`，接入或配置变化后重启正在运行的会话。
+  用一条应被拒绝的写密钥操作确认 `PreToolUse` 已真正调用；`doctor` 只确认配置就位，不把当前客户端标成已实测。
 - Claude Code：钩子在会话启动时读入，接入后或客户端配置改动后，重启正在运行的会话。
 - Codex：钩子要先被信任才会执行，未信任时命令不经过实时拦截，只有 git 层生效。
   在 Codex 里运行 `/hooks`，进入 `Review hooks` 后按 `t` 信任；拦截（`PreToolUse`）与收尾检查（`Stop`）各信任一次。
@@ -311,7 +313,7 @@ dsh plugin --profile web add ~/.local/share/harness/dsh-plugin
 
 `--profile` 只能是 `desktop` 或 `web`，用别的名称会新建一个独立的 profile，桌面版和浏览器版都不会加载它。
 注册后重启 DeepSeek Harness。
-插件只做转发：按会话所在仓库的入口锁定的版本，导入那个版本的门禁代码判定，与 Claude Code、Codex 经入口执行的版本一致。
+插件只做转发：按会话所在仓库的入口锁定的版本，导入那个版本的门禁代码判定，与 Antigravity、Claude Code、Codex 经入口执行的版本一致。
 本机没有安装项目锁定的版本时，这个项目里的工具调用一律被拒绝，并提示运行 `install --local`。
 没有入口的仓库用本机最新的版本判定：未接入 harness 的放行，主分支已有配置的照常拦截；不是 Git 仓库的目录直接放行。
 插件本身由 `harness install` 与 `install --local` 维护，插件内容更新后重启 DeepSeek Harness 生效；项目升级 harness 版本不需要重启。
@@ -319,12 +321,18 @@ dsh plugin --profile web add ~/.local/share/harness/dsh-plugin
 
 | 客户端 | 实时拦截 | 状态 |
 | --- | --- | --- |
+| Antigravity App、CLI、IDE | `.agents/hooks.json` 的 `PreToolUse`；收尾检查走 `Stop` | 按[官方钩子协议](https://antigravity.google/docs/hooks/)实现，harness CLI 协议测试与临时仓库集成测试已通过，尚未在运行中的 Antigravity 客户端端到端实测 |
 | Claude Code（CLI） | `PreToolUse`，拒绝时退出码 2；收尾检查走 `Stop` | 拦截已实测；收尾检查见下 |
 | Claude 桌面版 | 同一套钩子实现 | 仅静态确认，未端到端实测 |
 | Codex CLI | `.codex/hooks.json` 的 `PreToolUse`；收尾检查走 `Stop` | 拦截已实测，收尾检查按 Codex 0.162 的钩子协议实现，未端到端实测；两个钩子都要先信任 |
 | Codex 桌面版（ChatGPT.app 内置引擎） | 同上 | 已实测；需先信任钩子 |
 | DeepSeek Harness 桌面版 | Cordis 插件 `tools/pre-execute`；收尾检查走 `agent/turn-stopping` | 需注册一次本机插件；旧版的项目插件曾在运行中的桌面版里实测，本机插件已实测注册、配置组合与在桌面版内置 Node 中的转发，尚未在运行中的桌面版里端到端实测 |
 | DeepSeek Harness 浏览器版 | 同上 | 已实测注册与配置组合，未端到端实测 |
+
+Antigravity 适配器识别 `run_command`、`write_to_file`、`replace_file_content`、`multi_replace_file_content`、`view_file`、`grep_search`、`find_by_name` 与 `list_dir`。
+实时拦截显式返回 `allow` 或 `deny`，收尾检查用 `continue` 让 Agent 接着做，用 `stop` 放行结束。
+`fullyIdle` 为 `false` 时后台任务尚未结束，不做收尾拦截。
+`conversationId` 关联同一会话经手的任务分支，命令优先按 `Cwd` 定位项目，文件与搜索调用按目标所在工作区定位。
 
 git 层对所有客户端生效，实时拦截没接上时，提交检查与主分支保护仍然有效。
 `harness doctor` 逐项报告接入状态，`[!!]` 表示需要处理，`[?]` 表示文件已就位但客户端是否真正调用尚未实测。
@@ -336,7 +344,7 @@ Agent 应结合诊断和当前客户端的实际调用给出证据，不能把�
 
 ### 接入其他编码 Agent
 
-内置适配的只有 Claude Code、Codex 与 DeepSeek Harness，其他编码 Agent 按下面三层接入，不需要改 harness 源码。
+内置适配的有 Antigravity、Claude Code、Codex 与 DeepSeek Harness，其他编码 Agent 按下面三层接入，不需要改 harness 源码。
 
 | 层 | 做法 |
 | --- | --- |
@@ -1249,7 +1257,7 @@ Agent 按“正确做法”改道即可，实时拦截每次都会记进账本�
 以下文件属于门禁，改动它们的分支合并前要由人确认：
 
 - `.harness/config.json`、`VERSION`、`policy.json`、`verify.json`、`golden/**`、`managed-files.json`、`rules/**`、`bin/**`。
-- `.claude/settings.json`、`.codex/hooks.json`、`.githooks/**`、`.husky/**`（包括子目录里的 `.husky/`）、配置的 `git.hooksDir`。
+- `.agents/hooks.json`、`.claude/settings.json`、`.codex/hooks.json`、`.githooks/**`、`.husky/**`（包括子目录里的 `.husky/`）、配置的 `git.hooksDir`。
 - `governance.gatePaths` 里追加的路径。
 
 配置、规则与用例，Agent 可以直接改。
@@ -1470,7 +1478,7 @@ harness pitfall list --flagged  # 只列命中满 3 次、建议固化的
 ### 收尾检查
 
 Agent 做到一半、门禁没有拒绝也没有遇到阻塞，自己结束了回复，前面三层都拦不住：它们只管不合格的改动进不了主分支。
-收尾检查补上这一环：Claude Code 与 Codex 的 `Stop` 钩子、DeepSeek Harness 插件的 `agent/turn-stopping`，在 Agent 每次结束回复前运行一次。
+收尾检查补上这一环：Antigravity、Claude Code 与 Codex 的 `Stop` 钩子、DeepSeek Harness 插件的 `agent/turn-stopping`，在 Agent 每次结束回复前运行一次。
 
 核对哪些分支：
 
@@ -1495,6 +1503,7 @@ Agent 做到一半、门禁没有拒绝也没有遇到阻塞，自己结束了�
 下一步是 `verify` 或 `review` 时，信息还会说明：验收清单还有未实现的条目时，先继续实现并提交，实现完成后再验证。
 为了不把会话困在循环里，同一状态（分支顶端、阻塞项与任务 Worktree 里未提交文件的内容都没变）最多拦截 `stop.idleBlocks` 次，缺省 3 次，拦满后放行，同时在账本记 `stop.unresolved`（含连续拦截次数）。
 Claude Code 与 Codex 在第一次放行时会收到一条 `systemMessage`，写明分支、欠项、拦截次数与“发送继续即可恢复”；之后同一状态再结束不重复提示。
+Antigravity 的 `stop` 放行结果在 `reason` 里携带同样的提示，是否展示由客户端决定。
 DeepSeek Harness 的插件只读取拦截结果，不显示这条提示。
 `harness status` 与 `harness merge` 会把这次“没有上报阻塞就结束”展示出来，分支再有新提交后不再提示。
 分支状态或义务读取异常时，收尾检查按分支隔离错误，在账本记录包含分支与脱敏诊断的 `stop.error`，继续核对其他任务，不能让一个异常分支使其他任务一起免于检查。
@@ -1521,7 +1530,7 @@ node ~/github/harness/bin/harness.mjs install --local
 
 装好之前：
 
-- Claude Code 与 Codex 的实时拦截拒绝一切调用，并提示上面这条命令：没有门禁的 Agent 不应该能动这个项目。
+- Antigravity、Claude Code 与 Codex 的实时拦截拒绝一切调用，并提示上面这条命令：没有门禁的 Agent 不应该能动这个项目。
 - 默认的 `.git/hooks` 和 `core.hooksPath` 设置都不随克隆分发，本机没有 git 层保护。
   钩子目录入库、且 `core.hooksPath` 已经指向它时（例如安装依赖时由 husky 设置），提交照常进行、只打印提示，写主分支一律被拒绝。
 
@@ -2245,7 +2254,7 @@ harness 防的是 Agent 的误操作，以及被提示注入后常见的绕过�
 - 默认的 `.git/hooks` 不入库，目前没有规则阻止 Agent 直接改写或删除其中的钩子，也没有拦截 `harness uninstall`。
   钩子被删除或摘掉 harness 的块时，`harness doctor` 会报出来。
 - 路径规则只约束写文件、读文件类的工具调用，用 shell 命令读写同一个文件要靠 `shell-forbid` 一类的命令规则覆盖。
-- Codex 没有信任钩子时没有实时拦截；DeepSeek Harness 的本机插件尚未在运行中的客户端里端到端实测；Claude 桌面版只做了静态确认。
+- Codex 没有信任钩子时没有实时拦截；Antigravity 适配与 DeepSeek Harness 的本机插件尚未在运行中的客户端里端到端实测；Claude 桌面版只做了静态确认。
 - 收尾检查只能降低 Agent 提前停下的概率，不能保证它做完、做对：Agent 可以开一个上报再结束，或者在同一状态被拦满 `stop.idleBlocks` 次后结束。
   这两种情况都会留下记录（上报内容、`stop.unresolved`），由人在 `harness status`、合并输出或上报列表里核对。
   会话经手的分支靠实时拦截记录，客户端没有接上实时拦截、或者 Agent 用无法静态推算目录的命令改了别的 Worktree，收尾检查就不知道这个分支。

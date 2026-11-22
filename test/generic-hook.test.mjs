@@ -26,6 +26,7 @@ describe("通用客户端入口", () => {
     const repo = setup();
     assert.equal(call(repo, { kind: "write", path: "src/a.js", content: "a" }).status, 0);
     assert.equal(call(repo, { kind: "shell", command: "ls" }).status, 0);
+    assert.equal(call(repo, { kind: "shell", command: "ls", cwd: "" }).status, 0, "空 cwd 沿用旧的当前目录回退行为");
     assert.equal(call(repo, { kind: "read", path: "config/server.pem" }).status, 2);
   });
 

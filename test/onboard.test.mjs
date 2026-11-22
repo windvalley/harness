@@ -34,7 +34,7 @@ echo lint-staged
 
 /**
  * 一个“已有门禁”的项目：husky 钩子入库，reference-transaction 里是旧门禁的主分支保护，
- * .claude/settings.json 里挂着旧门禁的拦截脚本，AGENTS.md 里有别的工具的托管块，.gitignore 全局忽略 bin/。
+ * .claude/settings.json 与 .agents/hooks.json 里挂着旧门禁的拦截脚本，AGENTS.md 里有别的工具的托管块，.gitignore 全局忽略 bin/。
  */
 function legacyProject() {
   const repo = makeRepo({
@@ -62,6 +62,12 @@ function legacyProject() {
       2,
     )}\n`,
   );
+  write(repo.root, ".agents/hooks.json", `${JSON.stringify({
+    legacy: {
+      PreToolUse: [{ matcher: "run_command", hooks: [{ type: "command", command: "node legacy/claude-hook.mjs" }] }],
+      PostToolUse: [{ matcher: "*", hooks: [{ type: "command", command: "node legacy/log.mjs" }] }],
+    },
+  }, null, 2)}\n`);
   chmodSync(join(repo.root, "frontend/.husky/pre-commit"), 0o755);
   chmodSync(join(repo.root, "frontend/.husky/reference-transaction"), 0o755);
   commit(repo.root, "chore(legacy): 旧门禁\n\n- 钩子与拦截\n- 托管块", {});
@@ -92,6 +98,7 @@ describe("接入已有项目", () => {
     assert.match(result.stdout, /pre-commit: 原有脚本，保留/);
     assert.match(result.stdout, /reference-transaction 里已有其他工具的主分支保护/);
     assert.match(result.stdout, /legacy\/claude-hook\.mjs/);
+    assert.match(result.stdout, /\.agents\/hooks\.json: node legacy\/claude-hook\.mjs/);
     assert.match(result.stdout, /AGENTS\.md 里其他工具的托管块: legacy-harness/);
     assert.match(result.stdout, /\.gitignore 会忽略入口/);
     assert.match(result.stdout, /可在接入合并后退役的目录.*legacy\//);
@@ -108,6 +115,9 @@ describe("接入已有项目", () => {
     const onBranch = JSON.parse(readFileSync(join(repo.root, ".claude/settings.json"), "utf8"));
     assert.equal(onBranch.hooks.PreToolUse.length, 2, "原有拦截保留，harness 追加在后");
     assert.deepEqual(onBranch.permissions, settings.permissions);
+    const antigravity = JSON.parse(readFileSync(join(repo.root, ".agents/hooks.json"), "utf8"));
+    assert.equal(antigravity.legacy.PreToolUse[0].hooks[0].command, "node legacy/claude-hook.mjs");
+    assert.match(antigravity.harness.PreToolUse[0].hooks[0].command, /--client antigravity/);
     assert.match(readFileSync(join(repo.root, "frontend/.husky/reference-transaction"), "utf8"), /legacy guard/);
     git(repo.root, "checkout", "-q", "main");
 
@@ -142,6 +152,9 @@ describe("接入已有项目", () => {
     const settings = JSON.parse(readFileSync(join(repo.root, ".claude/settings.json"), "utf8"));
     assert.equal(settings.hooks.PreToolUse.length, 1);
     assert.deepEqual(settings.permissions, { allow: ["Bash(git status)"] }, "其他设置原样保留");
+    const antigravity = JSON.parse(readFileSync(join(repo.root, ".agents/hooks.json"), "utf8"));
+    assert.equal(antigravity.legacy.PreToolUse, undefined);
+    assert.equal(antigravity.legacy.PostToolUse[0].hooks[0].command, "node legacy/log.mjs");
     assert.equal(git(repo.root, "ls-files", ".harness/bin/harness"), ".harness/bin/harness", "入口已入库");
     git(repo.root, "checkout", "-q", "main");
 
@@ -169,6 +182,7 @@ describe("接入已有项目", () => {
     assert.equal(result.bootstrap, true);
     assert.equal(git(repo.root, "rev-parse", "main"), git(repo.root, "rev-parse", branch));
     assert.equal(git(repo.root, "status", "--porcelain"), "", "合并后主 Worktree 洁净");
+    assert.ok(result.followUps.some((note) => /重启正在运行的 Antigravity/.test(note)));
     assert.ok(result.followUps.some((note) => /重启正在运行的 Claude Code/.test(note)));
     assert.match(merged.stderr, /合并完成，还需要在客户端做/);
 

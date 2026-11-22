@@ -51,6 +51,19 @@ function plan({ root }) {
     }
   }
 
+  const rel = ".agents/hooks.json";
+  const file = join(root, rel);
+  if (existsSync(file)) {
+    let config;
+    try {
+      config = JSON.parse(readFileSync(file, "utf8"));
+    } catch {
+      config = null;
+    }
+    const found = Object.values(config ?? {}).some((group) => group && typeof group === "object" && CLIENT_EVENTS.some((event) => harnessEntries(group[event]).length > 0));
+    if (found) targets.push({ kind: "antigravity", rel: `${rel} 的 harness 钩子`, file, config });
+  }
+
   const codexConfig = join(process.env.CODEX_HOME || join(homedir(), ".codex"), "config.toml");
   if (existsSync(codexConfig) && readFileSync(codexConfig, "utf8").includes(`[hooks.state."${root}/.codex/hooks.json`)) {
     targets.push({ kind: "codex-trust", rel: "Codex 的钩子信任记录", file: codexConfig, root });
@@ -89,6 +102,25 @@ function applyOne(target, root) {
         else config.hooks[event] = kept;
       }
       if (Object.keys(config.hooks).length === 0) delete config.hooks;
+      if (Object.keys(config).length === 0) rmSync(target.file, { force: true });
+      else writeFileSync(target.file, `${JSON.stringify(config, null, 2)}\n`);
+      return;
+    }
+    case "antigravity": {
+      const config = target.config;
+      for (const [name, group] of Object.entries(config)) {
+        if (!group || typeof group !== "object" || Array.isArray(group)) continue;
+        let touched = false;
+        for (const event of CLIENT_EVENTS) {
+          const list = group[event];
+          if (!Array.isArray(list)) continue;
+          const kept = list.filter((entry) => !harnessEntries([entry]).length);
+          touched ||= kept.length !== list.length;
+          if (kept.length === 0) delete group[event];
+          else group[event] = kept;
+        }
+        if (touched && Object.keys(group).every((key) => key === "enabled")) delete config[name];
+      }
       if (Object.keys(config).length === 0) rmSync(target.file, { force: true });
       else writeFileSync(target.file, `${JSON.stringify(config, null, 2)}\n`);
       return;

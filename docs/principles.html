@@ -20,7 +20,7 @@
 
 <script src="assets/docs.js?v=acdbbf2b96" defer></script>
 </head>
-<body data-page="principles" data-index="1ba7d08a67">
+<body data-page="principles" data-index="3ae8ba17bc">
 <a class="skip-link" href="#main-content">跳到主要内容</a>
 <header class="topbar">
   <div class="topbar-inner">
@@ -103,13 +103,13 @@
       <figcaption>图 5　一次工具调用的实时拦截。拒绝的原因、正确做法和规则 id 经标准错误交给模型；输入或配置有问题时这次调用同样不执行，但消息只是一句诊断，没有规则和替代做法，能否接着做由模型判断，门禁不中止会话。</figcaption>
     </figure>
     <p>判定依据是这次调用的路径、命令和写入内容，加上它所在的上下文：落在哪个 Worktree、哪个分支，写入时方案是否还在等授权。这些一起对照主分支上 <code>policy.json</code> 的规则求值。命令写文件时，引擎会解析重定向、<code>sed -i</code>、<code>tee</code> 等写入目标；目标无法静态确定、又在可能落进受保护位置的目录里执行时，按最严格处理。</p>
-    <p>并非每个调用都会被判定：适配器认不出的工具，或缺少工具名的载荷，直接放行。通用入口例外，它先校验载荷，不合约定按拒绝处理。钩子还会顺带记下本会话涉及的任务分支，供下面的收尾检查使用，拒绝时在账本记一条 <code>policy.deny</code>；这些记录不影响本次判定。</p>
+    <p>并非每个调用都会被判定：适配器认不出的工具直接放行。通用入口与 Antigravity 会先校验载荷，缺少工具名等不合约定的输入按拒绝处理。钩子还会顺带记下本会话涉及的任务分支，供下面的收尾检查使用，拒绝时在账本记一条 <code>policy.deny</code>；这些记录不影响本次判定。</p>
 
     <h2 tabindex="-1" id="stop-check">收尾检查：Agent 想结束时</h2>
     <p>拦截只管 Agent 不做错事，管不了它没做完就停下。为此支持的客户端钩子还挂了一道<strong>收尾检查</strong>：Agent 每次结束回复前，核对本会话推进过的任务是否已经交付；没有交付又没有上报阻塞时，告诉它还差哪几步，让它接着做。只差你确认门禁改动或同意方案时放行；同一状态连续拦满上限（<code>stop.idleBlocks</code>，缺省 3 次）仍没有进展时也放行，避免把会话困住，放行时会提示你会话停在哪、还欠什么，发送“继续”即可恢复，<code>harness status</code> 里也能看到。收尾检查只能降低 Agent 提前停下的概率，不能保证它不停。</p>
     <figure>
       <div class="diagram">
-        <svg viewBox="0 0 900 390" role="img" aria-label="收尾检查的判定过程：Agent 想结束回复时客户端触发 Stop 事件，入口脚本运行收尾检查，逐个核对本会话推进过的任务分支还欠什么，并与会话记录里上次拦截时的进展指纹对比。没有欠项、只差人来做、已经上报、同一状态连续拦满上限仍没有进展、收尾检查自己出错或不在 harness 项目里时都放行；仍有欠项且未拦满时输出 decision 为 block 的结果，退出码仍为 0，Agent 按 reason 里的下一步接着做，再次结束时重新核对。">
+        <svg viewBox="0 0 900 390" role="img" aria-label="收尾检查的判定过程：Agent 想结束回复时客户端触发 Stop 事件，入口脚本运行收尾检查，逐个核对本会话推进过的任务分支还欠什么，并与会话记录里上次拦截时的进展指纹对比。没有欠项、只差人来做、已经上报、同一状态连续拦满上限仍没有进展、收尾检查自己出错或不在 harness 项目里时都放行；仍有欠项且未拦满时输出 decision 为 block 的结果（Antigravity 转为 continue），退出码仍为 0，Agent 按 reason 里的下一步接着做，再次结束时重新核对。">
           <rect class="d-box" x="20" y="40" width="150" height="56" rx="8"/>
           <text class="d-t" x="95" y="64" text-anchor="middle">Agent 想结束</text>
           <text class="d-s" x="95" y="83" text-anchor="middle">客户端触发 Stop 事件</text>
@@ -135,7 +135,7 @@
           <line class="d-line allow" x1="520" y1="96" x2="520" y2="166" marker-end="url(#ar-allow)"/>
           <text class="d-l allow" x="528" y="135">放行</text>
           <rect class="d-box allow" x="20" y="170" width="520" height="162" rx="8"/>
-          <text class="d-t" x="40" y="194">放行：不输出拦截结果，Agent 正常结束</text>
+          <text class="d-t" x="40" y="194">放行：Agent 正常结束</text>
           <text class="d-s" x="40" y="218">· 不在 harness 项目里，或本会话没有推进过任务</text>
           <text class="d-s" x="40" y="238">· 任务已经交付，没有欠项</text>
           <text class="d-s" x="40" y="258">· 只差人来做：确认门禁改动、同意实施方案</text>
@@ -147,7 +147,7 @@
           <text class="d-l deny" x="668" y="135">仍有欠项且未拦满</text>
           <rect class="d-box deny" x="580" y="170" width="300" height="80" rx="8"/>
           <text class="d-t" x="730" y="194" text-anchor="middle">阻止结束</text>
-          <text class="d-m" x="730" y="214" text-anchor="middle">{"decision":"block","reason":…}</text>
+          <text class="d-m" x="730" y="214" text-anchor="middle">decision: block / continue</text>
           <text class="d-s" x="730" y="234" text-anchor="middle">退出码仍是 0，reason 写明还差哪几步</text>
 
           <line class="d-line deny" x1="730" y1="250" x2="730" y2="296" marker-end="url(#ar-deny)"/>

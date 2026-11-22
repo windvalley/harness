@@ -132,6 +132,18 @@ function clientHookInstalled(file) {
   }
 }
 
+function antigravityHookInstalled(file) {
+  if (!existsSync(file)) return { guard: false, stop: false };
+  try {
+    const config = JSON.parse(readFileSync(file, "utf8"));
+    const has = (list) => (list ?? []).some((entry) => (entry.hooks ?? []).some((item) => /hook\s+--client\s+antigravity\b/.test(item.command)));
+    const groups = Object.values(config).filter((group) => group && typeof group === "object" && !Array.isArray(group) && group.enabled !== false);
+    return { guard: groups.some((group) => has(group.PreToolUse)), stop: groups.some((group) => has(group.Stop)) };
+  } catch {
+    return { guard: false, stop: false };
+  }
+}
+
 const STOP_MISSING = "收尾检查（Stop）未接入，在任务分支运行 harness install 重新生成后由人确认合入";
 
 /**
@@ -229,6 +241,18 @@ export function doctor({ cwd = process.cwd(), checkRemote = false } = {}) {
 
   checks.push(...gitHookChecks(root));
   checks.push(deliveryCheck(root, { checkRemote }));
+
+  const antigravity = antigravityHookInstalled(join(root, ".agents", "hooks.json"));
+  checks.push({
+    id: "client:antigravity",
+    ok: antigravity.guard && antigravity.stop,
+    verified: false,
+    detail: !antigravity.guard
+      ? "未接入或已禁用 .agents/hooks.json 的 Antigravity 实时拦截"
+      : antigravity.stop
+        ? "PreToolUse 与收尾检查 Stop 配置已就位；当前客户端是否真正调用尚未实测"
+        : `PreToolUse 已接入；${STOP_MISSING}`,
+  });
 
   const claude = clientHookInstalled(join(root, ".claude", "settings.json"));
   checks.push({

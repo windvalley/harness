@@ -190,6 +190,7 @@ export const GATE_FILES = [
   ".harness/managed-files.json",
   ".harness/rules/**",
   ".harness/bin/**",
+  ".agents/hooks.json",
   ".claude/settings.json",
   ".codex/hooks.json",
   ".githooks/**",
@@ -227,7 +228,7 @@ export function gatePaths(project) {
 }
 
 // 执行器入口：入口版本、客户端钩子配置与钩子目录。改动合入后需要在主 Worktree 刷新本机钩子并提示客户端重新加载。
-export const ENTRY_FILES = [".harness/bin/**", ".claude/settings.json", ".codex/hooks.json", ".githooks/**", ".husky/**", "**/.husky/**"];
+export const ENTRY_FILES = [".harness/bin/**", ".agents/hooks.json", ".claude/settings.json", ".codex/hooks.json", ".githooks/**", ".husky/**", "**/.husky/**"];
 
 /** 合入后要在主 Worktree 刷新本机钩子的文件：执行器入口、项目配置的钩子目录，以及决定钩子目录的配置本身。 */
 export function entryPaths(project) {

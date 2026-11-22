@@ -145,13 +145,14 @@ describe("git 层钩子", () => {
 });
 
 describe("安装与自检", () => {
-  test("install 生成 shim、三处 git 钩子与两个客户端配置", () => {
+  test("install 生成 shim、三处 git 钩子与三个客户端配置", () => {
     const repo = setup();
     assert.ok(existsSync(join(repo.root, ".harness/bin/harness")));
     const hooksDir = join(repo.root, ".git/hooks");
     for (const name of ["pre-commit", "commit-msg", "reference-transaction"]) {
       assert.match(readFileSync(join(hooksDir, name), "utf8"), /# harness:hook/, name);
     }
+    assert.match(readFileSync(join(repo.root, ".agents/hooks.json"), "utf8"), /\.harness\/bin\/harness.*hook --client antigravity/);
     assert.match(readFileSync(join(repo.root, ".claude/settings.json"), "utf8"), /\.harness\/bin\/harness.*hook --client claude/);
     assert.match(readFileSync(join(repo.root, ".codex/hooks.json"), "utf8"), /\.harness\/bin\/harness.*hook --client codex/);
     // 入口入库，Linked Worktree 检出后直接可用。

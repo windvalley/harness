@@ -162,7 +162,7 @@ Git 推送报错时，`submit` 回读远端引用确认是否收到任务提交�
 
 ## 收尾检查
 
-Claude Code、Codex 与 DeepSeek Harness 每次结束回复前会运行收尾检查：本会话推进过的任务分支（写过文件、提交过，或运行过 `approve`、`verify`、`review`、`merge`、`submit`）还没有交付，又没有上报阻塞时，检查会拦下结束，给出还差哪几步和下一条命令。
+Antigravity、Claude Code、Codex 与 DeepSeek Harness 每次结束回复前会运行收尾检查：本会话推进过的任务分支（写过文件、提交过，或运行过 `approve`、`verify`、`review`、`merge`、`submit`）还没有交付，又没有上报阻塞时，检查会拦下结束，给出还差哪几步和下一条命令。
 
 - 按提示接着做，直到合并（远程交付到 `submit`），不要换个说法再结束。
 - 提示的下一步是 `verify` 或 `review`、而验收清单还有未实现的条目时，先继续实现并提交，实现完成后再验证；暂时不该验证不是结束这一轮的理由。
@@ -172,7 +172,7 @@ Claude Code、Codex 与 DeepSeek Harness 每次结束回复前会运行收尾检
   旧记录没有绑定 HEAD 时，不再按提交时间推测它是否适用。
 - 用户在本轮明确要求暂停时，在回复里照录用户原话说明为什么停下。
 - 同一状态（分支顶端、阻塞项与未提交内容都没变）最多拦截 `.harness/config.json` 的 `stop.idleBlocks` 次，缺省 3 次，配置值不是正整数时按 3 处理。
-  拦满后放行，避免把会话困住：Claude Code 与 Codex 在第一次放行时向用户提示分支、欠项和恢复方式，之后同一状态再结束不重复提示，DeepSeek Harness 不显示这条提示；放行时在账本记一次未上报的结束，`harness status` 也会向用户显示。
+  拦满后放行，避免把会话困住：Antigravity、Claude Code 与 Codex 在第一次放行结果里携带分支、欠项和恢复方式，之后同一状态再结束不重复提示，DeepSeek Harness 不显示这条提示；放行时在账本记一次未上报的结束，`harness status` 也会向用户显示。
 
 ## 远程交付
 
@@ -302,7 +302,7 @@ harness review-plan --branch <任务分支> [--all]
 ## 门禁改动
 
 `.harness/config.json`、`policy.json`、`verify.json`、`managed-files.json`、`rules/**` 允许直接修改，改动会被记录并在交付前（`merge` 或 `submit`）要求人工确认（`harness confirm --branch <分支>`）。
-`.harness/bin/**` 是执行器入口，`.husky/**`、`.githooks/**`、`.claude/settings.json`、`.codex/hooks.json` 是客户端与 git 钩子的入口。
+`.harness/bin/**` 是执行器入口，`.husky/**`、`.githooks/**`、`.agents/hooks.json`、`.claude/settings.json`、`.codex/hooks.json` 是客户端与 git 钩子的入口。
 它们只由 `harness install`（或 `init`、`upgrade`）生成，Agent 不能手改，但可以在任务分支运行这些命令重新生成；改动同样在交付前要求人工确认。
 
 ## 多个 Worktree

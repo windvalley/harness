@@ -152,7 +152,7 @@ describe("路径与内容判定", () => {
   });
 
   test("执行器入口受保护，规则与配置文件不受保护", () => {
-    for (const rel of [".harness/bin/harness", ".harness/hooks/x", ".claude/settings.json", ".githooks/pre-commit"]) {
+    for (const rel of [".harness/bin/harness", ".harness/hooks/x", ".agents/hooks.json", ".claude/settings.json", ".githooks/pre-commit"]) {
       assert.equal(evaluatePath({ policy: resolved, root: tmpRoot(), relPath: rel, access: "write" }).decision, "deny", rel);
     }
     for (const rel of [".harness/policy.json", ".harness/verify.json", ".harness/rules/core.md", ".harness/acceptance/x.md"]) {
