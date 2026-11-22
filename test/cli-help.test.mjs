@@ -136,6 +136,7 @@ describe("upgrade --dry-run", () => {
     assert.doesNotMatch(result.stdout, /^\s*(新增|更新)\s/m);
     assert.match(result.stdout, /已是最新/);
     assert.match(result.stdout, /无需继续执行：/);
+    assert.equal((result.stdout.match(/已是最新/g) ?? []).length, 1, "已是最新只提示一次");
   });
 
   test("预告将移除的黄金任务旧副本，不改 tasks.json", () => {

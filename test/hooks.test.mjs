@@ -10,6 +10,7 @@ import { starterVerify } from "../src/install/init.mjs";
 import { OPTIONS } from "../src/install/optional.mjs";
 import { managedBlockBody, packageVersion as currentVersion } from "../src/install/managed.mjs";
 import { matchAny } from "../src/lib/glob.mjs";
+import { checkRecord } from "../src/lib/store.mjs";
 
 let repos = [];
 afterEach(() => {
@@ -645,6 +646,7 @@ describe("安装与自检", () => {
     const refused = repo.cli("upgrade");
     assert.equal(refused.status, 1);
     assert.match(refused.stderr, /托管文件冲突[\s\S]*\.harness\/rules\/core\.md/);
+    assert.match(refused.stderr, /由人在自己的终端执行：harness upgrade --force/);
     assert.equal(readFileSync(file, "utf8"), before, "普通升级不覆盖本地修改");
     const forced = repo.cli("upgrade", "--force");
     assert.equal(forced.status, 0, forced.stderr);
@@ -937,6 +939,24 @@ describe("证据密钥", () => {
     const status = repo.cli("key", "status");
     assert.equal(status.status, 1);
     assert.match(status.stdout, /不可用/);
+  });
+
+  test("未知记录类型的恢复提示不重复拼接运行与生成", () => {
+    const repo = setup();
+    const previous = process.env.HARNESS_KEY_DIR;
+    process.env.HARNESS_KEY_DIR = repo.keyDir;
+    try {
+      for (const kind of ["attestation", "submit"]) {
+        const result = checkRecord({ kind, key: "broken", signature: "0".repeat(64) }, kind, "broken");
+        assert.equal(result.ok, false);
+        assert.equal(result.code, "signature");
+        assert.match(result.reason, new RegExp(`重新生成 ${kind} 记录`));
+        assert.doesNotMatch(result.reason, /重新运行 重新生成/);
+      }
+    } finally {
+      if (previous === undefined) delete process.env.HARNESS_KEY_DIR;
+      else process.env.HARNESS_KEY_DIR = previous;
+    }
   });
 
   test("密钥对其他用户可读时 doctor 报错", () => {

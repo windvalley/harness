@@ -222,11 +222,17 @@ export function riskHints({ root, project, base, head, branch }) {
   if (risk.reasons.length > 0 && planEnforced(project.policy)) {
     const state = currentApproval({ root, project, branch });
     if (!state?.approved) {
-      lines.push(`RISK 要实施授权: ${risk.reasons.join("；")}。先写方案并向用户说明，${agentAfterConsent("同意实施", `harness approve --branch ${branch} --yes --note "<用户原话>"`)}，用户无需执行命令；改动本不该这么大时，现在拆小或撤掉无关改动`);
+      const reapproval = reapprovalGuidance({ root, branch });
+      if (reapproval) {
+        const stale = staleApproval({ root, project, branch }) ?? state?.reason ?? "授权记录无效";
+        lines.push(`RISK 实施授权已失效: ${stale}。${reapproval}`);
+      } else {
+        lines.push(`RISK 要实施授权: ${risk.reasons.join("；")}。先写方案并向用户说明，${agentAfterConsent("同意实施", `harness approve --branch ${branch} --yes --note "<用户原话>"`)}，用户无需执行命令；改动本不该这么大时，现在拆小或撤掉无关改动`);
+        // 已有记录但已失效时，最贵的错误是 Agent 以为还能合并；这里直接说出失效原因。
+        const stale = staleApproval({ root, project, branch });
+        if (stale) lines.push(`RISK 实施授权已失效: ${stale}。向用户说明改动并重新取得同意后再 approve`);
+      }
     }
-    // 已有记录但已失效时，最贵的错误是 Agent 以为还能合并；这里直接说出失效原因。
-    const stale = staleApproval({ root, project, branch });
-    if (stale) lines.push(`RISK 实施授权已失效: ${stale}。向用户说明改动并重新取得同意后再 approve`);
   }
   if (risk.confirmReasons.length > 0) {
     lines.push(`RISK 要人确认: ${risk.confirmReasons.join("；")}。验证与评审通过后，Agent 先运行 harness confirm --branch ${branch} 展示摘要；${humanExecutes(`harness confirm --branch ${branch} --yes`)}`);
@@ -325,27 +331,12 @@ export function planSummary({ cwd, branch }) {
   };
 }
 
-/**
- * 记录实施授权。授权来自用户在对话里的表态，命令只负责落档：note 必须照录用户原话，
- * 合并、status 与评审都会显示它，事后可以核对 Agent 是否真的得到了同意。
- * stages 给出阶段文件时，同时记录覆盖全部阶段的方案级授权，本分支是携带它的分支；
- * fromStages 给出阶段文件时，按已有的方案级授权为后续阶段记录授权，原话照搬，不接受新的 note。
- */
-export function approvePlan({ cwd, branch, note = "", stages = null, fromStages = null, stage = null, confirmContract = null }) {
-  if (fromStages) return deriveStage({ cwd, branch, note, file: fromStages, stage });
-  const raw = String(note).trim();
-  if (!raw) {
-    throw new Error("记录实施授权要用 --note 照录用户表示同意实施的原话，例如 --note \"可以，开始实施\"；用户还没有同意时停下等待");
-  }
-  // 原话会进记录、账本和 PR/MR 描述：在入口处遮盖一次，所有下游输出都不会带出凭据。
-  // 遮掉的只是凭据值，授权措辞仍然原样保留，事后仍可核对。
-  const quote = redact(raw);
+/** 预览与实际写入共用的授权预检，只读取当前材料和已有记录，不写授权或账本。 */
+export function planApprovalPreflight({ cwd, branch, stages = null, stage = null }) {
   const summary = planSummary({ cwd, branch });
   if (summary.acceptance === null) {
     throw new Error(`分支 ${branch} 上还没有提交验收清单 ${summary.acceptancePath}，先把方案提交到任务分支再记录授权`);
   }
-  const by = userInfo().username;
-  const approvedAt = new Date().toISOString();
   let link = null;
   let prepared = null;
   if (stages) {
@@ -374,8 +365,65 @@ export function approvePlan({ cwd, branch, note = "", stages = null, fromStages 
   const previousApproval = approvalRecord(summary.root, branch);
   const hadApproval = Boolean(previousApproval);
   const addedContract = Boolean(authorizedContractPath && !previousApproval?.contractPath);
-  if (hadApproval && (!summary.approval.approved || addedContract) && confirmContract !== confirmationHash) {
-    throw new Error(`核心授权材料已经变化，需要人查看差异并针对新内容重新确认。${humanExecutes(`harness approve --branch ${branch} --yes --note "<用户针对本次差异的新确认>" --confirm-contract ${confirmationHash}${stages ? ` --stages ${stages}` : ""}`)}`);
+  const requiresHumanConfirmation = hadApproval && (!summary.approval.approved || addedContract);
+  const confirmationCommand = `harness approve --branch ${branch} --yes --note "<用户针对本次差异的新确认>" --confirm-contract ${confirmationHash}${stages ? ` --stages ${stages}${stage ? ` --stage ${stage}` : ""}` : ""}`;
+  return {
+    summary,
+    link,
+    prepared,
+    authorizedContractPath,
+    authorizedContractHash,
+    authorizedContract,
+    confirmationHash,
+    hadApproval,
+    requiresHumanConfirmation,
+    confirmationCommand,
+  };
+}
+
+export function reapprovalGuidance({ root, branch }) {
+  const previous = approvalRecord(root, branch);
+  if (!previous) return null;
+  const stages = previous.stages ? ` --stages ${previous.stages.file} --stage ${previous.stages.stage}` : "";
+  const acceptancePath = previous.acceptancePath ?? `.harness/acceptance/${recordKey(branch)}.md`;
+  if (showBlob(root, branch, acceptancePath) === null) {
+    return `先恢复或重写并提交验收清单 ${acceptancePath}，再由 Agent 运行 harness approve --branch ${branch}${stages} 预览；当前不能直接记录授权`;
+  }
+  return `Agent 先运行 harness approve --branch ${branch}${stages} 展示授权差异；由人在自己的终端执行预览给出的 --confirm-contract 命令。`;
+}
+
+/**
+ * 记录实施授权。授权来自用户在对话里的表态，命令只负责落档：note 必须照录用户原话，
+ * 合并、status 与评审都会显示它，事后可以核对 Agent 是否真的得到了同意。
+ * stages 给出阶段文件时，同时记录覆盖全部阶段的方案级授权，本分支是携带它的分支；
+ * fromStages 给出阶段文件时，按已有的方案级授权为后续阶段记录授权，原话照搬，不接受新的 note。
+ */
+export function approvePlan({ cwd, branch, note = "", stages = null, fromStages = null, stage = null, confirmContract = null }) {
+  if (fromStages) return deriveStage({ cwd, branch, note, file: fromStages, stage });
+  const raw = String(note).trim();
+  if (!raw) {
+    throw new Error("记录实施授权要用 --note 照录用户表示同意实施的原话，例如 --note \"可以，开始实施\"；用户还没有同意时停下等待");
+  }
+  // 原话会进记录、账本和 PR/MR 描述：在入口处遮盖一次，所有下游输出都不会带出凭据。
+  // 遮掉的只是凭据值，授权措辞仍然原样保留，事后仍可核对。
+  const quote = redact(raw);
+  const preflight = planApprovalPreflight({ cwd, branch, stages, stage });
+  const {
+    summary,
+    link,
+    prepared,
+    authorizedContractPath,
+    authorizedContractHash,
+    authorizedContract,
+    confirmationHash,
+    hadApproval,
+    requiresHumanConfirmation,
+    confirmationCommand,
+  } = preflight;
+  const by = userInfo().username;
+  const approvedAt = new Date().toISOString();
+  if (requiresHumanConfirmation && confirmContract !== confirmationHash) {
+    throw new Error(`核心授权材料已经变化，需要人查看差异并针对新内容重新确认。${humanExecutes(confirmationCommand)}`);
   }
   if (prepared) {
     // 先确认新契约，再写方案级授权；失败时旧授权保持不变。

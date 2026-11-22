@@ -42,7 +42,7 @@ import { entryTouched, followUps } from "../install/followups.mjs";
 import { ensureHooksPath } from "../install/install.mjs";
 import { REVIEW_KIND, reviewerSummary } from "../review/review.mjs";
 import { chunkedRecordProblem } from "../review/chunks.mjs";
-import { approvalState, assessRisk, planEnforced } from "../plan/plan.mjs";
+import { approvalState, assessRisk, planEnforced, reapprovalGuidance } from "../plan/plan.mjs";
 import { assertRequiredEvidence, requiredEvidenceDefinitions } from "../verify/required.mjs";
 import { MERGE_TOKEN_ENV, mainUpdateToken } from "../githook.mjs";
 import { divergedGuidance, fetchRemoteMain, pushMain } from "../delivery/remote.mjs";
@@ -320,9 +320,10 @@ export async function checkGates({ project, root, branch, log = console.error, d
   const planState = needsPlan
     ? approvalState({ root, branch, acceptanceText: showBlob(root, branchCommit, acceptancePath(project, branch)), at: branchCommit })
     : { approved: true };
+  const planGuidance = !planState.approved ? reapprovalGuidance({ root, branch }) : null;
   const alsoPending = (skip) =>
     [
-      !planState.approved && skip !== "plan" ? `另外还差用户同意实施（${risk.reasons.join("；")}）：${planState.reason}，${agentAfterConsent("同意实施", `harness approve --branch ${branch} --yes --note "<用户原话>"`)}，用户无需执行命令` : null,
+      !planState.approved && skip !== "plan" ? `另外还差用户同意实施（${risk.reasons.join("；")}）：${planState.reason}，${planGuidance ?? `${agentAfterConsent("同意实施", `harness approve --branch ${branch} --yes --note "<用户原话>"`)}，用户无需执行命令`}` : null,
       risk.confirmReasons.length > 0 && !confirmed && skip !== "confirm" ? `另外还差人确认高风险改动（${risk.confirmReasons.join("；")}）：Agent 先运行 harness confirm --branch ${branch} 展示摘要；${humanExecutes(`harness confirm --branch ${branch} --yes`)}` : null,
     ].filter(Boolean);
   // 门禁改动：需要人确认过这一版内容。
@@ -376,8 +377,8 @@ export async function checkGates({ project, root, branch, log = console.error, d
         [
           `这次改动属于先方案后实施的任务（${risk.reasons.join("；")}），没有有效的实施授权: ${planState.reason}`,
           `先向用户说明方案（验收清单 ${acceptancePath(project, branch)}、行为说明与实施方案）。`,
-          `${agentAfterConsent("明确同意实施该方案", `harness approve --branch ${branch} --yes --note "<用户原话>"`)}，用户无需执行命令。`,
-          `记录授权后，${agentContinues(`harness ${label} --branch ${branch}`)}。用户没有同意时不要记录授权。`,
+          planGuidance ?? `${agentAfterConsent("明确同意实施该方案", `harness approve --branch ${branch} --yes --note "<用户原话>"`)}，用户无需执行命令。`,
+          `${planGuidance ? "完成上述授权处理" : "记录授权"}后，${agentContinues(`harness ${label} --branch ${branch}`)}。用户没有同意时不要记录授权。`,
           ...alsoPending("plan"),
         ].join("\n"),
         "plan_unapproved",

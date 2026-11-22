@@ -24,7 +24,7 @@ import { describePlan, planReviewers, projectReviewConfig, projectReviewerNote, 
 import { reviewerCommand } from "./review/reviewers-cmd.mjs";
 import { loadLocalReviewers, reviewersFile } from "./review/reviewers.mjs";
 import { approveConfirm, confirmSummary, formatSummary } from "./confirm/confirm.mjs";
-import { amendPlan, approvePlan, formatPlanSummary, planSummary, riskHints } from "./plan/plan.mjs";
+import { amendPlan, approvePlan, formatPlanSummary, planApprovalPreflight, planSummary, riskHints } from "./plan/plan.mjs";
 import { DEFAULT_PLAN_ATTEMPT_TIMEOUT_SECONDS, DEFAULT_PLAN_MAX_QUERIES, DEFAULT_PLAN_TIMEOUT_SECONDS, reviewPlan } from "./plan/planreview.mjs";
 import { checkCommitMessage, checkStaged, guardReference } from "./githook.mjs";
 import { branchMessageProblems, commitRuleErrorAt } from "./policy/commit-message.mjs";
@@ -581,18 +581,22 @@ function cmdApprove(argv) {
     return 2;
   }
   if (!values.yes) {
-    print(formatPlanSummary(planSummary({ cwd: process.cwd(), branch: values.branch })));
-    const stageSuffix = values.stage ? ` --stage ${values.stage}` : "";
-    const command = values["from-stages"]
-      ? `harness approve --branch ${values.branch} --yes --from-stages ${values["from-stages"]} --stage ${values.stage ?? "<阶段>"}`
-      : `harness approve --branch ${values.branch} --yes --note "<用户原话>"${values.stages ? ` --stages ${values.stages}${stageSuffix}` : ""}`;
-    const guidance = values["from-stages"]
-      ? `已有有效方案级授权且阶段材料未变时，${agentContinues(command)}，无需用户再次授权；授权或阶段材料失效时停下，由用户重新授权`
-      : `${agentAfterConsent(values.stages ? "明确同意授权覆盖全部阶段" : "明确同意实施该方案", command)}，用户无需执行命令；未获得用户授权时停下等待`;
-    print(`\n以上为只读摘要。${guidance}。`);
-    if (!values["from-stages"]) {
-      print(`验收清单或核心授权契约发生需重新确认的变化时，先向用户说明并取得新授权。核心契约重新确认时，${humanExecutes(`harness approve --branch ${values.branch} --yes --note "<用户针对本次差异的新确认>" --confirm-contract <新hash>${values.stages ? ` --stages ${values.stages}` : ""}`)}。`);
+    if (values["from-stages"]) {
+      print(formatPlanSummary(planSummary({ cwd: process.cwd(), branch: values.branch })));
+      const command = `harness approve --branch ${values.branch} --yes --from-stages ${values["from-stages"]} --stage ${values.stage ?? "<阶段>"}`;
+      print(`\n以上为只读摘要。已有有效方案级授权且阶段材料未变时，${agentContinues(command)}，无需用户再次授权；授权或阶段材料失效时停下，由用户重新授权。`);
+      return 0;
     }
+    const preflight = planApprovalPreflight({ cwd: process.cwd(), branch: values.branch, stages: values.stages ?? null, stage: values.stage ?? null });
+    print(formatPlanSummary(preflight.summary));
+    if (preflight.requiresHumanConfirmation) {
+      print(`\n以上为只读摘要。${humanExecutes(preflight.confirmationCommand)}。`);
+      return 0;
+    }
+    const stageSuffix = values.stage ? ` --stage ${values.stage}` : "";
+    const command = `harness approve --branch ${values.branch} --yes --note "<用户原话>"${values.stages ? ` --stages ${values.stages}${stageSuffix}` : ""}`;
+    print(`\n以上为只读摘要。${agentAfterConsent(values.stages ? "明确同意授权覆盖全部阶段" : "明确同意实施该方案", command)}，用户无需执行命令；未获得用户授权时停下等待。`);
+    print("授权后材料发生变化时先重新预览，需要人工重新确认时会给出带当前 hash 的 --confirm-contract 命令。");
     return 0;
   }
   const outcome = approvePlan({
@@ -1085,7 +1089,6 @@ function cmdUpgrade(argv) {
     for (const conflict of plan.conflicts) print(`  冲突  ${conflict.path}: ${conflict.reason}`);
     if (plan.golden.removed.length > 0) print(`  将移除 .harness/golden/tasks.json 里与内置相同的旧副本: ${plan.golden.removed.join(", ")}`);
     if (plan.golden.overrides.length > 0) print(`  这些用例覆盖内置用例且与当前内置不同，升级时保留: ${plan.golden.overrides.join(", ")}`);
-    if (plan.files.length === 0 && plan.golden.removed.length === 0) print("规则、模板、入口与 AGENTS.md 托管块已是最新。");
     print("git 钩子与客户端配置（.claude、.codex、DSH 插件）在正式升级时重新生成，预览不逐项比对。");
     print("以上为预览，没有写入任何文件，也没有安装版本目录。config.json、policy.json、verify.json 升级时同样不会改动。");
     if (plan.conflicts.length > 0) {

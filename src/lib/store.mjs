@@ -205,7 +205,8 @@ const RERUN = {
 export const RECORD_KINDS = Object.keys(RERUN);
 
 function rerunHint(kind) {
-  const command = RERUN[kind] ?? `重新生成 ${kind} 记录`;
+  const command = RERUN[kind];
+  if (!command) return `重新生成 ${kind} 记录`;
   if (kind === "confirm") return humanExecutes(command);
   if (kind === "plan") return agentAfterConsent("重新同意实施", command);
   if (kind === "plan-stages") return agentAfterConsent("重新同意授权覆盖全部阶段", command);

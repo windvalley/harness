@@ -3,7 +3,7 @@ import { showBlob, statusShort, worktreeEntries } from "./lib/git.mjs";
 import { redact } from "./lib/redact.mjs";
 import { agentAfterConsent, humanExecutes } from "./lib/next-step.mjs";
 import { listEscalations } from "./escalate/escalate.mjs";
-import { planSummary } from "./plan/plan.mjs";
+import { planSummary, reapprovalGuidance } from "./plan/plan.mjs";
 import { branchStatus } from "./status.mjs";
 
 const EVIDENCE_STEPS = new Set([
@@ -73,6 +73,7 @@ export function branchHandoff({ cwd, branch }) {
     worktreeProblem = error.message;
   }
   return {
+    root,
     status,
     summary,
     summaryProblem,
@@ -97,7 +98,10 @@ function addNextSteps(handoff, lines) {
     return;
   }
   if (steps.get("acceptance")?.state === "fail") lines.push(`补齐并提交验收清单 ${handoff.acceptance.path}。`);
-  if (steps.get("plan")?.state === "fail") lines.push(`向用户说明当前方案与变化；${agentAfterConsent("明确同意实施该方案", `${command("approve", branch)} --yes --note "<用户原话>"`)}，用户无需执行命令。`);
+  if (steps.get("plan")?.state === "fail") {
+    const guidance = reapprovalGuidance({ root: handoff.root, branch }) ?? `${agentAfterConsent("明确同意实施该方案", `${command("approve", branch)} --yes --note "<用户原话>"`)}，用户无需执行命令`;
+    lines.push(`向用户说明当前方案与变化；${guidance}。`);
+  }
   if (steps.get("evidence")?.state === "fail") lines.push(`处理验证缺项后运行 ${command("verify", branch)}。`);
   if (steps.get("review")?.state === "fail") lines.push(`处理评审发现及前置验证后运行 ${command("review", branch)}。`);
   for (const id of ["gate", "risk"]) {
