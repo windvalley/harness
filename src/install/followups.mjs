@@ -20,6 +20,9 @@ export function followUps({ mainRoot, changed = [], bootstrap = false, hooksDirB
       `git 钩子改由 ${hooksDirAfter} 提供：本机已切换；其他机器拉到新的主分支后各自运行 harness install --local，否则 core.hooksPath 仍指向旧目录，钩子会被跳过`,
     );
   }
+  if (bootstrap || touched(".agents/hooks.json")) {
+    notes.push("重启正在运行的 Antigravity 会话，并用一条应被拒绝的写密钥操作确认 PreToolUse 实时拦截已生效");
+  }
   if (bootstrap || touched(".claude/settings.json")) {
     notes.push("重启正在运行的 Claude Code 会话：钩子在会话启动时读入，运行中的会话不会换用新钩子");
   }

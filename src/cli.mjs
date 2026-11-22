@@ -8,7 +8,8 @@ import { changedPaths, currentBranch, git, gitOk, isLinkedWorktree, mainWorktree
 import { keyStatus, readLedger, rotateKey, scanRecords } from "./lib/store.mjs";
 import { resolvePolicy, ruleStats } from "./policy/resolve.mjs";
 import { evaluateCall } from "./policy/engine.mjs";
-import { guard, renderDenial } from "./adapters/index.mjs";
+import { guard, hookContext, renderDenial } from "./adapters/index.mjs";
+import { antigravity } from "./adapters/antigravity.mjs";
 import { claude } from "./adapters/claude.mjs";
 import { codex } from "./adapters/codex.mjs";
 import { dsh } from "./adapters/dsh.mjs";
@@ -47,7 +48,7 @@ import { cleanWorktrees, formatCleanPlan, formatCleanResult, planCleanup } from 
 import { packageVersion } from "./install/managed.mjs";
 import { agentAfterConsent, agentContinues, humanExecutes, noNextAction } from "./lib/next-step.mjs";
 
-const ADAPTERS = { claude, codex, dsh, generic };
+const ADAPTERS = { antigravity, claude, codex, dsh, generic };
 
 const USAGE = `harness <命令> [参数]    任一命令加 --help 查看该命令的用法
 
@@ -99,7 +100,7 @@ const USAGE = `harness <命令> [参数]    任一命令加 --help 查看该命�
 
 客户端与钩子入口
   githook  <pre-commit|commit-msg|reference-transaction>   由 git 钩子调用
-  hook     --client <claude|codex|dsh|generic> [--event <pre-tool-use|stop>]   由客户端钩子调用，读 stdin；stop 是收尾检查
+  hook     --client <antigravity|claude|codex|dsh|generic> [--event <pre-tool-use|stop>]   由客户端钩子调用，读 stdin；stop 是收尾检查
   check    --kind <shell|write|read|search|commit> [--command <命令>] [--path <路径>] [--content <内容>] [--glob <模式>] [--on-main] [--linked-worktree] [--ignored]   手工判定一次调用；shell 用 --command，其余用 --path
 
 人用
@@ -742,38 +743,44 @@ function cmdHook(argv) {
     process.stderr.write(`未知钩子事件: ${values.event}，可选 pre-tool-use 或 stop\n`);
     return 2;
   }
+  const fail = (text) => {
+    const rendered = adapter.formatError?.(text);
+    if (rendered?.stdout) process.stdout.write(rendered.stdout);
+    if (rendered?.stderr) process.stderr.write(rendered.stderr);
+    if (!rendered) process.stderr.write(`[harness] ${text}\n`);
+    return rendered?.exitCode ?? 2;
+  };
   let payload;
   try {
     payload = JSON.parse(readFileSync(0, "utf8"));
   } catch {
-    process.stderr.write("[harness] 钩子输入不是有效 JSON，按失败处理\n");
-    return 2;
+    return fail("钩子输入不是有效 JSON，按失败处理");
   }
   const invalid = adapter.validate?.(payload);
-  if (invalid) {
-    process.stderr.write(`[harness] ${adapter.name} 载荷不合约定，按失败处理: ${invalid}\n`);
-    return 2;
-  }
+  if (invalid) return fail(`${adapter.name} 载荷不合约定，按失败处理: ${invalid}`);
   const outcome = guard({ adapter, payload });
-  if (outcome.decision === "error") {
-    process.stderr.write(`[harness] 门禁无法加载项目配置: ${outcome.message}\n`);
-    return 2;
-  }
+  if (outcome.decision === "error") return fail(`门禁无法加载项目配置: ${outcome.message}`);
   if (outcome.decision === "deny") {
     const rendered = renderDenial(outcome);
     if (rendered.stdout) process.stdout.write(rendered.stdout);
     process.stderr.write(rendered.stderr);
     return rendered.exitCode;
   }
-  return 0;
+  const allowed = adapter.formatAllow?.();
+  if (allowed?.stdout) process.stdout.write(allowed.stdout);
+  return allowed?.exitCode ?? 0;
 }
 
 /**
- * Claude Code 与 Codex 的 Stop 事件：输出 {"decision":"block","reason":...} 让 Agent 接着做，什么都不输出则放行。
+ * Claude Code 与 Codex 的 Stop 事件输出 decision 为 block；Antigravity 由适配器转成 continue，并要求显式放行结果。
  * 收尾检查出错时放行并提示，不能因为门禁自己的问题把会话困住。
  */
 function cmdStopHook(adapter) {
-  const notice = (text) => process.stdout.write(`${JSON.stringify({ systemMessage: `[harness] ${text}` })}\n`);
+  const write = (output) => {
+    const formatted = adapter.formatStop ? adapter.formatStop(output) : output;
+    if (formatted) process.stdout.write(`${JSON.stringify(formatted)}\n`);
+  };
+  const notice = (text) => write({ systemMessage: `[harness] ${text}` });
   let payload;
   try {
     payload = JSON.parse(readFileSync(0, "utf8"));
@@ -782,9 +789,15 @@ function cmdStopHook(adapter) {
     return 0;
   }
   try {
-    const outcome = stopCheck({ cwd: payload?.cwd || process.cwd(), client: adapter.name, session: payload?.session_id });
-    if (outcome.decision === "block") process.stdout.write(`${JSON.stringify({ decision: "block", reason: outcome.reason })}\n`);
+    if (adapter.skipStop?.(payload)) {
+      write(null);
+      return 0;
+    }
+    const { cwd, session } = hookContext(adapter, payload);
+    const outcome = stopCheck({ cwd, client: adapter.name, session });
+    if (outcome.decision === "block") write({ decision: "block", reason: outcome.reason });
     else if (outcome.notice) notice(outcome.notice);
+    else if (adapter.formatStop) write(null);
   } catch (error) {
     notice(`收尾检查出错，本次放行: ${error.message}`);
   }

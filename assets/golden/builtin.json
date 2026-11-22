@@ -93,6 +93,7 @@
         { "kind": "shell", "command": "HARNESS_VERSION=0.3.0 .harness/bin/harness merge --branch a", "expect": "deny", "rule": "harness-bypass-switches" },
         { "kind": "shell", "command": "git config core.hooksPath /dev/null", "expect": "deny", "rule": "harness-bypass-switches" },
         { "kind": "write", "path": ".harness/bin/harness", "content": "x", "expect": "deny", "rule": "protect-executor-entry" },
+        { "kind": "write", "path": ".agents/hooks.json", "content": "x", "expect": "deny", "rule": "protect-executor-entry" },
         { "kind": "write", "path": "frontend/.husky/pre-commit", "content": "x", "expect": "deny", "rule": "protect-executor-entry" },
         { "kind": "write", "path": ".harness/policy.json", "content": "x", "expect": "allow" },
         { "kind": "shell", "command": ".harness/bin/harness key rotate --yes", "expect": "deny", "rule": "key-rotate-human-only" },
@@ -106,6 +107,7 @@
       "kind": "policy",
       "steps": [
         { "kind": "shell", "command": "sed -i 's/a/b/' .claude/settings.json", "expect": "deny", "rule": "protect-executor-via-shell" },
+        { "kind": "shell", "command": "echo {} > .agents/hooks.json", "expect": "deny", "rule": "protect-executor-via-shell" },
         { "kind": "shell", "command": "echo {} > .codex/hooks.json", "expect": "deny", "rule": "protect-executor-via-shell" },
         { "kind": "shell", "command": "rm .husky/pre-commit", "expect": "deny", "rule": "protect-executor-via-shell" },
         { "kind": "shell", "command": "git rm -r -q frontend/.husky", "expect": "deny", "rule": "protect-executor-via-shell" },

@@ -8,6 +8,13 @@ import { resolvePolicy } from "../policy/resolve.mjs";
 import { worktreePlanPending } from "../plan/plan.mjs";
 import { callBranches, noteSession } from "../stop/session.mjs";
 
+export function hookContext(adapter, payload) {
+  const specific = adapter.context?.(payload) ?? {};
+  const cwd = specific.cwd || payload?.cwd || process.cwd();
+  const session = specific.session_id ?? payload?.session_id;
+  return { cwd, session: typeof session === "string" && session ? session : null };
+}
+
 export function contextFor(root) {
   let linkedWorktree = false;
   let branch = "";
@@ -92,13 +99,18 @@ function noteBranches(touched, options) {
  * 适配器契约：
  *   name                 客户端标识
  *   normalize(payload)   返回 { call, tool } 或 null（无法识别的工具放行）
- *   formatDeny(text)     返回 { exitCode, stderr }
+ *   formatDeny(text)     返回 { exitCode, stdout, stderr }
+ *   context(payload)     可选，提取 cwd 与 session_id；缺省读载荷的同名字段
+ *   formatAllow()        可选，客户端要求显式放行 JSON 时返回输出
+ *   formatError(text)    可选，把载荷或配置错误转成客户端原生拒绝结果
+ *   skipStop(payload)    可选，客户端尚有后台工作等情况下不做收尾检查
+ *   formatStop(output)   可选，转换收尾检查的放行、提示与继续语义
  * call.kind 取 shell / write / read / search，所有客户端都归一到这四类；commit 只由 git 的 pre-commit 产生。
  * 本机共用的 DSH 插件（assets/dsh/index.mjs）按项目锁定的版本导入这里的 guard 与 adapters/dsh.mjs 的 dsh，
  * 两个文件的路径、导出名、参数与返回结构是跨版本接口，改动要兼容已发布的插件。
  */
 export function guard({ adapter, payload, log = () => {} }) {
-  const cwd = payload?.cwd || process.cwd();
+  const { cwd, session } = hookContext(adapter, payload);
   let project;
   try {
     project = loadGuardProject(cwd);
@@ -123,8 +135,7 @@ export function guard({ adapter, payload, log = () => {} }) {
   const locateTarget = kinds.has("shell") ? shellTargetLocator(project.root, context) : undefined;
   // 方案待授权只约束写入：按落点所在 Worktree 的分支与工作区判断，只有启用了相应规则才多花这几次 git 调用。
   const planRule = resolved.rules.some((rule) => rule.when === "plan-pending");
-  // 带会话标识的客户端顺带记下这次调用涉及的任务分支，供收尾检查使用；Claude Code 与 Codex 的载荷都有 session_id。
-  const session = typeof payload?.session_id === "string" && payload.session_id ? payload.session_id : null;
+  // 带会话标识的客户端顺带记下这次调用涉及的任务分支，供收尾检查使用。
   const touched = new Set();
   let result = { decision: "allow" };
   for (const call of calls) {

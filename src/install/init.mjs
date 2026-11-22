@@ -288,7 +288,7 @@ function plannedWrites(root, { force }) {
     if (force || !existsSync(join(root, rel))) consider(rel);
   }
   if (!existsSync(join(root, PITFALL_FILE))) consider(PITFALL_FILE);
-  for (const rel of [".harness/bin/harness", ".harness/rules/", ".harness/templates/", ".harness/managed-files.json", ".claude/settings.json", ".codex/hooks.json", ".gitignore", "AGENTS.md"]) {
+  for (const rel of [".harness/bin/harness", ".harness/rules/", ".harness/templates/", ".harness/managed-files.json", ".agents/hooks.json", ".claude/settings.json", ".codex/hooks.json", ".gitignore", "AGENTS.md"]) {
     consider(rel);
   }
   const { rel: hooksRel, tracked } = hooksPlacement(root, { hooksDir: worktreeHooksConfig(root)?.hooksDir });

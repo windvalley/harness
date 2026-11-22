@@ -32,7 +32,7 @@ Agent 会获取并安装所需版本到本机共享目录；每个项目通过�
 
 ### 2. 启用客户端实时拦截
 
-按 Agent 提示完成客户端操作：Claude Code 重启会话、Codex 信任钩子，或为 DeepSeek Harness 注册本机插件。具体步骤见[客户端那一侧](docs/reference.md#客户端那一侧)。
+按 Agent 提示完成客户端操作：Antigravity 或 Claude Code 重启会话、Codex 信任钩子，或为 DeepSeek Harness 注册本机插件。具体步骤见[客户端那一侧](docs/reference.md#客户端那一侧)。
 
 完成后让 Agent 运行 `doctor`：`[!!]` 表示需要处理，`[?]` 表示配置已就位，但当前客户端是否真正调用钩子尚未验证，不能算作已生效。
 

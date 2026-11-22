@@ -169,15 +169,23 @@ HARNESS_STORE="\${HARNESS_STORE:-$HOME/.local/share/harness/versions}"
 entry="$HARNESS_STORE/$HARNESS_VERSION/bin/harness.mjs"
 if [ ! -f "$entry" ]; then
   msg="[harness] 本机没有安装门禁锁定的版本 $HARNESS_VERSION。请用户在自己的终端（Claude Code 里可在输入框用 ! 前缀）于项目目录运行 node <harness 仓库>/bin/harness.mjs install --local"
-  # 实时拦截在未安装时一律拒绝：放行等于门禁不存在。Claude 以退出码 2 拒绝，Codex 读 permissionDecision。
+  # 实时拦截在未安装时一律拒绝：放行等于门禁不存在。Claude 以退出码 2 拒绝，Codex 与 Antigravity 读各自的 JSON 判定。
   if [ "$1" = "hook" ]; then
     # 收尾检查只提示不拦：拦下会让会话停不下来。
     if [ "$4" = "--event" ] && [ "$5" = "stop" ]; then
-      printf '%s\\n' "$msg" >&2
+      if [ "$3" = "antigravity" ]; then
+        printf '{"decision":"stop","reason":"%s"}\\n' "$msg"
+      else
+        printf '%s\\n' "$msg" >&2
+      fi
       exit 0
     fi
     if [ "$3" = "codex" ]; then
       printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"%s"}}\\n' "$msg"
+      exit 0
+    fi
+    if [ "$3" = "antigravity" ]; then
+      printf '{"decision":"deny","reason":"%s"}\\n' "$msg"
       exit 0
     fi
     printf '%s\\n' "$msg" >&2
@@ -515,6 +523,7 @@ function keepEntries(entries, takeOver) {
   });
 }
 
+const ANTIGRAVITY_HOOK_COMMAND = '"$(git rev-parse --show-toplevel)/.harness/bin/harness" hook --client antigravity';
 const CLAUDE_HOOK_COMMAND = '"$CLAUDE_PROJECT_DIR/.harness/bin/harness" hook --client claude';
 const CODEX_HOOK_COMMAND = '"$(git rev-parse --show-toplevel)/.harness/bin/harness" hook --client codex';
 // 收尾检查挂在 Stop 事件上；入口 shim 按第 4、5 个参数识别它，参数顺序不能改。
@@ -552,6 +561,30 @@ export function writeCodexHooks({ root, takeOver = false }) {
   const kept = keepEntries(current.hooks?.PreToolUse, takeOver);
   const ours = { matcher: "*", hooks: [{ type: "command", command: CODEX_HOOK_COMMAND }] };
   current.hooks = withStopHook({ ...(current.hooks ?? {}), PreToolUse: [...kept, ours] }, CODEX_HOOK_COMMAND + STOP_SUFFIX);
+  writeFileSync(file, `${JSON.stringify(current, null, 2)}\n`);
+  return file;
+}
+
+/** Antigravity 按自定义名称分组保存事件；默认保留其他分组，takeOver 只移除其他 PreToolUse，其他事件不动。 */
+export function writeAntigravityHooks({ root, takeOver = false }) {
+  const file = join(root, ".agents", "hooks.json");
+  mkdirSync(join(file, ".."), { recursive: true });
+  const current = existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : {};
+  for (const group of Object.values(current)) {
+    if (!group || typeof group !== "object" || Array.isArray(group)) continue;
+    for (const [event, foreign] of [["PreToolUse", takeOver], ["Stop", false]]) {
+      if (!Array.isArray(group[event])) continue;
+      const kept = keepEntries(group[event], foreign);
+      if (kept.length > 0) group[event] = kept;
+      else delete group[event];
+    }
+  }
+  const ours = current.harness && typeof current.harness === "object" && !Array.isArray(current.harness) ? current.harness : {};
+  const hook = { type: "command", command: ANTIGRAVITY_HOOK_COMMAND };
+  current.harness = withStopHook(
+    { ...ours, enabled: true, PreToolUse: [...(ours.PreToolUse ?? []), { matcher: "*", hooks: [hook] }] },
+    ANTIGRAVITY_HOOK_COMMAND + STOP_SUFFIX,
+  );
   writeFileSync(file, `${JSON.stringify(current, null, 2)}\n`);
   return file;
 }
@@ -670,12 +703,13 @@ export function installAll({ cwd, takeOver = false }) {
   const hooksConfig = worktreeHooksConfig(root);
   const hooks = writeGitHooks({ root, takeOver, hooks: hooksConfig });
   const hooksPath = hooksConfig ? ensureHooksPath({ root, hooks: hooksConfig }) : null;
+  const antigravity = writeAntigravityHooks({ root, takeOver });
   const claude = writeClaudeSettings({ root, takeOver });
   const codex = writeCodexHooks({ root, takeOver });
   const dsh = writeDshPlugin();
   const gitignore = ensureGitignore({ root });
   const shimTracked = git(root, ["ls-files", "--error-unmatch", SHIM_REL]).status === 0;
-  return { root, published, shim, hooks, hooksPath, claude, codex, dsh, gitignore, shimTracked };
+  return { root, published, shim, hooks, hooksPath, antigravity, claude, codex, dsh, gitignore, shimTracked };
 }
 
 /**
