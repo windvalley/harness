@@ -327,7 +327,7 @@ describe("实施授权和独立人工确认的执行主体", () => {
   test("plan-first 预设明确授权由 Agent 记录，多阶段继承无需再次人工操作", () => {
     const rule = loadPreset("plan-first").rules.find((item) => item.id === "plan-before-code");
     assert.match(rule.fix, /不要求用户执行 approve 命令/);
-    assert.match(rule.fix, /由 Agent .*自行运行 harness approve/);
+    assert.match(rule.fix, /由 Agent 执行：harness approve/);
     assert.match(rule.fix, /--stages.*--from-stages/);
   });
 

@@ -57,9 +57,16 @@ describe("harness worktree clean", () => {
     assert.match(preview.stdout, /task\/dirty.*1 个未提交或未跟踪的文件/);
     assert.match(preview.stdout, /task\/fresh.*建好不到 24 小时，还没有新的提交/);
     assert.match(preview.stdout, /task\/locked.*已锁定/);
-    assert.match(preview.stdout, /加 --yes 删除/);
+    assert.match(preview.stdout, /用户在对话中确认上述对象后，由 Agent 执行：harness worktree clean --yes/);
     assert.ok(existsSync(done), "预览不删除");
     assert.ok(branchExists(repo, "task/done"));
+  });
+
+  test("没有可清理对象时明确无需继续执行", () => {
+    const { repo } = setup();
+    const preview = clean(repo);
+    assert.equal(preview.status, 0, preview.stderr);
+    assert.match(preview.stdout, /无需继续执行：当前没有可清理的 Worktree/);
   });
 
   test("--yes 删除可清理的 Worktree 与分支，跳过的原样保留，目录已不存在的记录一并清掉", () => {
@@ -69,6 +76,10 @@ describe("harness worktree clean", () => {
     const gone = task(repo, root, "gone");
     sh(root, "rm", ["-r", gone]);
 
+    const preview = clean(repo);
+    assert.equal(preview.status, 0, preview.stderr);
+    assert.match(preview.stdout, /目录已不存在，只清理记录与分支/);
+    assert.match(preview.stdout, /由 Agent 执行：harness worktree clean --yes/);
     const result = clean(repo, "--yes");
     assert.equal(result.status, 0, result.stderr);
     assert.equal(existsSync(done), false);
@@ -150,6 +161,8 @@ describe("harness worktree clean", () => {
     assert.ok(existsSync(local), "默认保留含本机配置的 Worktree");
     assert.equal(existsSync(deps), false);
 
+    const localPreview = clean(repo, "--with-local-files");
+    assert.match(localPreview.stdout, /用户在对话中确认上述对象及本机文件删除后，由 Agent 执行：harness worktree clean --yes --with-local-files/);
     const forced = clean(repo, "--yes", "--with-local-files");
     assert.equal(forced.status, 0, forced.stderr);
     assert.equal(existsSync(local), false);

@@ -1,5 +1,6 @@
 import { PROJECT_DIR, deliveryAt, deliveryChange, deliverySettings, gatePaths, gitHooksConfig, loadProject, mainBranch } from "../lib/config.mjs";
 import { matchAny } from "../lib/glob.mjs";
+import { agentContinues, humanExecutes } from "../lib/next-step.mjs";
 import { changedPaths, git, gitOk, isAncestor, mainWorktreeRoot, resolveCommit, run } from "../lib/git.mjs";
 import { appendLedger, readRecord } from "../lib/store.mjs";
 import { MergeError, acquireLock, afterMainUpdate, advanceMain, describeChange, mainWorktreeProblems } from "../merge/merge.mjs";
@@ -127,9 +128,10 @@ export async function syncTask({ cwd, remote: requestedRemote = null, log = cons
         [
           reason,
           `  ${(gate.change.changed ? gate.paths.filter((path) => path === ".harness/config.json") : gate.gateTouched).slice(0, 12).join("\n  ")}`,
-          `由人查看并确认: harness confirm --branch ${remote}/${mainRef}`,
+          `Agent 先运行 harness confirm --branch ${remote}/${mainRef} 展示摘要。`,
+          humanExecutes(`harness confirm --branch ${remote}/${mainRef} --yes`),
           "Agent 不能代为确认；在 Claude Code 里可以让用户在输入框执行 ! .harness/bin/harness confirm --branch " + `${remote}/${mainRef} --yes`,
-          "确认后重新运行 harness sync。",
+          `确认后，${agentContinues("harness sync")}。`,
         ].join("\n"),
         "gate_change_unconfirmed",
       );

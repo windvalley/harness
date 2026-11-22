@@ -15,6 +15,7 @@ import {
   sameDelivery,
 } from "../lib/config.mjs";
 import { redact } from "../lib/redact.mjs";
+import { agentAfterConsent, agentContinues, humanExecutes } from "../lib/next-step.mjs";
 import { matchAny } from "../lib/glob.mjs";
 import { environmentDigests, environmentItems } from "../verify/environment.mjs";
 import { testEvidenceChecks } from "../verify/testevidence.mjs";
@@ -321,8 +322,8 @@ export async function checkGates({ project, root, branch, log = console.error, d
     : { approved: true };
   const alsoPending = (skip) =>
     [
-      !planState.approved && skip !== "plan" ? `另外还差用户同意实施（${risk.reasons.join("；")}）：${planState.reason}，用户在对话中同意后由 Agent 自行运行 harness approve --branch ${branch} --yes --note "<用户原话>"，用户无需执行命令` : null,
-      risk.confirmReasons.length > 0 && !confirmed && skip !== "confirm" ? `另外还差人确认高风险改动（${risk.confirmReasons.join("；")}）：harness confirm --branch ${branch}，确认无误后加 --yes` : null,
+      !planState.approved && skip !== "plan" ? `另外还差用户同意实施（${risk.reasons.join("；")}）：${planState.reason}，${agentAfterConsent("同意实施", `harness approve --branch ${branch} --yes --note "<用户原话>"`)}，用户无需执行命令` : null,
+      risk.confirmReasons.length > 0 && !confirmed && skip !== "confirm" ? `另外还差人确认高风险改动（${risk.confirmReasons.join("；")}）：Agent 先运行 harness confirm --branch ${branch} 展示摘要；${humanExecutes(`harness confirm --branch ${branch} --yes`)}` : null,
     ].filter(Boolean);
   // 门禁改动：需要人确认过这一版内容。
   const gate = gatePaths(project).flatMap((glob) => [glob]);
@@ -356,9 +357,10 @@ export async function checkGates({ project, root, branch, log = console.error, d
           ...(listed.length > 0 ? [`  ${listed.join("\n  ")}`] : []),
           ...(riskNeedsConfirm ? risk.confirmReasons.map((item) => `  风险信号: ${item}`) : []),
           ...alsoPending("confirm"),
-          `由人查看并确认: harness confirm --branch ${branch}，确认无误后加 --yes`,
+          `Agent 先运行 harness confirm --branch ${branch} 展示摘要。`,
+          humanExecutes(`harness confirm --branch ${branch} --yes`),
           `Agent 不能代为确认；在 Claude Code 里可以让用户在输入框执行 ! .harness/bin/harness confirm --branch ${branch} --yes`,
-          `确认后重新运行 harness ${label} --branch ${branch}。`,
+          `确认后，${agentContinues(`harness ${label} --branch ${branch}`)}。`,
         ].join("\n"),
         "gate_change_unconfirmed",
       );
@@ -373,9 +375,9 @@ export async function checkGates({ project, root, branch, log = console.error, d
       throw new MergeError(
         [
           `这次改动属于先方案后实施的任务（${risk.reasons.join("；")}），没有有效的实施授权: ${planState.reason}`,
-          `先向用户说明方案（验收清单 ${acceptancePath(project, branch)}、行为说明与实施方案）；用户表达开始实施的意思后，`,
-          `运行 harness approve --branch ${branch} --yes --note "<用户原话>" 记录授权，再重新运行。`,
-          "用户没有同意时不要记录授权。",
+          `先向用户说明方案（验收清单 ${acceptancePath(project, branch)}、行为说明与实施方案）。`,
+          `${agentAfterConsent("明确同意实施该方案", `harness approve --branch ${branch} --yes --note "<用户原话>"`)}，用户无需执行命令。`,
+          `记录授权后，${agentContinues(`harness ${label} --branch ${branch}`)}。用户没有同意时不要记录授权。`,
           ...alsoPending("plan"),
         ].join("\n"),
         "plan_unapproved",
@@ -506,9 +508,10 @@ export async function checkGates({ project, root, branch, log = console.error, d
         [
           `本次改动命中高风险信号，验证与评审已通过，需要人在${when}确认一次。`,
           ...risk.confirmReasons.map((item) => `  风险信号: ${item}`),
-          `由人查看并确认: harness confirm --branch ${branch}，确认无误后加 --yes`,
+          `Agent 先运行 harness confirm --branch ${branch} 展示摘要。`,
+          humanExecutes(`harness confirm --branch ${branch} --yes`),
           `Agent 不能代为确认；在 Claude Code 里可以让用户在输入框执行 ! .harness/bin/harness confirm --branch ${branch} --yes`,
-          `确认后重新运行 harness ${label} --branch ${branch}。`,
+          `确认后，${agentContinues(`harness ${label} --branch ${branch}`)}。`,
         ].join("\n"),
         "risk_unconfirmed",
       );

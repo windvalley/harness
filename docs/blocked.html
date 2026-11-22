@@ -20,7 +20,7 @@
 
 <script src="assets/docs.js?v=acdbbf2b96" defer></script>
 </head>
-<body data-page="blocked" data-index="1173346546">
+<body data-page="blocked" data-index="397fe93eef">
 <a class="skip-link" href="#main-content">跳到主要内容</a>
 <header class="topbar">
   <div class="topbar-inner">
@@ -90,7 +90,7 @@
       <tbody>
         <tr><td><code>bad_commit_message</code></td><td>分支上有提交不符合提交信息规范；<code>harness status</code> 会列出具体提交与条目，在任务分支改写后再重新 verify、review</td></tr>
         <tr><td><code>review_missing</code> / <code>review_blocked</code></td><td>运行 <code>harness review</code>；被拒时按发现修复，提交后重新 verify、review</td></tr>
-        <tr><td><code>gate_change_unconfirmed</code></td><td>Agent 展示确认摘要；由人在自己的终端执行它给出的带 <code>--yes</code> 的确认命令，再告诉 Agent 继续</td></tr>
+        <tr><td><code>gate_change_unconfirmed</code></td><td>Agent 展示 <code>harness confirm --branch &lt;分支&gt;</code> 摘要；由人在自己的终端执行 <code>harness confirm --branch &lt;分支&gt; --yes</code>，再告诉 Agent 继续</td></tr>
         <tr><td><code>plan_unapproved</code></td><td>大改动没有实施授权记录；补齐方案，你同意后由 Agent 照录原话运行 <code>harness approve</code></td></tr>
         <tr><td><code>conflict</code></td><td>在任务分支上 <code>git merge main</code> 解决冲突，再重新验证与评审</td></tr>
         <tr><td><code>main_moved</code></td><td>合并或同步过程中主分支前进了，重新运行同一条命令，已有证据会复用</td></tr>

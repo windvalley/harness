@@ -890,7 +890,7 @@ describe("证据密钥", () => {
     const original = readFileSync(keyFile, "utf8");
     const preview = repo.cli("key", "rotate");
     assert.equal(preview.status, 0, preview.stderr);
-    assert.match(preview.stdout, /加 --yes 执行/);
+    assert.match(preview.stdout, /由人在自己的终端执行：harness key rotate --yes/);
     assert.equal(readFileSync(keyFile, "utf8"), original);
 
     const rotated = repo.cli("key", "rotate", "--yes");

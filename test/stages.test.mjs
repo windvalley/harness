@@ -595,11 +595,20 @@ describe("多阶段方案的授权交互", () => {
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /用户在对话中明确同意/);
     assert.match(result.stdout, /全部阶段/);
-    assert.match(result.stdout, /由 Agent 执行/);
+    assert.match(result.stdout, /由 Agent 执行：harness approve --branch feat\/alpha-1 --yes --note "<用户原话>" --stages docs\/changes\/alpha\/stages\.json/);
     assert.match(result.stdout, /用户无需执行命令/);
     assert.equal(grantFiles(repo).length, before, "只读摘要不得写入授权记录");
     const waiting = status(repo, C1);
-    assert.match(waiting, /由 Agent 自行运行 harness approve/);
+    assert.match(waiting, /由 Agent 执行：harness approve/);
     assert.match(waiting, /用户无需执行命令/);
+  });
+
+  test("阶段派生预览明确 Agent 可继承已有授权直接执行", () => {
+    const repo = carrierLanded();
+    repo.branch(D2, stageFiles(D2, STAGE_TEXT.s2, "beta"));
+    const result = repo.cli("approve", "--branch", D2, "--from-stages", FILE, "--stage", "s2");
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /Agent 可直接继续执行：harness approve --branch feat\/alpha-2 --yes --from-stages docs\/changes\/alpha\/stages\.json --stage s2/);
+    assert.match(result.stdout, /无需用户再次授权/);
   });
 });

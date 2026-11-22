@@ -14,6 +14,24 @@ test("文档站生成结果与内容源一致", () => {
   assert.equal(result.status, 0, result.stderr + result.stdout);
 });
 
+test("授权矩阵覆盖全部 --yes 场景并区分机器保障与流程约束", () => {
+  const reference = readFileSync(join(docs, "reference.md"), "utf8");
+  const scenarios = [
+    "门禁或高风险改动确认",
+    "普通实施授权",
+    "全部阶段授权",
+    "后续阶段派生授权",
+    "核心契约重新确认",
+    "清理任务 Worktree",
+    "清理含本机文件的 Worktree",
+    "轮换证据密钥",
+  ];
+  for (const scenario of scenarios) assert.ok(reference.includes(`| ${scenario} |`), `授权矩阵缺少场景: ${scenario}`);
+  assert.match(reference, /只有流程规范约束，没有专门的 Agent 拦截规则/);
+  assert.match(reference, /没有预览计划 ID 或对象清单哈希绑定/);
+  assert.match(reference, /本机评审者配置/);
+});
+
 test("文档页面保留唯一标题、导航状态和内部链接目标", () => {
   assert.ok(pages.length >= 10);
   for (const file of pages) {
