@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, sep } from "node:path";
 import { PACKAGE_ROOT } from "../policy/resolve.mjs";
+import { humanExecutes } from "../lib/next-step.mjs";
 
 export const MARK_START = "<!-- harness:start -->";
 export const MARK_END = "<!-- harness:end -->";
@@ -167,7 +168,7 @@ export function managedConflictError(plan) {
   if (plan.conflicts.length === 0) return null;
   return new Error(
     `托管文件冲突:\n${plan.conflicts.map(({ path, reason }) => `  - ${path}: ${reason}`).join("\n")}\n` +
-      "先把项目自己的说明迁到 AGENTS.md 托管块之外；确认用当前版本覆盖这些托管文件时，由人明确运行 upgrade --force",
+      `先把项目自己的说明迁到 AGENTS.md 托管块之外；确认用当前版本覆盖这些托管文件时，${humanExecutes("harness upgrade --force")}`,
   );
 }
 

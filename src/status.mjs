@@ -12,7 +12,7 @@ import { landedIn } from "./lib/landed.mjs";
 import { REVIEW_KIND, reviewerSummary } from "./review/review.mjs";
 import { CONFIRM_KIND } from "./confirm/confirm.mjs";
 import { mainWorktreeProblems, mergePushTarget, planMergeResult, reuseDecision, reviewStaleFiles } from "./merge/merge.mjs";
-import { approvalRecord, approvalState, assessRisk, planEnforced } from "./plan/plan.mjs";
+import { approvalRecord, approvalState, assessRisk, planEnforced, reapprovalGuidance } from "./plan/plan.mjs";
 import { formatProgress, stageProgress } from "./plan/stages.mjs";
 import { latestSubmit, sameSubmitTarget } from "./delivery/record.mjs";
 import { deliveryForSubmit, submitContinuation } from "./delivery/submit.mjs";
@@ -289,7 +289,8 @@ export function branchStatus({ cwd, branch }) {
       const state = approvalState({ root, branch, acceptanceText: showBlob(root, branchCommit, acceptancePath(project, branch)), at: branchCommit });
       if (state.approved) add("plan", "ok", `已有实施授权（${risk.reasons.join("；")}；依据：${redact(state.record.note)}）`);
       else {
-        add("plan", "fail", `${risk.reasons.join("；")}，${state.reason}：${agentAfterConsent("同意实施", `harness approve --branch ${branch} --yes --note "<用户原话>"`)}，用户无需执行命令`);
+        const guidance = reapprovalGuidance({ root, branch }) ?? `${agentAfterConsent("同意实施", `harness approve --branch ${branch} --yes --note "<用户原话>"`)}，用户无需执行命令`;
+        add("plan", "fail", `${risk.reasons.join("；")}，${state.reason}：${guidance}`);
         block("plan_unapproved", "待实施授权");
       }
     }

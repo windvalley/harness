@@ -81,7 +81,20 @@ describe("先方案后实施", () => {
 
     const changed = "## 目标与主要方案\n\n- 改回表格展示入口\n\n## 验收底线\n\n- 保留现有权限\n";
     commit(linked, "docs(login): 调整主要方案\n\n- 需要新的用户确认", { [contract]: changed });
-    assert.match(repo.cli("status", "--branch", BRANCH).stdout, /核心授权契约在授权后改过/);
+    const staleStatus = repo.cli("status", "--branch", BRANCH);
+    assert.match(staleStatus.stdout, /核心授权契约在授权后改过/);
+    assert.match(staleStatus.stdout, /Agent 先运行 harness approve --branch feat\/login 展示授权差异；由人在自己的终端执行预览给出的 --confirm-contract 命令/);
+    assert.doesNotMatch(staleStatus.stdout, /用户无需执行命令/);
+    const preview = repo.cli("approve", "--branch", BRANCH);
+    assert.equal(preview.status, 0, preview.stderr);
+    assert.match(preview.stdout, new RegExp(`由人在自己的终端执行：harness approve --branch feat/login --yes --note "<用户针对本次差异的新确认>" --confirm-contract ${sha(changed)}`));
+    const handoff = repo.cli("status", "--handoff", "--branch", BRANCH);
+    assert.match(handoff.stdout, /Agent 先运行 harness approve --branch feat\/login 展示授权差异/);
+    const blockedMerge = repo.cli("merge", "--branch", BRANCH);
+    assert.notEqual(blockedMerge.status, 0);
+    assert.match(blockedMerge.stderr, /Agent 先运行 harness approve --branch feat\/login 展示授权差异/);
+    assert.match(blockedMerge.stderr, /完成上述授权处理后，Agent 可直接继续执行：harness merge --branch feat\/login/);
+    assert.doesNotMatch(blockedMerge.stderr, /用户无需执行命令/);
     const unconfirmed = repo.cli("approve", "--branch", BRANCH, "--yes", "--note", "确认新方案");
     assert.notEqual(unconfirmed.status, 0);
     assert.match(unconfirmed.stderr, /--confirm-contract/);
@@ -280,6 +293,12 @@ describe("先方案后实施", () => {
 
     const line = repo.cli("verify", "--branch", BRANCH).stderr.split("\n").find((item) => item.includes("实施授权已失效")) ?? "";
     assert.match(line, /缺少验收清单/, "已有授权但清单没了，与从未授权是两件事");
+    const staleStatus = repo.cli("status", "--branch", BRANCH);
+    assert.match(staleStatus.stdout, /先恢复或重写并提交验收清单/);
+    assert.doesNotMatch(staleStatus.stdout, /预览给出的 --confirm-contract/);
+    const blockedMerge = repo.cli("merge", "--branch", BRANCH);
+    assert.match(blockedMerge.stderr, /先恢复或重写并提交验收清单/);
+    assert.doesNotMatch(blockedMerge.stderr, /完成重新确认/);
   });
 
   test("旧授权记录没有章节摘要时，按授权时的提交还原清单再比对", () => {
@@ -329,6 +348,12 @@ describe("先方案后实施", () => {
     git(repo.root, "checkout", "-q", BRANCH);
     commit(repo.root, "docs(login): 改验收\n\n- 追加一条验收\n- 说明改动原因", { [ACCEPTANCE]: "## 应该发生\n\n- 甲\n- 乙\n" });
     git(repo.root, "checkout", "-q", "main");
+    const preview = repo.cli("approve", "--branch", BRANCH);
+    assert.equal(preview.status, 0, preview.stderr);
+    assert.match(preview.stdout, new RegExp(`--confirm-contract ${sha("## 应该发生\n\n- 甲\n- 乙\n")}`));
+    const staleStatus = repo.cli("status", "--branch", BRANCH);
+    assert.match(staleStatus.stdout, /由人在自己的终端执行预览给出的 --confirm-contract 命令/);
+    assert.doesNotMatch(staleStatus.stdout, /用户无需执行命令/);
     assert.equal(repo.cli("approve", "--branch", BRANCH, "--yes", "--note", "确认改成两条", "--confirm-contract", sha("## 应该发生\n\n- 甲\n- 乙\n")).status, 0);
 
     const ledger = readFileSync(join(repo.env.HARNESS_DATA_DIR, "ledger.jsonl"), "utf8")
