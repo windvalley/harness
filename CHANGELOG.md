@@ -4,6 +4,20 @@
 
 ## [Unreleased]
 
+## [0.26.1] - 2026-11-23
+
+本版修复 Antigravity 新版文件工具载荷绕过实时拦截及 `Stop` 配置结构不符合规范的问题。
+
+### 修复
+
+- 兼容 `write_file`、`edit_file` 与 `read_file` 的 `Path`、`Content`、`Replacement` 参数，私钥写入、编辑和读取现在都会正确执行门禁；缺少路径时按失败关闭，`Path` 也能正确定位多 Worktree 项目。
+- Antigravity 的 `Stop` 改为扁平处理器数组，安装、重复安装、`doctor` 与卸载均兼容该结构，旧嵌套配置会自动迁移且不产生重复项。
+
+### 升级说明
+
+- 运行 `upgrade` 会重新生成客户端钩子配置，不修改 `config.json`、`policy.json` 或 `verify.json`，也不新增配置项或依赖。
+- 升级后重启正在运行的 Antigravity 会话，使修正后的实时拦截与收尾检查配置生效。
+
 ## [0.26.0] - 2026-11-23
 
 本版新增 Antigravity 客户端接入，统一支持工具的展示顺序与人工命令入口。
