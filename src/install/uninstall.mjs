@@ -10,7 +10,7 @@ const CLIENT_FILES = [".claude/settings.json", ".codex/hooks.json"];
 const CLIENT_EVENTS = ["PreToolUse", "Stop"];
 
 function harnessEntries(list) {
-  return Array.isArray(list) ? list.filter((entry) => (entry.hooks ?? []).some((item) => isHarnessClientHook(item.command))) : [];
+  return Array.isArray(list) ? list.filter((entry) => (entry.hooks ?? [entry]).some((item) => isHarnessClientHook(item.command))) : [];
 }
 
 /** 纯函数式地算出要删的内容，dry-run 与真实执行共用同一份判断。 */

@@ -330,7 +330,7 @@ dsh plugin --profile web add ~/.local/share/harness/dsh-plugin
 | DeepSeek Harness 浏览器版 | 同上 | 需注册一次本机插件；插件内容更新后重启 DeepSeek Harness |
 | Antigravity App、CLI、IDE | `.agents/hooks.json` 的 `PreToolUse`；收尾检查走 `Stop` | 按[官方钩子协议](https://antigravity.google/docs/hooks/)实现；接入或配置变化后重启正在运行的会话 |
 
-Antigravity 适配器识别 `run_command`、`write_to_file`、`replace_file_content`、`multi_replace_file_content`、`view_file`、`grep_search`、`find_by_name` 与 `list_dir`。
+Antigravity 适配器识别 `run_command`、`write_to_file`、`replace_file_content`、`multi_replace_file_content`、`view_file`、`grep_search`、`find_by_name` 与 `list_dir`，同时兼容 `write_file`（`Path`、`Content`）、`edit_file`（`Path`、`Replacement`）与 `read_file`（`Path`）。
 实时拦截显式返回 `allow` 或 `deny`，收尾检查用 `continue` 让 Agent 接着做，用 `stop` 放行结束。
 `fullyIdle` 为 `false` 时后台任务尚未结束，不做收尾拦截。
 `conversationId` 关联同一会话经手的任务分支，命令优先按 `Cwd` 定位项目，文件与搜索调用按目标所在工作区定位。
