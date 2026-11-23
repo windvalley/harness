@@ -57,13 +57,13 @@ function checkHarness(report) {
 
 function checkClients(report) {
   const unverified = report.checks.filter((check) => check.ok && check.verified === false).map((check) => check.id);
-  if (unverified.length === 0) return { id: "clients", layer: "behavior", ok: true, detail: "已接入的客户端链路均已实测" };
+  if (unverified.length === 0) return { id: "clients", layer: "behavior", ok: true, detail: "已接入的客户端链路在当前项目中均已验证" };
   return {
     id: "clients",
     layer: "behavior",
     ok: true,
     pending: true,
-    detail: `客户端是否真的执行了拦截还没有实测: ${unverified.join(", ")}；配置就位不等于行为已验证`,
+    detail: `当前项目尚未验证客户端实际执行拦截: ${unverified.join(", ")}；配置就位不等于当前项目中的行为已验证`,
   };
 }
 

@@ -76,6 +76,13 @@ describe("子命令帮助", () => {
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /工程流程/);
   });
+
+  test("客户端列表按 claude、codex、dsh、antigravity、generic 排列", () => {
+    const repo = setup();
+    const result = repo.rawCli("-h");
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /--client <claude\|codex\|dsh\|antigravity\|generic>/);
+  });
 });
 
 describe("upgrade 参数", () => {

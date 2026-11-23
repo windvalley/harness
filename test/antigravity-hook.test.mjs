@@ -129,7 +129,7 @@ describe("Antigravity 收尾检查", () => {
 });
 
 describe("Antigravity 配置生命周期", () => {
-  test("install 生成分组钩子，doctor 标明配置就位但当前客户端尚未实测", () => {
+  test("install 生成分组钩子，doctor 标明配置就位并等待当前项目验证", () => {
     const repo = setup();
     const file = join(repo.root, ".agents/hooks.json");
     const config = JSON.parse(readFileSync(file, "utf8"));

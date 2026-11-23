@@ -20,7 +20,7 @@
 
 <script src="assets/docs.js?v=acdbbf2b96" defer></script>
 </head>
-<body data-page="team" data-index="3ae8ba17bc">
+<body data-page="team" data-index="357c90fd1a">
 <a class="skip-link" href="#main-content">跳到主要内容</a>
 <header class="topbar">
   <div class="topbar-inner">
@@ -47,7 +47,7 @@
     <div class="code"><span class="label">工具调用被拦截时，由人执行</span><pre><code>cd &lt;项目&gt;
 node ~/github/harness/bin/harness.mjs install --local
 .harness/bin/harness doctor</code></pre></div>
-    <p><code>install --local</code> 按项目锁定的版本安装代码（必要时从对应的 <code>v&lt;版本&gt;</code> 标签导出），再写入本机的钩子与插件目录，不改任何入库文件。装好之前，Antigravity、Claude Code 与 Codex 的实时拦截会拒绝一切调用并提示这条命令。</p>
+    <p><code>install --local</code> 按项目锁定的版本安装代码（必要时从对应的 <code>v&lt;版本&gt;</code> 标签导出），再写入本机的钩子与插件目录，不改任何入库文件。装好之前，Claude Code、Codex 与 Antigravity 的实时拦截会拒绝一切调用并提示这条命令。</p>
 
     <h2 tabindex="-1" id="handoff">跨会话交接</h2>
     <p>需要换会话、换执行者或把任务上下文贴到 PR/MR 时，从现有状态生成 Markdown 交接视图：</p>

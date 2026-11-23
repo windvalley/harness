@@ -590,13 +590,15 @@ describe("安装与自检", () => {
     assert.match(golden.stdout, /检查 unit 配置无效: gate 检查没有可执行的 cmd/);
   });
 
-  test("doctor 报告各项状态，已信任的客户端不再标未实测", () => {
+  test("doctor 报告各项状态，已信任的客户端不再标为待验证", () => {
     const repo = setup();
     const result = repo.cli("doctor");
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /client:claude/);
     assert.match(result.stdout, /client:codex: 钩子已接入且已信任/);
     assert.match(result.stdout, /client:dsh/);
+    const clients = [...result.stdout.matchAll(/client:(claude|codex|dsh|antigravity)/g)].map((match) => match[1]);
+    assert.deepEqual(clients, ["claude", "codex", "dsh", "antigravity"]);
   });
 
   test("Codex 钩子未信任时 doctor 明确要求先批准", () => {

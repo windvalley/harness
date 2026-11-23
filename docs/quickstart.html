@@ -20,7 +20,7 @@
 
 <script src="assets/docs.js?v=acdbbf2b96" defer></script>
 </head>
-<body data-page="quickstart" data-index="3ae8ba17bc">
+<body data-page="quickstart" data-index="357c90fd1a">
 <a class="skip-link" href="#main-content">跳到主要内容</a>
 <header class="topbar">
   <div class="topbar-inner">
@@ -66,20 +66,21 @@
       <li>
         <h2 tabindex="-1" id="step-4">让客户端用上实时拦截</h2>
         <ul>
-          <li><strong>Antigravity</strong>：安装器写入工作区级 <code>.agents/hooks.json</code>，重启正在运行的会话，再用一条应被拒绝的写密钥操作确认实时拦截；<code>doctor</code> 的 <code>[?]</code> 只表示配置就位。</li>
           <li><strong>Claude Code</strong>：重启正在运行的会话，钩子在会话启动时读入。</li>
           <li><strong>Codex</strong>：运行 <code>/hooks</code>，进入 <code>Review hooks</code> 后按 <code>t</code> 信任；每个 Worktree 首次使用时各信任一次。</li>
-          <li><strong>DeepSeek Harness</strong>：每台机器为用到的 profile 注册一次本机插件，所有项目共用，注册后重启。桌面版要用 App 自带的命令行，先打开一次桌面版再完全退出后运行；浏览器版用 <code>dsh</code>：</li>
-        </ul>
-        <div class="code"><pre><code># 桌面版
+          <li><strong>DeepSeek Harness</strong>：每台机器为用到的 profile 注册一次本机插件，所有项目共用，注册后重启。桌面版要用 App 自带的命令行，先打开一次桌面版再完全退出后运行；浏览器版用 <code>dsh</code>：
+            <div class="code"><pre><code># 桌面版
 "/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh" plugin --profile desktop add ~/.local/share/harness/dsh-plugin
 # 浏览器版
 dsh plugin --profile web add ~/.local/share/harness/dsh-plugin</code></pre></div>
+          </li>
+          <li><strong>Antigravity</strong>：安装器写入工作区级 <code>.agents/hooks.json</code>，重启正在运行的会话，再用一条应被拒绝的写密钥操作确认实时拦截；<code>doctor</code> 的 <code>[?]</code> 只表示配置就位。</li>
+        </ul>
         <p>完成当前客户端的操作后，告知 Agent 已完成即可，由它接续诊断并解释已验证与仍待验证的部分，下面是输出示意：</p>
         <div class="code term"><span class="label">输出节选</span><pre><code>  [ok] git:reference-transaction: &lt;项目&gt;/.git/hooks/reference-transaction
-  [?] client:antigravity: PreToolUse 与收尾检查 Stop 配置已就位；当前客户端是否真正调用尚未实测
-  [ok] client:claude: PreToolUse 已接入（CLI 已验证；桌面版仅静态确认，未端到端实测）
+  [ok] client:claude: PreToolUse 与收尾检查 Stop 已接入
   [!!] client:codex: 钩子已接入但尚未信任：在 Codex 里运行 /hooks 批准一次，否则命令不会经过门禁
+  [?] client:antigravity: PreToolUse 与收尾检查 Stop 配置已就位
   [ok] project:main: 配置取自主分支 main
   [ok] main-worktree: &lt;项目&gt; 停在 main 且洁净，可以接收合并</code></pre></div>
         <p><code>[!!]</code> 表示需要处理，<code>[?]</code> 表示仍待验证。配置就位、产品曾经实测与当前客户端实际调用已验证分别说明，不能只凭初始化成功宣布全部接入完成。</p>

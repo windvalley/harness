@@ -337,3 +337,20 @@ test("合并改了入口时，DeepSeek Harness 仍注册着旧插件就提示改
   const done = withEnv(repo.env, () => followUps({ mainRoot: repo.root, changed: [".harness/bin/harness"] }));
   assert.equal(done.some((note) => note.includes("DeepSeek Harness")), false, done.join("\n"));
 });
+
+test("客户端后续操作按 claude、codex、dsh、antigravity 排列", () => {
+  const repo = setup({ trustCodex: false });
+  dshProfile(repo, "desktop");
+  const notes = withEnv(repo.env, () => followUps({
+    mainRoot: repo.root,
+    bootstrap: true,
+  }));
+  const clients = notes.map((note) => {
+    if (note.includes("Claude Code")) return "claude";
+    if (note.includes("Codex")) return "codex";
+    if (note.includes("DeepSeek Harness")) return "dsh";
+    if (note.includes("Antigravity")) return "antigravity";
+    return null;
+  }).filter(Boolean);
+  assert.deepEqual(clients, ["claude", "codex", "dsh", "antigravity"]);
+});
