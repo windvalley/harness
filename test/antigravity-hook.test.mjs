@@ -35,7 +35,7 @@ function decision(result) {
 }
 
 function commands(entries) {
-  return (entries ?? []).flatMap((entry) => (entry.hooks ?? []).map((item) => item.command));
+  return (entries ?? []).flatMap((entry) => (entry.hooks ?? [entry]).map((item) => item.command));
 }
 
 describe("Antigravity 客户端入口", () => {
@@ -52,6 +52,15 @@ describe("Antigravity 客户端入口", () => {
     assert.equal(decision(hook(repo, event(repo, "search_web", { query: "harness" }))).decision, "allow", "不归门禁处理的工具显式放行");
   });
 
+  test("兼容 Antigravity 2.0 的文件工具名与参数", () => {
+    const repo = setup();
+    assert.equal(decision(hook(repo, event(repo, "write_file", { Path: SECRET_FILE, Content: "x" }))).decision, "deny");
+    assert.equal(decision(hook(repo, event(repo, "write_file", { Path: "src/a.js", Content: "a\n" }))).decision, "allow");
+    assert.equal(decision(hook(repo, event(repo, "edit_file", { Path: SECRET_FILE, Replacement: "x" }))).decision, "deny");
+    assert.equal(decision(hook(repo, event(repo, "read_file", { Path: SECRET_FILE }))).decision, "deny");
+    assert.equal(decision(hook(repo, event(repo, "write_file", { Content: "x" }))).decision, "deny", "新工具缺少 Path 时失败关闭");
+  });
+
   test("文件编辑与搜索工具映射到统一载荷", () => {
     const normalize = (tool, args) => antigravity.normalize({ toolCall: { name: tool, args } }).call;
     assert.deepEqual(normalize("replace_file_content", { TargetFile: "src/a.js", ReplacementContent: "next" }), {
@@ -63,6 +72,9 @@ describe("Antigravity 客户端入口", () => {
       TargetFile: "src/a.js",
       ReplacementChunks: [{ ReplacementContent: "one" }, { ReplacementContent: "two" }],
     }), { kind: "write", path: "src/a.js", content: "one\ntwo" });
+    assert.deepEqual(normalize("write_file", { Path: "src/a.js", Content: "next" }), { kind: "write", path: "src/a.js", content: "next" });
+    assert.deepEqual(normalize("edit_file", { Path: "src/a.js", Replacement: "next" }), { kind: "write", path: "src/a.js", content: "next" });
+    assert.deepEqual(normalize("read_file", { Path: "src/a.js" }), { kind: "read", path: "src/a.js" });
     assert.deepEqual(normalize("grep_search", { SearchPath: "src", Includes: "*.js" }), { kind: "search", path: "src", glob: "*.js" });
     assert.deepEqual(normalize("find_by_name", { SearchDirectory: "src", Pattern: "*.test.js" }), { kind: "search", path: "src", glob: "*.test.js" });
     assert.deepEqual(normalize("list_dir", { DirectoryPath: "src" }), { kind: "search", path: "src" });
@@ -75,6 +87,10 @@ describe("Antigravity 客户端入口", () => {
       conversationId: "conversation-1",
     };
     assert.deepEqual(antigravity.context(filePayload), { cwd: "/work/second", session_id: "conversation-1" });
+    assert.deepEqual(antigravity.context({
+      ...filePayload,
+      toolCall: { name: "read_file", args: { Path: "/work/second/src/a.js" } },
+    }), { cwd: "/work/second", session_id: "conversation-1" });
     const commandPayload = {
       toolCall: { name: "run_command", args: { CommandLine: "pwd", Cwd: "subdir" } },
       workspacePaths: ["/work/first"],
@@ -134,6 +150,10 @@ describe("Antigravity 配置生命周期", () => {
     const file = join(repo.root, ".agents/hooks.json");
     const config = JSON.parse(readFileSync(file, "utf8"));
     assert.equal(config.harness.enabled, true);
+    assert.equal(config.harness.Stop.length, 1);
+    assert.equal(config.harness.Stop[0].type, "command");
+    assert.match(config.harness.Stop[0].command, /hook --client antigravity --event stop$/);
+    assert.equal(config.harness.Stop[0].hooks, undefined, "Stop 是扁平处理器数组，不使用 PreToolUse 的嵌套结构");
     const preCommand = commands(config.harness.PreToolUse)[0];
     const stopCommand = commands(config.harness.Stop)[0];
     assert.match(preCommand, /hook --client antigravity$/);
@@ -155,9 +175,9 @@ describe("Antigravity 配置生命周期", () => {
       enabled: false,
       PreToolUse: [{ matcher: "run_command", hooks: [{ type: "command", command: "other-guard" }] }],
       PostToolUse: [{ matcher: "*", hooks: [{ type: "command", command: "other-log" }] }],
-      Stop: [{ hooks: [{ type: "command", command: "other-stop" }] }],
+      Stop: [{ type: "command", command: "other-stop" }],
     };
-    before.harness.Stop.unshift({ hooks: [{ type: "command", command: "another-stop" }] });
+    before.harness.Stop.unshift({ type: "command", command: "another-stop" });
     writeFileSync(file, `${JSON.stringify(before, null, 2)}\n`);
 
     assert.equal(repo.rawCli("install").status, 0);

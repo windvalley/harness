@@ -517,7 +517,7 @@ export function isHarnessClientHook(command) {
 
 function keepEntries(entries, takeOver) {
   return (entries ?? []).filter((entry) => {
-    const commands = (entry.hooks ?? []).map((item) => item.command);
+    const commands = (entry.hooks ?? [entry]).map((item) => item.command);
     if (commands.some(isHarnessClientHook)) return false;
     return !takeOver;
   });
@@ -533,8 +533,9 @@ const STOP_SUFFIX = " --event stop";
  * Stop 事件里的 harness 条目换成最新的一份。其他工具的 Stop 钩子（例如结束提醒）一律保留，
  * 接管只针对拦截类的 PreToolUse，不能顺带删掉用户自己的提醒。
  */
-function withStopHook(hooks, command) {
-  return { ...hooks, Stop: [...keepEntries(hooks.Stop, false), { hooks: [{ type: "command", command }] }] };
+function withStopHook(hooks, command, flat = false) {
+  const handler = { type: "command", command };
+  return { ...hooks, Stop: [...keepEntries(hooks.Stop, false), flat ? handler : { hooks: [handler] }] };
 }
 
 /**
@@ -584,6 +585,7 @@ export function writeAntigravityHooks({ root, takeOver = false }) {
   current.harness = withStopHook(
     { ...ours, enabled: true, PreToolUse: [...(ours.PreToolUse ?? []), { matcher: "*", hooks: [hook] }] },
     ANTIGRAVITY_HOOK_COMMAND + STOP_SUFFIX,
+    true,
   );
   writeFileSync(file, `${JSON.stringify(current, null, 2)}\n`);
   return file;

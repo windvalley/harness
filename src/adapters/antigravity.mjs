@@ -8,9 +8,12 @@ function replacementContent(args) {
   return args.ReplacementChunks.map((chunk) => chunk?.ReplacementContent ?? "").join("\n");
 }
 
+const WRITE_TOOLS = ["write_to_file", "replace_file_content", "multi_replace_file_content", "write_file", "edit_file"];
+const READ_TOOLS = ["view_file", "read_file"];
+
 function targetPath(tool, args) {
   if (tool === "run_command") return undefined;
-  return args.TargetFile ?? args.AbsolutePath ?? args.SearchPath ?? args.SearchDirectory ?? args.DirectoryPath;
+  return args.TargetFile ?? args.AbsolutePath ?? args.Path ?? args.SearchPath ?? args.SearchDirectory ?? args.DirectoryPath;
 }
 
 function workspaceFor(payload, args, tool) {
@@ -26,11 +29,11 @@ function workspaceFor(payload, args, tool) {
 
 function callOf(tool, args) {
   if (tool === "run_command") return { kind: "shell", command: String(args.CommandLine ?? "") };
-  if (["write_to_file", "replace_file_content", "multi_replace_file_content"].includes(tool)) {
-    const content = args.CodeContent ?? replacementContent(args);
-    return { kind: "write", path: args.TargetFile, content: typeof content === "string" ? content : undefined };
+  if (WRITE_TOOLS.includes(tool)) {
+    const content = args.CodeContent ?? args.Content ?? args.Replacement ?? replacementContent(args);
+    return { kind: "write", path: args.TargetFile ?? args.Path, content: typeof content === "string" ? content : undefined };
   }
-  if (tool === "view_file") return { kind: "read", path: args.AbsolutePath };
+  if (READ_TOOLS.includes(tool)) return { kind: "read", path: args.AbsolutePath ?? args.Path };
   if (tool === "grep_search") return { kind: "search", path: args.SearchPath, glob: args.Includes };
   if (tool === "find_by_name") return { kind: "search", path: args.SearchDirectory, glob: args.Pattern };
   if (tool === "list_dir") return { kind: "search", path: args.DirectoryPath };
@@ -50,10 +53,14 @@ export const antigravity = {
       return "PreToolUse 载荷必须给出 workspacePaths";
     }
     if (tool === "run_command" && typeof args.CommandLine !== "string") return "run_command 必须给出字符串 CommandLine";
-    if (["write_to_file", "replace_file_content", "multi_replace_file_content"].includes(tool) && (typeof args.TargetFile !== "string" || !args.TargetFile)) {
-      return `${tool} 必须给出 TargetFile`;
+    if (WRITE_TOOLS.includes(tool)) {
+      const path = args.TargetFile ?? args.Path;
+      if (typeof path !== "string" || !path) return `${tool} 必须给出 ${["write_file", "edit_file"].includes(tool) ? "Path" : "TargetFile"}`;
     }
-    if (tool === "view_file" && (typeof args.AbsolutePath !== "string" || !args.AbsolutePath)) return "view_file 必须给出 AbsolutePath";
+    if (READ_TOOLS.includes(tool)) {
+      const path = args.AbsolutePath ?? args.Path;
+      if (typeof path !== "string" || !path) return `${tool} 必须给出 ${tool === "read_file" ? "Path" : "AbsolutePath"}`;
+    }
     return null;
   },
   context(payload) {

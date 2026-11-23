@@ -136,7 +136,7 @@ function antigravityHookInstalled(file) {
   if (!existsSync(file)) return { guard: false, stop: false };
   try {
     const config = JSON.parse(readFileSync(file, "utf8"));
-    const has = (list) => (list ?? []).some((entry) => (entry.hooks ?? []).some((item) => /hook\s+--client\s+antigravity\b/.test(item.command)));
+    const has = (list) => (list ?? []).some((entry) => (entry.hooks ?? [entry]).some((item) => /hook\s+--client\s+antigravity\b/.test(item.command)));
     const groups = Object.values(config).filter((group) => group && typeof group === "object" && !Array.isArray(group) && group.enabled !== false);
     return { guard: groups.some((group) => has(group.PreToolUse)), stop: groups.some((group) => has(group.Stop)) };
   } catch {
