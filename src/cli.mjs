@@ -9,10 +9,10 @@ import { keyStatus, readLedger, rotateKey, scanRecords } from "./lib/store.mjs";
 import { resolvePolicy, ruleStats } from "./policy/resolve.mjs";
 import { evaluateCall } from "./policy/engine.mjs";
 import { guard, hookContext, renderDenial } from "./adapters/index.mjs";
-import { antigravity } from "./adapters/antigravity.mjs";
 import { claude } from "./adapters/claude.mjs";
 import { codex } from "./adapters/codex.mjs";
 import { dsh } from "./adapters/dsh.mjs";
+import { antigravity } from "./adapters/antigravity.mjs";
 import { generic } from "./adapters/generic.mjs";
 import { planChecks, postMergeAcceptanceProblem, verify, verifyTargeted } from "./verify/verify.mjs";
 import { attestCheck } from "./verify/attestation.mjs";
@@ -48,7 +48,7 @@ import { cleanWorktrees, formatCleanPlan, formatCleanResult, planCleanup } from 
 import { packageVersion } from "./install/managed.mjs";
 import { agentAfterConsent, agentContinues, humanExecutes, noNextAction } from "./lib/next-step.mjs";
 
-const ADAPTERS = { antigravity, claude, codex, dsh, generic };
+const ADAPTERS = { claude, codex, dsh, antigravity, generic };
 
 const USAGE = `harness <命令> [参数]    任一命令加 --help 查看该命令的用法
 
@@ -100,7 +100,7 @@ const USAGE = `harness <命令> [参数]    任一命令加 --help 查看该命�
 
 客户端与钩子入口
   githook  <pre-commit|commit-msg|reference-transaction>   由 git 钩子调用
-  hook     --client <antigravity|claude|codex|dsh|generic> [--event <pre-tool-use|stop>]   由客户端钩子调用，读 stdin；stop 是收尾检查
+  hook     --client <claude|codex|dsh|antigravity|generic> [--event <pre-tool-use|stop>]   由客户端钩子调用，读 stdin；stop 是收尾检查
   check    --kind <shell|write|read|search|commit> [--command <命令>] [--path <路径>] [--content <内容>] [--glob <模式>] [--on-main] [--linked-worktree] [--ignored]   手工判定一次调用；shell 用 --command，其余用 --path
 
 人用

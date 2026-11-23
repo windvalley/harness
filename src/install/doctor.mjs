@@ -197,7 +197,7 @@ export function commitMessageCheck(project) {
 
 /**
  * 逐客户端检查安装状态。
- * codex 的钩子是否需要宿主信任，由宿主自己决定；这里只报“文件已就位、执行未验证”，
+ * codex 的钩子是否需要宿主信任，由宿主自己决定；这里只报当前项目的配置与实际调用验证状态，
  * 不把没验证过的接入算成通过。
  */
 export function doctor({ cwd = process.cwd(), checkRemote = false } = {}) {
@@ -242,18 +242,6 @@ export function doctor({ cwd = process.cwd(), checkRemote = false } = {}) {
   checks.push(...gitHookChecks(root));
   checks.push(deliveryCheck(root, { checkRemote }));
 
-  const antigravity = antigravityHookInstalled(join(root, ".agents", "hooks.json"));
-  checks.push({
-    id: "client:antigravity",
-    ok: antigravity.guard && antigravity.stop,
-    verified: false,
-    detail: !antigravity.guard
-      ? "未接入或已禁用 .agents/hooks.json 的 Antigravity 实时拦截"
-      : antigravity.stop
-        ? "PreToolUse 与收尾检查 Stop 配置已就位；当前客户端是否真正调用尚未实测"
-        : `PreToolUse 已接入；${STOP_MISSING}`,
-  });
-
   const claude = clientHookInstalled(join(root, ".claude", "settings.json"));
   checks.push({
     id: "client:claude",
@@ -261,7 +249,7 @@ export function doctor({ cwd = process.cwd(), checkRemote = false } = {}) {
     detail: !claude.guard
       ? "未接入 Claude Code 的项目设置文件"
       : claude.stop
-        ? "PreToolUse 与收尾检查 Stop 已接入（CLI 已验证；桌面版仅静态确认，未端到端实测）"
+        ? "PreToolUse 与收尾检查 Stop 已接入"
         : `PreToolUse 已接入；${STOP_MISSING}`,
   });
 
@@ -288,10 +276,22 @@ export function doctor({ cwd = process.cwd(), checkRemote = false } = {}) {
             ? "拦截钩子已信任，收尾检查（Stop）尚未信任：在 Codex 里运行 /hooks 批准它"
             : viaMainPre || viaMainStop
               ? "钩子已接入，随主 Worktree 的信任记录（钩子内容一致）；Codex 按路径记录信任，在本 Worktree 里用 Codex 时仍需运行 /hooks 批准一次"
-              : "钩子已接入且已信任：拦截在 CLI 与桌面版内置引擎均已实测，收尾检查（Stop）只做了静态确认",
+              : "钩子已接入且已信任",
   });
 
   checks.push(dshCheck());
+
+  const antigravity = antigravityHookInstalled(join(root, ".agents", "hooks.json"));
+  checks.push({
+    id: "client:antigravity",
+    ok: antigravity.guard && antigravity.stop,
+    verified: false,
+    detail: !antigravity.guard
+      ? "未接入或已禁用 .agents/hooks.json 的 Antigravity 实时拦截"
+      : antigravity.stop
+        ? "PreToolUse 与收尾检查 Stop 配置已就位"
+        : `PreToolUse 已接入；${STOP_MISSING}`,
+  });
 
   const configOk = existsSync(join(root, ".harness", "config.json"));
   checks.push({ id: "project:config", ok: configOk, detail: configOk ? "项目配置存在" : "缺少 .harness/config.json" });
@@ -482,6 +482,6 @@ export function formatDoctor(report) {
     const mark = check.ok ? (check.verified === false ? "?" : "ok") : "!!";
     lines.push(`  [${mark}] ${check.id}: ${check.detail}`);
   }
-  lines.push("说明: [?] 表示文件已就位但客户端会否真正调用尚未实测");
+  lines.push("说明: [?] 表示文件已就位，当前项目中的实际调用仍待验证");
   return lines.join("\n");
 }

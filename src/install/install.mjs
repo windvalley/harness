@@ -703,13 +703,13 @@ export function installAll({ cwd, takeOver = false }) {
   const hooksConfig = worktreeHooksConfig(root);
   const hooks = writeGitHooks({ root, takeOver, hooks: hooksConfig });
   const hooksPath = hooksConfig ? ensureHooksPath({ root, hooks: hooksConfig }) : null;
-  const antigravity = writeAntigravityHooks({ root, takeOver });
   const claude = writeClaudeSettings({ root, takeOver });
   const codex = writeCodexHooks({ root, takeOver });
   const dsh = writeDshPlugin();
+  const antigravity = writeAntigravityHooks({ root, takeOver });
   const gitignore = ensureGitignore({ root });
   const shimTracked = git(root, ["ls-files", "--error-unmatch", SHIM_REL]).status === 0;
-  return { root, published, shim, hooks, hooksPath, antigravity, claude, codex, dsh, gitignore, shimTracked };
+  return { root, published, shim, hooks, hooksPath, claude, codex, dsh, antigravity, gitignore, shimTracked };
 }
 
 /**
