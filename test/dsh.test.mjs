@@ -248,7 +248,7 @@ test("doctor：没有 DeepSeek Harness 的 profile 时不要求注册", () => {
   const repo = setup();
   const result = repo.cli("doctor");
   assert.equal(result.status, 0, result.stdout);
-  assert.match(result.stdout, /\[ok\] client:dsh: 未发现 DeepSeek Harness/);
+  assert.match(result.stdout, /\[ok\] client:dsh: 实时拦截 tools\/pre-execute 与收尾检查 agent\/turn-stopping；未发现 DeepSeek Harness/);
 });
 
 test("doctor：profile 注册了本机插件时报告已注册，并列出还没注册的 profile", () => {
@@ -261,6 +261,7 @@ test("doctor：profile 注册了本机插件时报告已注册，并列出还没
   assert.equal(result.status, 0, result.stdout);
   const line = result.stdout.split("\n").find((item) => item.includes("client:dsh"));
   assert.match(line, /\[ok\]/);
+  assert.match(line, /实时拦截 tools\/pre-execute 与收尾检查 agent\/turn-stopping/);
   assert.match(line, /desktop 已注册/);
   assert.match(line, /web 未注册/);
   assert.ok(line.includes(`dsh plugin --profile web add ${pluginDir(repo)}`), line);

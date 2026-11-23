@@ -594,8 +594,8 @@ describe("安装与自检", () => {
     const repo = setup();
     const result = repo.cli("doctor");
     assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stdout, /client:claude/);
-    assert.match(result.stdout, /client:codex: 钩子已接入且已信任/);
+    assert.match(result.stdout, /\[ok\] client:claude: PreToolUse 与收尾检查 Stop 配置已接入/);
+    assert.match(result.stdout, /\[ok\] client:codex: PreToolUse 与收尾检查 Stop 已接入且已信任/);
     assert.match(result.stdout, /client:dsh/);
     const clients = [...result.stdout.matchAll(/client:(claude|codex|dsh|antigravity)/g)].map((match) => match[1]);
     assert.deepEqual(clients, ["claude", "codex", "dsh", "antigravity"]);

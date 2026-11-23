@@ -318,7 +318,7 @@ dsh plugin --profile web add ~/.local/share/harness/dsh-plugin
 `harness doctor` 的 `client:dsh` 报告两个 profile 是否注册了本机插件，注册的是旧版生成在项目里的插件时报 `[!!]` 并给出改注册的命令。
 
 - Antigravity：安装器写入工作区级 `.agents/hooks.json`，接入或配置变化后重启正在运行的会话。
-  用一条应被拒绝的写密钥操作确认 `PreToolUse` 已真正调用；`doctor` 只确认配置就位，当前项目中的实际调用仍待验证。
+  用一条应被拒绝的写密钥操作确认 `PreToolUse` 已真正调用；`doctor` 只确认配置已接入。
 
 | 客户端 | 实时拦截 | 接入说明 |
 | --- | --- | --- |
