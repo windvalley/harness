@@ -154,11 +154,12 @@ const STOP_MISSING = "收尾检查（Stop）未接入，在任务分支运行 ha
 function dshCheck() {
   const dir = dshPluginDir();
   const registrations = dshRegistrations();
+  const hooks = "实时拦截 tools/pre-execute 与收尾检查 agent/turn-stopping";
   if (registrations.length === 0) {
-    return { id: "client:dsh", ok: true, detail: `未发现 DeepSeek Harness 的 desktop 或 web profile；使用时注册一次本机插件 ${dir}` };
+    return { id: "client:dsh", ok: true, detail: `${hooks}；未发现 DeepSeek Harness 的 desktop 或 web profile；使用时注册一次本机插件 ${dir}` };
   }
   const pluginOk = existsSync(join(dir, "index.mjs"));
-  const parts = [pluginOk ? `本机插件 ${dir}` : `本机插件 ${dir} 不存在，运行 harness install --local 生成`, ...registrations.map(describeRegistration)];
+  const parts = [hooks, pluginOk ? `本机插件 ${dir}` : `本机插件 ${dir} 不存在，运行 harness install --local 生成`, ...registrations.map(describeRegistration)];
   // 插件内容落后只是提示，不算失败：它只转发到项目锁定的版本，旧内容仍能工作。
   if (pluginOk && dshPluginStale()) parts.push("本机插件内容落后于当前版本，在项目目录运行 harness install --local 刷新，之后重启 DeepSeek Harness");
   return {
@@ -249,7 +250,7 @@ export function doctor({ cwd = process.cwd(), checkRemote = false } = {}) {
     detail: !claude.guard
       ? "未接入 Claude Code 的项目设置文件"
       : claude.stop
-        ? "PreToolUse 与收尾检查 Stop 已接入"
+        ? "PreToolUse 与收尾检查 Stop 配置已接入"
         : `PreToolUse 已接入；${STOP_MISSING}`,
   });
 
@@ -276,7 +277,7 @@ export function doctor({ cwd = process.cwd(), checkRemote = false } = {}) {
             ? "拦截钩子已信任，收尾检查（Stop）尚未信任：在 Codex 里运行 /hooks 批准它"
             : viaMainPre || viaMainStop
               ? "钩子已接入，随主 Worktree 的信任记录（钩子内容一致）；Codex 按路径记录信任，在本 Worktree 里用 Codex 时仍需运行 /hooks 批准一次"
-              : "钩子已接入且已信任",
+              : "PreToolUse 与收尾检查 Stop 已接入且已信任",
   });
 
   checks.push(dshCheck());
@@ -285,11 +286,10 @@ export function doctor({ cwd = process.cwd(), checkRemote = false } = {}) {
   checks.push({
     id: "client:antigravity",
     ok: antigravity.guard && antigravity.stop,
-    verified: false,
     detail: !antigravity.guard
       ? "未接入或已禁用 .agents/hooks.json 的 Antigravity 实时拦截"
       : antigravity.stop
-        ? "PreToolUse 与收尾检查 Stop 配置已就位"
+        ? "PreToolUse 与收尾检查 Stop 配置已接入"
         : `PreToolUse 已接入；${STOP_MISSING}`,
   });
 

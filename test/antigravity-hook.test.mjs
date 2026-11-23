@@ -145,7 +145,7 @@ describe("Antigravity 收尾检查", () => {
 });
 
 describe("Antigravity 配置生命周期", () => {
-  test("install 生成分组钩子，doctor 标明配置就位并等待当前项目验证", () => {
+  test("install 生成分组钩子，doctor 标明配置已接入", () => {
     const repo = setup();
     const file = join(repo.root, ".agents/hooks.json");
     const config = JSON.parse(readFileSync(file, "utf8"));
@@ -164,7 +164,7 @@ describe("Antigravity 配置生命周期", () => {
     assert.equal(decision(stopped).decision, "stop");
     const result = repo.cli("doctor");
     assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stdout, /\[\?\] client:antigravity: PreToolUse 与收尾检查 Stop 配置已就位/);
+    assert.match(result.stdout, /\[ok\] client:antigravity: PreToolUse 与收尾检查 Stop 配置已接入/);
   });
 
   test("重装保留其他分组和事件，take-over 只移除其他 PreToolUse，卸载只摘 harness 条目", () => {
