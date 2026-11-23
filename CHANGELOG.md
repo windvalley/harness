@@ -4,6 +4,20 @@
 
 ## [Unreleased]
 
+## [0.26.2] - 2026-11-23
+
+本版统一 `doctor` 对客户端配置的通过状态与钩子名称描述。
+
+### 修复
+
+- Claude Code、Codex 与 Antigravity 配置已接入时统一报告 `[ok]`；Antigravity 不再因无法自动验证实际调用而永久显示 `[?]`，配置缺失、禁用或缺少 `Stop` 时仍报告需要处理。
+- Codex 成功状态明确列出 `PreToolUse` 与收尾检查 `Stop`；DeepSeek Harness 诊断补充 `tools/pre-execute` 与 `agent/turn-stopping`，并保留各 profile 的注册状态和异常提示。
+
+### 升级说明
+
+- 本次仅调整诊断状态与文案，不改变钩子行为，不修改 `config.json`、`policy.json` 或 `verify.json`，也不新增配置项或依赖。
+- 运行 `upgrade` 后即可使用新版 `doctor`，不需要因本次修改重启客户端。
+
 ## [0.26.1] - 2026-11-23
 
 本版修复 Antigravity 新版文件工具载荷绕过实时拦截及 `Stop` 配置结构不符合规范的问题。
