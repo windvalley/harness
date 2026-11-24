@@ -29,7 +29,8 @@ docs/update-install-guide</code></pre></div>
     <p>实际判定取主分支 policy，任务分支不能通过修改自己的配置放行。项目命名要求直接维护在 policy，规则变更经人工确认合入后生效；<code>upgrade</code> 更新指引并保留项目 policy。字段错误、无效正则或重复规则会在进入主分支前被拒绝，详见<a href="https://github.com/windvalley/harness/blob/main/docs/reference.md#分支命名">分支命名参考</a>。</p>
 
     <h3 id="parallel-worktrees">并行任务与 Worktree</h3>
-    <p>新项目的 <code>init</code> 默认启用 <code>main-worktree</code>：主 Worktree 停在主分支且保持洁净，只用于合并与固定环境。每个任务使用独立分支和 Linked Worktree，Agent 在各自目录里修改、提交、验证和评审，不在主 Worktree 里切换任务分支。</p>
+    <p>新项目的 <code>init</code> 默认启用 <code>main-worktree</code>：主 Worktree 停在主分支，只用于合并、同步与固定环境。每个任务使用独立分支和 Linked Worktree，Agent 在各自目录里修改、提交、验证和评审，不在主 Worktree 里切换任务分支。</p>
+    <p><code>merge</code> 和 <code>sync</code> 要求主 Worktree 没有已跟踪文件的未提交改动，也没有进行中的 Git 操作。未跟踪或忽略的本机文件只在与本次检出冲突时阻塞，其他文件原样保留。</p>
     <div class="code"><span class="label">两个任务分别从最新主分支建独立目录</span><pre><code>git worktree add -b feature/login ../project-login main
 git worktree add -b fix/payment ../project-payment main</code></pre></div>
     <p>并行开发不只是目录隔离。依赖安装、端口、数据库、环境变量和测试数据仍需按项目隔离，避免不同任务共用会互相修改的运行资源。机制与多机协作说明见<a href="team.html#parallel">团队与多机</a>。</p>

@@ -58,7 +58,7 @@ export function evaluatePath({ policy, root, relPath, access, content, existingH
     // 命令写文件只适用声明了 includeShell 的规则，其余写保护规则的语义仍只针对写文件类工具。
     if (viaShell && !rule.includeShell) continue;
     if (!ruleApplies(rule, context)) continue;
-    // 主 Worktree 是否洁净只看 git 能看到的文件；被忽略的本机文件不影响合并，按规则声明放行。
+    // 允许写入被 Git 忽略的本机文件；交付时再按目标 tree 检查它们是否会被覆盖。
     if (rule.allowIgnored && context.ignored) continue;
     if (matchAny(relPath, rule.paths ?? []) && !matchAny(relPath, rule.allow ?? [])) {
       return deny(rule, relPath);
@@ -82,27 +82,101 @@ export function evaluatePath({ policy, root, relPath, access, content, existingH
   return { decision: "allow" };
 }
 
-/** 按 shell 分隔符切开命令，命令段与分隔符按出现顺序交替给出：{ seg } 或 { op }。 */
+const SHELL_REDIRECT = /&>>?|<<<|<<-?|<>|<&|>>|>&|>\||[<>]/y;
+const REDIRECT_WORD = /(?:"(?:[^"\\]|\\[\s\S])*"|'[^']*'|\\[\s\S]|[^\s;"'\\&|<>()`])+/y;
+const PIPE_OPERATORS = new Set(["|", "|&"]);
+
+function readRedirect(command, start) {
+  SHELL_REDIRECT.lastIndex = start;
+  const op = SHELL_REDIRECT.exec(command)[0];
+  let end = start + op.length;
+  while (/[ \t]/.test(command[end] ?? "") || command.startsWith("\\\n", end)) {
+    end += command[end] === "\\" ? 2 : 1;
+  }
+  REDIRECT_WORD.lastIndex = end;
+  const word = command[end] === "#" ? "" : (REDIRECT_WORD.exec(command)?.[0] ?? "");
+  return { op, word, end: end + word.length };
+}
+
+// 引号和转义也是 Shell 词的一部分；这里只还原静态值，不执行任何展开。
+function redirectValue(word, { delimiter = false } = {}) {
+  let value = "";
+  let quote = "";
+  for (let i = 0; i < word.length; i++) {
+    const ch = word[i];
+    if (ch === "\\" && quote !== "'") {
+      const next = word[i + 1];
+      if (next === undefined) return null;
+      if (quote && !"\\\"$`\n".includes(next)) value += ch;
+      else {
+        if (next !== "\n") value += next;
+        i += 1;
+      }
+    } else if (quote && ch === quote) quote = "";
+    else if (!quote && (ch === "'" || ch === '"')) quote = ch;
+    else if (!delimiter && (quote === '"' ? "$`!".includes(ch) : !quote && "$`*?[]{}!".includes(ch))) return null;
+    else if (!delimiter && i === 0 && ch === "~") {
+      if (word.length > 1 && word[1] !== "/") return null;
+      value += homedir();
+    } else value += ch;
+  }
+  return quote ? null : value;
+}
+
+/** 按 Shell 分隔符切开命令；非直接模式额外保留重定向与去掉重定向的命令。 */
 function tokenizeCommand(command, { direct = false } = {}) {
   const items = [];
+  const heredocs = [];
   let current = "";
+  let redirects = [];
   let quote = "";
+  let wordStart = 0;
   const flush = (op) => {
-    if (current.trim()) items.push({ seg: current.trim() });
+    if (current.trim()) {
+      let from = 0;
+      const parts = redirects.map((redir) => {
+        const part = current.slice(from, redir.start);
+        from = redir.end;
+        return part;
+      });
+      parts.push(current.slice(from));
+      items.push({ seg: current.trim(), body: parts.join(" ").trim(), redirects });
+    }
     current = "";
+    redirects = [];
+    wordStart = 0;
     if (op) items.push({ op });
+  };
+  const endLine = (at) => {
+    // 管道右侧允许先换行或写注释，这些换行不结束管道。
+    flush(!current.trim() && PIPE_OPERATORS.has(items.at(-1)?.op) ? undefined : "\n");
+    for (const { tag, tabs } of heredocs.splice(0)) {
+      // Here-document 正文是输入，不是命令；支持同一行声明多个正文。
+      while (at < command.length) {
+        const next = command.indexOf("\n", at + 1);
+        const end = next === -1 ? command.length : next;
+        const line = command.slice(at + 1, end);
+        at = end;
+        if ((tabs ? line.replace(/^\t+/, "") : line) === tag) break;
+      }
+    }
+    return at;
   };
   for (let i = 0; i < command.length; i++) {
     const ch = command[i];
-    if (direct && ch === "\\" && quote !== "'") {
+    if (ch === "\\" && quote !== "'") {
       const next = command[++i];
-      if (next === undefined) return [];
+      if (next === undefined) {
+        if (direct) return [];
+        current += ch;
+        break;
+      }
       if (next !== "\n") current += ch + next;
       continue;
     }
     if (quote) {
       current += ch;
-      if (ch === quote && (direct || command[i - 1] !== "\\")) quote = "";
+      if (ch === quote) quote = "";
       continue;
     }
     if (ch === '"' || ch === "'") {
@@ -110,21 +184,38 @@ function tokenizeCommand(command, { direct = false } = {}) {
       current += ch;
       continue;
     }
-    if (direct && ch === "#" && (!current || /\s$/.test(current))) {
+    if (ch === "#" && (direct ? (!current || /\s$/.test(current)) : wordStart === current.length)) {
       i = command.indexOf("\n", i);
       if (i === -1) break;
-      flush("\n");
+      i = endLine(i);
       continue;
     }
     // 提前校验只看直接命令，不在子 shell、重定向、管道或条件分支里推测参数和目录。
     if (direct && ("`(){}<>|".includes(ch) || (ch === "&" && command[i + 1] !== "&"))) return [];
-    if (ch === "&" || ch === "|") {
-      const doubled = command[i + 1] === ch;
-      if (doubled) i += 1;
-      flush(doubled ? ch + ch : ch);
+    if (!direct && (ch === "<" || ch === ">" || (ch === "&" && command[i + 1] === ">"))) {
+      const { op, word, end } = readRedirect(command, i);
+      const start = ch !== "&" && /^\d+$/.test(current.slice(wordStart)) ? wordStart : current.length;
+      current += command.slice(i, end);
+      redirects.push({ op, word, start, end: current.length });
+      if (word && (op === "<<" || op === "<<-")) {
+        heredocs.push({ tag: redirectValue(word, { delimiter: true }), tabs: op === "<<-" });
+      }
+      wordStart = current.length;
+      i = end - 1;
       continue;
     }
-    if (ch === ";" || ch === "\n" || ch === "(" || ch === ")" || ch === "`") {
+    if (ch === "&" || ch === "|") {
+      const next = command[i + 1];
+      const paired = next === ch || (ch === "|" && next === "&");
+      if (paired) i += 1;
+      flush(paired ? ch + next : ch);
+      continue;
+    }
+    if (ch === "\n") {
+      i = endLine(i);
+      continue;
+    }
+    if (ch === ";" || ch === "(" || ch === ")" || ch === "`") {
       flush(ch);
       continue;
     }
@@ -137,6 +228,7 @@ function tokenizeCommand(command, { direct = false } = {}) {
       continue;
     }
     current += ch;
+    if (/\s/.test(ch)) wordStart = current.length;
   }
   if (direct && quote) return [];
   flush();
@@ -144,9 +236,7 @@ function tokenizeCommand(command, { direct = false } = {}) {
 }
 
 function splitCommands(command) {
-  return tokenizeCommand(command)
-    .filter((item) => item.seg)
-    .map((item) => item.seg);
+  return tokenizeCommand(command).filter((item) => item.seg);
 }
 
 function stripEnvAssignments(segment) {
@@ -198,10 +288,10 @@ function nestedCommands(segment) {
 
 export function expandSegments(command, depth = 0) {
   const result = [];
-  for (const raw of splitCommands(command)) {
-    result.push({ raw, norm: normalizeSegment(raw) });
+  for (const { seg: raw, body } of splitCommands(command)) {
+    result.push({ raw, norm: normalizeSegment(body) });
     if (depth < MAX_NESTING) {
-      for (const inner of nestedCommands(raw)) result.push(...expandSegments(inner, depth + 1));
+      for (const inner of nestedCommands(body)) result.push(...expandSegments(inner, depth + 1));
     }
   }
   return result;
@@ -311,21 +401,23 @@ export function locateSegments(command, start, { direct = false, depth = 0 } = {
   let dir = start;
   let inBacktick = false;
   for (let i = 0; i < items.length; i++) {
-    const { seg, op } = items[i];
+    const { seg, body, redirects, op } = items[i];
     if (op === "(" || (op === "`" && !inBacktick)) stack.push(dir);
     if ((op === ")" || (op === "`" && inBacktick)) && stack.length) dir = stack.pop();
     if (op === "`") inBacktick = !inBacktick;
     if (!seg) continue;
-    const norm = normalizeSegment(seg);
+    const norm = normalizeSegment(body);
     if (direct && (INDIRECT_SHELL.test(norm) || /(?:^|\s)(?:CDPATH|GIT_COMMON_DIR)=/.test(seg))) return [];
-    const at = gitDirOf(seg, dir, { direct });
-    result.push({ raw: seg, norm, dir: at });
+    const at = gitDirOf(body, dir, { direct });
+    const pipedIn = PIPE_OPERATORS.has(items[i - 1]?.op);
+    result.push({ raw: seg, norm, dir: at, shellDir: dir, redirects, pipedIn });
     if (!direct && depth < MAX_NESTING) {
-      for (const inner of nestedCommands(seg)) result.push(...locateSegments(inner, at, { depth: depth + 1 }));
+      for (const inner of nestedCommands(body)) result.push(...locateSegments(inner, dir, { depth: depth + 1 }));
     }
     const target = cdTarget(direct ? stripEnvAssignments(seg) : norm, dir, { direct });
     if (target === undefined) continue;
-    const detached = ["|", "&"].includes(items[i - 1]?.op) || ["|", "&"].includes(items[i + 1]?.op);
+    const next = items[i + 1]?.op;
+    const detached = pipedIn || PIPE_OPERATORS.has(next) || items[i - 1]?.op === "&" || next === "&";
     dir = detached ? null : target;
   }
   return result;
@@ -489,49 +581,29 @@ const WRITE_AFTER_MODE = new Set(["chmod", "chown", "chgrp"]);
 const PATH_TOKEN = /(?:^|[\s"'=(,[])((?:~|\/)[^\s"'`;|&<>(),[\]]*)/g;
 const MAX_PATH_TOKENS = 16;
 
-/** 去掉 here-document 正文：正文是别的程序的输入，不是命令，里面的 > 与换行不能当成重定向或命令段。 */
-function stripHeredocs(command) {
-  const out = [];
-  let tag = null;
-  let dash = false;
-  for (const line of command.split("\n")) {
-    if (tag !== null) {
-      if ((dash ? line.replace(/^\t+/, "") : line) === tag) tag = null;
-      continue;
-    }
-    out.push(line);
-    const match = line.match(/(?<!<)<<(?!<)(-?)\s*(?:'([^']+)'|"([^"]+)"|\\?([A-Za-z_]\w*))/);
-    if (match) {
-      dash = match[1] === "-";
-      tag = match[2] ?? match[3] ?? match[4];
-    }
+function redirectWrites(redirects) {
+  const targets = [];
+  for (const { op, word } of redirects) {
+    if (!word || !op.includes(">")) continue;
+    const value = redirectValue(word);
+    // >&2、>&- 与 >&2- 复制、关闭或移动描述符，不打开文件；>&文件名则会写文件。
+    if (op === ">&" && /^(?:\d+-?|-)$/u.test(value ?? "")) continue;
+    targets.push(value);
   }
-  return out.join("\n");
+  return targets;
 }
 
 /**
- * 一段命令里能静态认出的写入：重定向、常见写文件命令的目标，以及目标无法确定的解释器行内脚本。
+ * 一段命令里常见写文件命令的目标，以及目标无法确定的解释器行内脚本。
  * 这只覆盖认得出来的写法，不是对任意程序写入的完整限制。
  */
-function shellWrites(norm, wholeCommand) {
+function shellWrites(norm, redirects, pipedIn) {
   const targets = [];
-  const words = norm.match(WORD) ?? [];
-  const argv = [];
-  for (let i = 0; i < words.length; i++) {
-    const redirect = words[i].match(/^(?:\d*|&)(>>|>\||>)(.*)$/);
-    if (!redirect) {
-      argv.push(words[i]);
-      continue;
-    }
-    // >&2、2>&1 是复制文件描述符，不写文件。
-    if (redirect[2].startsWith("&")) continue;
-    if (redirect[2]) targets.push(redirect[2]);
-    else if (words[i + 1] !== undefined) targets.push(words[++i]);
-  }
+  const argv = norm.match(WORD) ?? [];
   let i = 0;
   while (i < argv.length && (WRAPPERS.has(argv[i]) || argv[i].startsWith("-"))) i += 1;
   const verb = (argv[i] ?? "").split("/").pop();
-  let args = argv.slice(i + 1);
+  const args = argv.slice(i + 1);
   const options = (list) => list.filter((word) => word.startsWith("-") && word !== "-");
   const plain = (list) => list.filter((word) => !word.startsWith("-") || word === "-");
   const targetDir = args.findIndex((word) => word === "-t" || word.startsWith("--target-directory"));
@@ -568,12 +640,11 @@ function shellWrites(norm, wholeCommand) {
   // 解释器带行内脚本（-c、-e、-、heredoc、管道喂入）：写到哪里取决于脚本内容，静态看不出来。
   let opaque = false;
   if (INTERPRETERS.test(verb)) {
-    args = args.filter((word) => !word.startsWith("<"));
     const script = plain(args).filter((word) => word !== "-");
-    const stdin = /<<|<<<|<\s*\S/.test(norm) || /\|/.test(wholeCommand);
+    const stdin = pipedIn || redirects.some(({ op }) => op.startsWith("<"));
     opaque =
       args.some((arg) => INLINE_FLAGS.test(arg) || arg === "-") ||
-      /<<|<<</.test(norm) ||
+      redirects.some(({ op }) => op.startsWith("<<")) ||
       (script.length === 0 && stdin && !args.some((arg) => /^-(?:V|h|v|-version|-help)$/.test(arg)));
   }
   return { targets, opaque };
@@ -601,8 +672,8 @@ function evaluateShellWrites({ policy, command, context, cwd, locate, locateTarg
   const unknown = { ...context, unknownPlace: true };
   const placeOf = (dir) => (dir === null ? unknown : dir === cwd ? context : (locate(dir) ?? unknown));
   let tokensChecked = null;
-  for (const { raw, norm, dir } of locateSegments(stripHeredocs(command), cwd)) {
-    const { targets, opaque } = shellWrites(norm, command);
+  for (const { raw, norm, dir, shellDir, redirects, pipedIn } of locateSegments(command, cwd)) {
+    const { targets, opaque } = shellWrites(norm, redirects, pipedIn);
     const here = placeOf(dir);
     const unsure = here.unknownPlace ? `（${UNKNOWN_PLACE_NOTE}）` : "";
     for (const rule of rules) {
@@ -617,12 +688,14 @@ function evaluateShellWrites({ policy, command, context, cwd, locate, locateTarg
         }
       }
     }
-    for (const word of targets) {
-      const abs = dir === null ? (isAbsolute(literalWord(word) ?? "") ? resolve(literalWord(word)) : null) : resolveDir(dir, word);
+    const paths = [...redirectWrites(redirects).map((value) => [value, shellDir]), ...targets.map((word) => [literalWord(word), dir])];
+    for (const [value, base] of paths) {
+      const abs = value === null ? null : isAbsolute(value) ? resolve(value) : base === null ? null : resolve(base, value);
       if (abs === null) {
         // 目标是变量、通配符或命令替换：只在会落进受保护位置的目录里拦。
+        const place = placeOf(base);
         for (const rule of rules) {
-          if (ruleApplies(rule, here)) return deny(rule, `${raw}（写入目标无法静态确定${unsure ? "，也" + UNKNOWN_PLACE_NOTE : ""}）`);
+          if (ruleApplies(rule, place)) return deny(rule, `${raw}（写入目标无法静态确定${place.unknownPlace ? "，也" + UNKNOWN_PLACE_NOTE : ""}）`);
         }
         continue;
       }

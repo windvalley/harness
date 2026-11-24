@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { deliverySettings, loadCurrentProject, mainBranch, trustedMainRef } from "../lib/config.mjs";
 import { git, isLinkedWorktree, mainWorktreeRoot, repoRoot } from "../lib/git.mjs";
 import { keyStatus } from "../lib/store.mjs";
-import { mainWorktreeProblems } from "../merge/merge.mjs";
+import { mainWorktreeReadiness } from "../merge/main-worktree.mjs";
 import { commandExists, describePlan, maxDiffChars, planReviewers, resolveBackend } from "../review/review.mjs";
 import { loadLocalReviewers } from "../review/reviewers.mjs";
 import { resolvePolicy } from "../policy/resolve.mjs";
@@ -362,14 +362,14 @@ export function doctor({ cwd = process.cwd(), checkRemote = false } = {}) {
         : `配置取自主分支 ${mainBranch(project)}`,
     });
     const mainRoot = mainWorktreeRoot(root);
-    const mainProblems = mainWorktreeProblems(project, mainRoot);
+    const { problems: mainProblems, notice } = mainWorktreeReadiness(project, mainRoot);
     const remote = deliverySettings(project.config).mode === "remote";
     checks.push({
       id: "main-worktree",
       ok: mainProblems.length === 0,
       detail:
         mainProblems.length === 0
-          ? `${mainRoot} 停在 ${mainBranch(project)} 且洁净，可以接收${remote ? "同步(harness sync)" : "合并"}`
+          ? (notice ?? `${mainRoot} 停在 ${mainBranch(project)} 且洁净，可以接收${remote ? "同步(harness sync)" : "合并"}`)
           : `${mainProblems.join("；")}。主 Worktree 未就绪时 ${remote ? "harness sync" : "所有任务的 harness merge"} 都会被拒绝`,
     });
     // 合并后不自动删除任务 Worktree，这里只报告堆积的数量，不算失败。

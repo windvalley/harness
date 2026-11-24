@@ -11,7 +11,8 @@ import { collectObligations } from "./verify/obligation.mjs";
 import { landedIn } from "./lib/landed.mjs";
 import { REVIEW_KIND, reviewerSummary } from "./review/review.mjs";
 import { CONFIRM_KIND } from "./confirm/confirm.mjs";
-import { mainWorktreeProblems, mergePushTarget, planMergeResult, reuseDecision, reviewStaleFiles } from "./merge/merge.mjs";
+import { mergePushTarget, planMergeResult, reuseDecision, reviewStaleFiles } from "./merge/merge.mjs";
+import { mainWorktreeReadiness } from "./merge/main-worktree.mjs";
 import { approvalRecord, approvalState, assessRisk, planEnforced, reapprovalGuidance } from "./plan/plan.mjs";
 import { formatProgress, stageProgress } from "./plan/stages.mjs";
 import { latestSubmit, sameSubmitTarget } from "./delivery/record.mjs";
@@ -24,9 +25,9 @@ import { resolvePolicy } from "./policy/resolve.mjs";
 import { FLAG_HITS, PITFALL_FILE, pitfallSummary } from "./pitfall/pitfall.mjs";
 
 // 确认记录绑定合并结果的 tree：快进时就是分支的 tree，三方合并时算出合并后的 tree。
-function confirmFor(project, root, branch) {
+function confirmFor(root, getMergePlan) {
   try {
-    return readRecord(root, CONFIRM_KIND, planMergeResult({ project, root, branch }).resultTree);
+    return readRecord(root, CONFIRM_KIND, getMergePlan().resultTree);
   } catch (error) {
     return { ok: false, reason: error.message };
   }
@@ -128,6 +129,8 @@ export function branchStatus({ cwd, branch }) {
     return result;
   }
   add("branch", "ok", `待合入 ${branchCommit.slice(0, 10)} -> ${mainRef}`);
+  let mergePlan;
+  const getMergePlan = () => (mergePlan ??= planMergeResult({ project, root, branch }));
 
   let openingRemote = false;
   let deliveryConfirmed = false;
@@ -149,7 +152,7 @@ export function branchStatus({ cwd, branch }) {
     const { spec, source } = assertBranchPolicy({ project, root, branch, requireBranch: true });
     let proposed = null;
     try {
-      proposed = branchRuleErrorAt(root, planMergeResult({ project, root, branch }).resultCommit);
+      proposed = branchRuleErrorAt(root, getMergePlan().resultCommit);
     } catch {
       // 合并冲突由交付阶段处理，不把无法生成合并结果误判为命名配置错误。
     }
@@ -192,11 +195,21 @@ export function branchStatus({ cwd, branch }) {
     block("commit_rule_invalid", "提交信息规则配置有误");
   }
 
-  // 合并在主 Worktree 里更新主分支，它不就绪时其他条件都满足也合不进去。
-  const mainProblems = mainWorktreeProblems(project, mainWorktreeRoot(root));
+  // 本地交付能提前核对合并结果；远程交付以实际 sync 取得的远程 tree 为准。
+  let target;
+  if (delivery.mode === "local" && !openingRemote) {
+    try {
+      target = getMergePlan();
+    } catch {
+      // 无法生成合并结果时仍能报告主 Worktree 自身的问题。
+    }
+  }
+  const { problems: mainProblems, notice } = mainWorktreeReadiness(project, mainWorktreeRoot(root), target);
   if (mainProblems.length > 0) {
     add("main-worktree", "fail", mainProblems.join("；"));
     block("main_worktree", "主 Worktree 未就绪");
+  } else if (notice) {
+    add("main-worktree", "warn", notice);
   } else {
     add(
       "main-worktree",
@@ -248,7 +261,7 @@ export function branchStatus({ cwd, branch }) {
     const acceptanceText = showBlob(root, branchCommit, acceptancePath(project, branch)) ?? showBlob(root, mainCommit, acceptancePath(project, branch));
     let integrationHead = branchCommit;
     try {
-      integrationHead = planMergeResult({ project, root, branch }).resultCommit;
+      integrationHead = getMergePlan().resultCommit;
     } catch {
       // 有冲突时还没有实际集成结果，保留任务提交用于只读状态展示；交付会在冲突检查处拒绝。
     }
@@ -299,7 +312,7 @@ export function branchStatus({ cwd, branch }) {
 
   if (project.bootstrap) {
     // 首次接入：分支里的配置就是待确认的信任根，不论改了哪些文件都要人确认。
-    const confirms = confirmFor(project, root, branch);
+    const confirms = confirmFor(root, getMergePlan);
     if (confirms.ok) add("gate", "ok", "首次接入的门禁配置已确认");
     else {
       add("gate", "fail", `首次接入，${when}需要人确认这份门禁配置：Agent 先运行 harness confirm --branch ${branch} 展示摘要；${humanExecutes(`harness confirm --branch ${branch} --yes`)}`);
@@ -323,7 +336,7 @@ export function branchStatus({ cwd, branch }) {
   } else if (gateTouched.length === 0) {
     add("gate", "ok", "本次没有改动门禁配置与规则");
   } else {
-    const confirms = confirmFor(project, root, branch);
+    const confirms = confirmFor(root, getMergePlan);
     const anyConfirm = confirms.ok;
     if (anyConfirm) add("gate", "ok", `门禁改动已确认（${gateTouched.length} 个文件）`);
     else {
@@ -335,7 +348,7 @@ export function branchStatus({ cwd, branch }) {
   if (risk.active) {
     if (risk.observed.length > 0) add("risk", "ok", `观察模式，命中 ${risk.observed.length} 项（不拦截）：${risk.observed.join("；")}`);
     else if (risk.confirmReasons.length === 0) add("risk", "ok", "没有命中需要人确认的风险信号");
-    else if (confirmFor(project, root, branch).ok) add("risk", "ok", `风险改动已确认（${risk.confirmReasons.join("；")}）`);
+    else if (confirmFor(root, getMergePlan).ok) add("risk", "ok", `风险改动已确认（${risk.confirmReasons.join("；")}）`);
     else {
       add("risk", "fail", `${risk.confirmReasons.join("；")}，${when}需要人工确认：Agent 先运行 harness confirm --branch ${branch} 展示摘要；${humanExecutes(`harness confirm --branch ${branch} --yes`)}`);
       block("risk_unconfirmed", "风险改动待确认");
@@ -375,7 +388,7 @@ export function branchStatus({ cwd, branch }) {
   // 本地交付下这次合并会不会顺带推送：与 merge 用同一份判定，让 Agent 不必翻 config.json 也知道推送已在授权内。
   if (delivery.mode === "local") {
     try {
-      const planned = planMergeResult({ project, root, branch });
+      const planned = getMergePlan();
       const after = deliveryAt(root, planned.resultCommit) ?? deliverySettings(undefined);
       const target = mergePushTarget({ bootstrap: project.bootstrap, before: delivery, after });
       if (target) result.pushTarget = { remote: target.remote, mainRef };

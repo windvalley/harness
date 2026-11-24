@@ -25,13 +25,11 @@ import {
   git,
   gitOk,
   isAncestor,
-  isClean,
   mainWorktreeRoot,
   refExists,
   resolveCommit,
   run,
   showBlob,
-  statusShort,
   treeOf,
   worktreeEntries,
 } from "../lib/git.mjs";
@@ -50,6 +48,7 @@ import { commitRangeProblems, commitRuleErrorAt } from "../policy/commit-message
 import { assertBranchPolicy, branchRuleErrorAt } from "../policy/branch-name.mjs";
 import { resolvePolicy } from "../policy/resolve.mjs";
 import { autoCleanDelivered, leftoverWorktrees } from "../worktree/clean.mjs";
+import { mainCheckoutFiles, mainTrackedChanges, mainWorktreeProblems, mainWorktreeReadiness } from "./main-worktree.mjs";
 
 export class MergeError extends Error {
   constructor(message, code = "merge_refused") {
@@ -148,27 +147,9 @@ function clearStaleLock(file) {
   }
 }
 
-/**
- * 主 Worktree 能否接收合并：必须停在主分支、洁净、没有进行中的 git 操作。
- * 合并在这里拒绝；status 与 doctor 提前列出同样的问题，不必等到合并时才发现。
- */
-export function mainWorktreeProblems(project, mainRoot) {
-  const branch = mainBranch(project);
-  const problems = [];
-  const current = git(mainRoot, ["symbolic-ref", "--quiet", "--short", "HEAD"]).stdout.trim();
-  if (current !== branch) problems.push(`主 Worktree 当前不在 ${branch} 分支(实际 ${current || "detached"})`);
-  if (!isClean(mainRoot)) problems.push(`主 Worktree 存在未提交或未跟踪文件，先处理后重试:\n${statusShort(mainRoot)}`);
-  for (const marker of ["MERGE_HEAD", "REBASE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "BISECT_LOG"]) {
-    const probe = git(mainRoot, ["rev-parse", "--git-path", marker]).stdout.trim();
-    const abs = probe.startsWith("/") ? probe : join(mainRoot, probe);
-    if (existsSync(abs)) problems.push(`主 Worktree 存在进行中的 ${marker.replace("_HEAD", "").toLowerCase()} 操作`);
-  }
-  return problems;
-}
-
 export function ensureMainReady(project, mainRoot) {
   const [first] = mainWorktreeProblems(project, mainRoot);
-  if (first) throw new MergeError(first);
+  if (first) throw new MergeError(first, "main_not_ready");
 }
 
 function checkCommitMessages(project, root, baseCommit, branchCommit) {
@@ -259,7 +240,7 @@ export function reviewStaleFiles({ root, review, mainCommit, branchCommit }) {
  * 合并与提交共用的门禁核对。返回固定下来的三个对象：主分支提交、任务提交与预期合并结果的 tree。
  * 任何一项不满足都抛 MergeError，调用方不需要重复判断。
  */
-export async function checkGates({ project, root, branch, log = console.error, dryRun = false, label = "merge" }) {
+export async function checkGates({ project, root, branch, log = console.error, label = "merge" }) {
   try {
     assertBranchPolicy({ project, root, branch, requireBranch: true });
   } catch (error) {
@@ -520,7 +501,6 @@ export async function checkGates({ project, root, branch, log = console.error, d
     log(`[${label}] 风险改动已确认(${risk.confirmReasons.join("；")}；确认人: ${confirmRecord.record.by ?? "user"})`);
   }
 
-  if (dryRun) log(`[${label}] dry-run: 全部门禁通过，未更新主分支`);
   return {
     bootstrap,
     mainRef,
@@ -538,7 +518,6 @@ export async function checkGates({ project, root, branch, log = console.error, d
     review: reviewRecord,
     approval,
     risk: { tier: risk.tier, confirmReasons: risk.confirmReasons, observed: risk.observed },
-    dryRun,
   };
 }
 
@@ -546,22 +525,51 @@ export function describeChange(change) {
   return `${describeDelivery(change.before)} -> ${describeDelivery(change.after)}`;
 }
 
+function checkMainTarget({ project, mainRoot, mainCommit, resultTree, label, log }) {
+  const { problems, notice } = mainWorktreeReadiness(project, mainRoot, { mainCommit, resultTree });
+  if (problems.length > 0) throw new MergeError(problems[0], "main_not_ready");
+  if (notice) log(`[${label}] ${notice}`);
+}
+
+function indexMatches(root, commit) {
+  return git(root, ["diff", "--cached", "--quiet", "--no-ext-diff", "--ignore-submodules=none", commit, "--"]).status === 0;
+}
+
+function checkoutMatches(root, commit) {
+  return indexMatches(root, commit) &&
+    git(root, ["diff", "--quiet", "--no-ext-diff", "--ignore-submodules=none", "--"]).status === 0;
+}
+
+function restoreBootstrapCheckout(root, mainCommit, newHead) {
+  if (resolveCommit(root, "HEAD") !== mainCommit) return "主 Worktree 的 HEAD 已变化，未自动恢复，请先核对状态。";
+  if (indexMatches(root, mainCommit)) return null;
+  // 引用钩子拒绝前 Git 可能已检出目标。只反向检出这份确定的索引，不覆盖钩子或其他进程留下的改动。
+  if (!checkoutMatches(root, newHead)) {
+    return "主 Worktree 的索引或文件与预期检出结果不一致，未自动恢复，请先核对状态。";
+  }
+  const { conflict } = mainCheckoutFiles(root, { mainCommit: newHead, resultTree: mainCommit });
+  if (conflict) return `未自动恢复检出内容：${conflict}`;
+  const undo = git(root, ["read-tree", "-m", "-u", newHead, mainCommit]);
+  return undo.status === 0 ? null : `未能恢复检出内容，请先核对状态：${undo.stderr.trim()}`;
+}
+
 /**
  * 把主分支更新到合并结果。bootstrap 走 git merge --ff-only，让随分支入库的钩子先落在工作区；
  * 其余场景用带合并令牌的 update-ref 加 read-tree，令牌由 harness merge 与 harness sync 生成。
  */
 export function advanceMain({ project, mainRoot, mainRef, mainCommit, newHead, resultTree, bootstrap, branch, log = console.error }) {
+  checkMainTarget({ project, mainRoot, mainCommit, resultTree, label: branch ? "merge" : "sync", log });
   if (bootstrap) {
     // 首次接入用快进合并：git 先检出新文件再更新引用，随分支入库的钩子（例如 husky）此时已是新内容。
     // 共用钩子目录里的原有主分支保护如果没有被接管，会在这里拒绝，报错给出处理方式。
-    const ff = run("git", ["merge", "--ff-only", "--no-edit", newHead], { cwd: mainRoot });
+    if (resolveCommit(mainRoot, "HEAD") !== mainCommit) throw new MergeError(`${mainRef} 在合并过程中前进了，重新运行 harness merge`, "main_moved");
+    const ff = git(mainRoot, ["merge", "--ff-only", "--no-overwrite-ignore", "--no-edit", newHead]);
     if (ff.status !== 0) {
-      // git 先检出文件、再更新引用；引用被钩子拒绝时文件已经换成分支内容。
-      // 合并前已确认主 Worktree 洁净，这里把检出的内容退回主分支，主 Worktree 恢复原样。
-      if (resolveCommit(mainRoot, "HEAD") === mainCommit) run("git", ["reset", "-q", "--hard", mainCommit], { cwd: mainRoot });
+      const restoreProblem = restoreBootstrapCheckout(mainRoot, mainCommit, newHead);
       throw new MergeError(
         [
           `快进 ${mainRef} 失败: ${(ff.stderr || ff.stdout).trim().split("\n").slice(-6).join("\n")}`,
+          ...(restoreProblem ? [restoreProblem] : []),
           "如果是原有的主分支保护拒绝了这次更新：在接入分支重新运行 harness init --take-over 由 harness 接管，提交后重新验证、确认并合并；",
           "或者按原有工具自己的方式合入这个分支。",
         ].join("\n"),
@@ -576,19 +584,32 @@ export function advanceMain({ project, mainRoot, mainRef, mainCommit, newHead, r
     );
     if (update.status !== 0) throw new MergeError(`更新 ${mainRef} 失败: ${update.stderr.trim()}`);
 
-    const sync = run("git", ["read-tree", "-m", "-u", mainCommit, newHead], { cwd: mainRoot });
-    if (sync.status !== 0) {
-      run("git", ["update-ref", "-m", "harness rollback", `refs/heads/${mainRef}`, mainCommit, newHead], {
-        cwd: mainRoot,
+    let checkoutProblem;
+    try {
+      // 引用钩子可能改变索引或本机文件；HEAD 已指向目标，索引和已跟踪文件仍应匹配旧提交。
+      checkoutProblem = !checkoutMatches(mainRoot, mainCommit)
+        ? "主 Worktree 的索引或已跟踪文件在更新引用期间变化"
+        : mainCheckoutFiles(mainRoot, { mainCommit, resultTree }).conflict;
+      if (!checkoutProblem) {
+        const sync = git(mainRoot, ["read-tree", "-m", "-u", mainCommit, newHead]);
+        if (sync.status !== 0) checkoutProblem = sync.stderr.trim() || `git read-tree 失败(exit ${sync.status})`;
+      }
+    } catch (error) {
+      checkoutProblem = error.message;
+    }
+    if (checkoutProblem) {
+      const rollback = git(mainRoot, ["update-ref", "-m", "harness rollback", `refs/heads/${mainRef}`, mainCommit, newHead], {
         env: { ...process.env, [MERGE_TOKEN_ENV]: mainUpdateToken(newHead, mainCommit) },
       });
-      throw new MergeError(`主 Worktree 同步文件失败，已回退 ${mainRef}: ${sync.stderr.trim()}`, "worktree_sync_failed");
+      const state = rollback.status === 0 ? `已回退 ${mainRef}` : `未能回退 ${mainRef}，请先核对状态: ${rollback.stderr.trim()}`;
+      throw new MergeError(`主 Worktree 同步文件失败，${state}: ${checkoutProblem}`, "worktree_sync_failed");
     }
   }
 
   const mainTree = treeOf(mainRoot, "HEAD");
   if (mainTree !== resultTree) throw new MergeError(`更新后 ${mainRef} 的 tree 与预期不一致`, "tree_mismatch");
-  if (!isClean(mainRoot)) throw new MergeError(`更新后主 Worktree 不洁净:\n${statusShort(mainRoot)}`, "worktree_dirty");
+  const tracked = mainTrackedChanges(mainRoot);
+  if (tracked) throw new MergeError(`更新后主 Worktree 有已跟踪文件改动:\n${tracked}`, "worktree_dirty");
 }
 
 /**
@@ -605,7 +626,8 @@ export function afterMainUpdate({ project, root, mainRoot, resultPaths, bootstra
       const hooksPathLine = result.stdout.split("\n").find((line) => line.includes("core.hooksPath"));
       if (hooksPathLine) log(`[${label}] ${hooksPathLine.trim()}`);
       if (result.status !== 0) log(`[${label}] 注意: 刷新本机钩子失败(exit ${result.status})，在主 Worktree 运行 harness install --local: ${result.stderr.trim().slice(-300)}`);
-      if (!isClean(mainRoot)) log(`[${label}] 注意: 刷新后主 Worktree 出现改动，说明分支里的入口不是用当前版本生成的:\n${statusShort(mainRoot)}`);
+      const tracked = mainTrackedChanges(mainRoot);
+      if (tracked) log(`[${label}] 注意: 刷新后主 Worktree 出现已跟踪文件改动，说明分支里的入口不是用当前版本生成的:\n${tracked}`);
     }
   }
   const notes = followUps({ mainRoot, changed: resultPaths, bootstrap, hooksDirBefore });
@@ -719,11 +741,15 @@ export async function mergeTask({ cwd, branch, dryRun = false, log = console.err
       if (healed.state === "switched") log(`[merge] core.hooksPath 被改成了 ${healed.previous ?? "(未设置)"}，已改回 ${healed.target}`);
     }
 
-    const gates = await checkGates({ project, root, branch, log, dryRun });
+    const gates = await checkGates({ project, root, branch, log });
     const { mainCommit, branchCommit, fastForward, resultTree, newHead, resultPaths, gateTouched } = gates;
     // 推送计划在 dry-run 时也算出来，只报告不推送、不做远程预检。
     const plannedTarget = mergePushTarget({ bootstrap, before: deliveryAt(root, mainCommit), after: gates.delivery.after });
-    if (dryRun) return { dryRun: true, fastForward, newHead, resultTree, gateTouched, pushTarget: plannedTarget, postMergeChecks: gates.postMergeChecks };
+    if (dryRun) {
+      checkMainTarget({ project, mainRoot, mainCommit, resultTree, label: "merge", log });
+      log("[merge] dry-run: 全部门禁通过，未更新主分支");
+      return { dryRun: true, fastForward, newHead, resultTree, gateTouched, pushTarget: plannedTarget, postMergeChecks: gates.postMergeChecks };
+    }
 
     const latestMain = resolveCommit(root, mainRef);
     if (latestMain !== mainCommit) {

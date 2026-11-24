@@ -105,7 +105,7 @@ export function locatePath(root, target, { checkIgnore = false } = {}) {
     branch,
     onMainBranch: ["main", "master"].includes(branch),
   };
-  // 被 .gitignore 忽略的文件不影响主 Worktree 是否洁净；已跟踪的文件 check-ignore 不会报忽略。
+  // 已跟踪文件即使匹配忽略规则，check-ignore 也不会报忽略。
   if (checkIgnore) place.ignored = git(top, ["check-ignore", "-q", "--", relative(top, real) || "."]).status === 0;
   return place;
 }

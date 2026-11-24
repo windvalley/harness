@@ -123,7 +123,7 @@ describe("主 Worktree 只用来合并", () => {
     assert.equal(git(repo.root, "status", "--porcelain"), "", "合并后主 Worktree 洁净");
   });
 
-  test("status 与 doctor 提前指出主 Worktree 未就绪，不必等到合并时才发现", () => {
+  test("status 按合并结果区分本地残留与冲突，doctor 只提示有待检查的文件", () => {
     const { repo, linked } = setup();
     write(linked, "a.txt", "a\n");
     // Linked Worktree 的路径是真实路径，辅助函数按仓库根目录找不到隔离环境，显式传入。
@@ -134,11 +134,22 @@ describe("主 Worktree 只用来合并", () => {
     assert.match(clean.stdout, /\[ok\] main-worktree/);
 
     write(repo.root, "stray.txt", "x\n");
-    const dirty = repo.cli("status", "--branch", "task/a");
-    assert.match(dirty.stdout, /\[FAIL\] main-worktree: 主 Worktree 存在未提交或未跟踪文件/);
-    assert.match(dirty.stdout, /主 Worktree 未就绪/);
+    const safe = repo.cli("status", "--branch", "task/a");
+    assert.match(safe.stdout, /\[!!\] main-worktree: .*保留/s);
+    assert.match(safe.stdout, /stray\.txt/);
+    assert.doesNotMatch(safe.stdout, /主 Worktree 未就绪/);
     const report = repo.cli("doctor");
-    assert.match(report.stdout, /\[!!\] main-worktree: .*stray\.txt/s);
+    assert.match(report.stdout, /\[ok\] main-worktree: .*待核对.*stray\.txt/s);
+
+    write(repo.root, "a.txt", "本机内容\n");
+    const conflict = repo.cli("status", "--branch", "task/a");
+    assert.match(conflict.stdout, /\[FAIL\] main-worktree: .*路径冲突.*a\.txt/s);
+    assert.match(conflict.stdout, /主 Worktree 未就绪/);
+
+    write(repo.root, "README.md", "未提交\n");
+    const dirty = repo.cli("status", "--branch", "task/a");
+    assert.match(dirty.stdout, /\[FAIL\] main-worktree: .*已跟踪.*README\.md/s);
+    assert.match(repo.cli("doctor").stdout, /\[!!\] main-worktree: .*README\.md/s);
   });
 
   test("一条命令里先去 Linked Worktree 再回主 Worktree，后面的段按主 Worktree 判定", () => {
@@ -239,7 +250,11 @@ describe("主 Worktree 只用来合并", () => {
   test("解释器行内脚本无法确定写入目标：在主 Worktree 里一律拒，在别处引用主 Worktree 路径时拒", () => {
     const { repo, root, linked } = setup();
     const script = (target) => `python3 - <<'PY'\nopen('${target}', 'w').write('x')\nPY`;
-    const inRoot = [script("README.md"), `python3 -c "open('README.md','w')"`, `node -e "require('fs').writeFileSync('README.md','x')"`, `ruby -e 'File.write("README.md","x")'`, `echo "print(1)" | python3`, `python3 <<EOF\nprint(1)\nEOF`];
+    const inRoot = [
+      script("README.md"), `python3 -c "open('README.md','w')"`, `node -e "require('fs').writeFileSync('README.md','x')"`,
+      `ruby -e 'File.write("README.md","x")'`, `echo "print(1)" | python3`, `python3 <<EOF\nprint(1)\nEOF`,
+      `echo "print(1)" |& python3`, `echo "print(1)" |\n# 管道续行\npython3`,
+    ];
     for (const command of inRoot) {
       const refused = claudeHook(repo, bashCall(root, command));
       assert.equal(refused.status, 2, command);
@@ -270,6 +285,45 @@ describe("主 Worktree 只用来合并", () => {
     assert.match(codex(root, script("README.md")).stdout, /main-worktree-edit/);
     assert.match(codex(linked, script(join(root, "README.md"))).stdout, /main-worktree-edit/);
     assert.equal(codex(linked, script("README.md")).stdout.trim(), "", "写自己的 Worktree 放行");
+  });
+
+  test("两个 Shell 钩子都识别紧贴参数的重定向，且 git -C 不改变重定向落点", () => {
+    const { repo, root, linked } = setup();
+    const checklist = ".harness/acceptance/>alert-center-polish.md";
+    const hooks = [
+      (cwd, command) => claudeHook(repo, bashCall(cwd, command)).stderr,
+      (cwd, cmd) => sh(root, join(root, ".harness/bin/harness"), ["hook", "--client", "codex"], repo.env,
+        JSON.stringify({ tool_name: "exec_command", tool_input: { cmd }, cwd })).stdout,
+    ];
+    const deny = [
+      [root, `git log --oneline -- ${checklist}`],
+      [root, "git show main:.harness/acceptance/>stray.md"],
+      [root, `git -C "${linked}" show main:.harness/acceptance/>stray.md`],
+      [root, `git -C "${linked}" show main:README.md>"local notes.txt"`],
+      [root, `cd "${root}/src" && git -C "${linked}" show main:README.md>>notes.txt`],
+      [root, "printf '%s' 'x'2>notes.txt"],
+      [root, "echo x&>notes.txt"],
+      [root, "echo x&>>notes.txt"],
+      [root, "echo x>|notes.txt"],
+      [root, "echo x >&notes.txt"],
+      [root, "cat<>notes.txt"],
+    ];
+    const allow = [
+      [root, `git log --oneline -- '${checklist}'`],
+      [root, "git show 'main:.harness/acceptance/>stray.md'"],
+      [root, 'git show main:.harness/acceptance/">"stray.md'],
+      [root, "git show main:.harness/acceptance/\\>stray.md"],
+      [root, "git show main:README.md 2>&1 >/dev/null"],
+      [root, 'echo x >&"2" 3>&-'],
+      [root, "cat<README.md"],
+      [root, "cat <<'EOF'\na>notes.txt\nEOF"],
+      [root, "git status # > notes.txt"],
+      [linked, `git -C "${root}" show main:README.md>notes.txt`],
+    ];
+    for (const hook of hooks) {
+      for (const [cwd, command] of deny) assert.match(hook(cwd, command), /main-worktree-edit/, command);
+      for (const [cwd, command] of allow) assert.equal(hook(cwd, command).trim(), "", command);
+    }
   });
 
   test("未启用 main-worktree 时 Shell 写入照常放行；自定义 write-protect 不带 includeShell 仍只管写文件工具", () => {

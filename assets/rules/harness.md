@@ -312,7 +312,9 @@ harness review-plan --branch <任务分支> [--all]
 git 钩子调用主 Worktree 的入口，任务分支改不了门禁代码自己的行为。
 `.harness/config.json` 配置了 `git.hooksDir` 时，钩子整份生成在那个目录，`core.hooksPath` 指向主 Worktree 里的这一份，所有 Worktree 执行同一份钩子。
 项目自己的检查写在 `git.projectHooks` 目录下的同名可执行脚本里，harness 检查通过后调用，Agent 可以直接维护；生成的钩子不手改，改配置后运行 `harness install` 重新生成。
-`harness merge` 在主 Worktree 里更新主分支，要求它停在主分支、洁净、没有进行中的 git 操作；`harness status` 与 `harness doctor` 会提前列出不满足的项。
+`harness merge` 和 `harness sync` 在主 Worktree 里更新主分支，要求它停在主分支、没有已跟踪文件的未提交改动，也没有进行中的 git 操作。
+未跟踪或被忽略的本机文件只在与本次检出冲突时阻塞，其他文件原样保留，不自动移动、清理或 stash。
+本地交付的 `harness status` 能按计划的合并结果预查冲突；`harness doctor` 没有目标 tree，只提示有待核对的本机文件。
 新项目的 `init` 默认在 `.harness/policy.json` 的 `presets` 里启用 `main-worktree`；已有项目升级不自动开启，可以从 presets 删除来关闭。
 启用后主 Worktree 只用来合并：
 
@@ -321,6 +323,7 @@ git 钩子调用主 Worktree 的入口，任务分支改不了门禁代码自己
 - 任何人都不能在主 Worktree 里提交。
 - 新任务用 `git worktree add -b <任务分支> <路径> <主分支>` 建 Linked Worktree，在那里修改、提交。
   会话停在主 Worktree 时，改 Linked Worktree 里的文件按那个 Worktree 判定；命令按段跟着前面的 `cd` 与 `git -C` 推算所在目录。
+  Shell 重定向按 Shell 所在目录判定，`git -C` 不改变它的落点；未引用的 `>` 即使紧贴参数也会重定向。
   目录无法确定的段（`cd "$变量"`、`cd -`、管道里的 `cd`、`GIT_DIR`）按最严格处理，要在别的 Worktree 执行就写明绝对路径。
 
 ## 例外上报

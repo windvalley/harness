@@ -125,12 +125,20 @@ describe("接入已有项目", () => {
     assert.equal(repo.rawCli("verify", "--branch", "chore/harness-onboard").status, 0);
     assert.equal(repo.rawCli("review", "--branch", "chore/harness-onboard").status, 0);
     assert.equal(repo.rawCli("confirm", "--branch", "chore/harness-onboard", "--yes").status, 0);
+    write(repo.root, "scratch.txt", "本机草稿\n");
+    write(repo.root, "local.log", "本机日志\n");
+    const index = git(repo.root, "ls-files", "--stage");
+    const before = git(repo.root, "status", "--porcelain", "--ignored");
     const merged = repo.rawCli("merge", "--branch", "chore/harness-onboard");
     assert.notEqual(merged.status, 0);
     assert.match(merged.stderr, /bootstrap_update_refused/);
+    assert.match(merged.stderr, /legacy guard/);
     assert.match(merged.stderr, /--take-over/);
     assert.equal(existsSync(join(repo.root, ".harness/config.json")), false, "被拒绝时主 Worktree 保持原样");
-    assert.equal(git(repo.root, "status", "--porcelain", "--", ".", ":(exclude).harness/dsh-plugin"), "");
+    assert.equal(git(repo.root, "status", "--porcelain", "--ignored"), before);
+    assert.equal(git(repo.root, "ls-files", "--stage"), index);
+    assert.equal(readFileSync(join(repo.root, "scratch.txt"), "utf8"), "本机草稿\n");
+    assert.equal(readFileSync(join(repo.root, "local.log"), "utf8"), "本机日志\n");
     assert.equal(git(repo.root, "rev-parse", "main"), git(repo.root, "rev-parse", "chore/harness-onboard~1"));
   });
 

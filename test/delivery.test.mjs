@@ -1241,23 +1241,46 @@ describe("harness sync", () => {
     assert.equal(git(repo.root, "rev-parse", "main"), local);
   });
 
-  test("X7 主 Worktree 不洁净或另一个合并正在进行时不更新主分支", () => {
+  test("X7 交付锁存在时不更新主分支；解锁后同步保留无关本机文件", () => {
     const repo = setup({ delivery: GITHUB });
     const remote = withRemote(repo);
-    remoteCommit(repo, remote, { "docs/x.md": "x\n" });
+    const target = remoteCommit(repo, remote, { "docs/x.md": "x\n" });
     const before = git(repo.root, "rev-parse", "main");
+    write(repo.root, ".git/info/exclude", "*.local\n");
     write(repo.root, "scratch.txt", "手写\n");
-    const dirty = repo.cli("sync");
-    assert.notEqual(dirty.status, 0);
-    assert.match(dirty.stderr, /未提交或未跟踪/);
-    assert.equal(readFileSync(join(repo.root, "scratch.txt"), "utf8"), "手写\n");
-
-    sh(repo.root, "rm", ["scratch.txt"]);
-    writeFileSync(join(repo.env.HARNESS_DATA_DIR, "merge.lock"), String(process.pid));
+    write(repo.root, "docs/settings.local", "本机配置\n");
+    const lock = join(repo.env.HARNESS_DATA_DIR, "merge.lock");
+    write(repo.env.HARNESS_DATA_DIR, "merge.lock", String(process.pid));
     const locked = repo.cli("sync");
     assert.notEqual(locked.status, 0);
     assert.match(locked.stderr, /merge_locked/);
     assert.equal(git(repo.root, "rev-parse", "main"), before);
+    rmSync(lock);
+
+    const synced = repo.cli("sync");
+    assert.equal(synced.status, 0, output(synced));
+    assert.match(synced.stderr, /本次更新会原样保留/);
+    assert.equal(git(repo.root, "rev-parse", "main"), target);
+    assert.equal(readFileSync(join(repo.root, "docs/x.md"), "utf8"), "x\n");
+    assert.equal(readFileSync(join(repo.root, "scratch.txt"), "utf8"), "手写\n");
+    assert.equal(readFileSync(join(repo.root, "docs/settings.local"), "utf8"), "本机配置\n");
+  });
+
+  test("sync 与忽略文件冲突时拒绝，主分支、索引和本机文件不变", () => {
+    const repo = setup({ delivery: GITHUB });
+    const remote = withRemote(repo);
+    remoteCommit(repo, remote, { "docs/x.md": "来自远程\n" });
+    write(repo.root, ".git/info/exclude", "docs/\n");
+    write(repo.root, "docs/x.md", "本机内容\n");
+    const before = git(repo.root, "rev-parse", "main");
+    const index = git(repo.root, "ls-files", "--stage");
+
+    const result = repo.cli("sync");
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /main_not_ready.*路径冲突.*docs\/x\.md/s);
+    assert.equal(git(repo.root, "rev-parse", "main"), before);
+    assert.equal(git(repo.root, "ls-files", "--stage"), index);
+    assert.equal(readFileSync(join(repo.root, "docs/x.md"), "utf8"), "本机内容\n");
   });
 
   test("F2 远程不可达时拒绝同步，本地主分支不变", () => {

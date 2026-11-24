@@ -886,7 +886,7 @@ function pitfallMainWorktreeRefusal(root) {
   const project = loadGuardProject(root);
   if (!project || !resolvePolicy(project.policy).rules.some((rule) => rule.id === "main-worktree-edit")) return null;
   return [
-    "已拦截: 本项目启用了 main-worktree，主 Worktree 只用来合并，在这里记录坑位会让所有任务的 harness merge 因主 Worktree 不洁净而失败",
+    "已拦截: 本项目启用了 main-worktree，主 Worktree 只用于合并、同步与固定环境，不在这里写入任务记录",
     "做法: 到当前任务的 Linked Worktree 里重新运行 harness pitfall add，记录随任务一起提交；还没有任务 Worktree 时先 git worktree add -b <任务分支> <路径> <主分支>",
     "没有可用的任务 Worktree 时，在汇报里写明这个坑，不要手改 .harness/pitfalls.md",
   ].join("\n");

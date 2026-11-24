@@ -61,7 +61,8 @@
         <tr><td><code>push_rejected</code>、<code>request_changed</code></td><td>接续时远端任务分支已变化或原 PR/MR 消失，由人核对当前状态。</td></tr>
         <tr><td><code>review_stale</code></td><td>主分支在评审之后改了本分支也改过的文件；在任务分支上 <code>git merge main</code> 并提交，再重新验证与评审</td></tr>
         <tr><td>验证结果 <code>incomplete</code></td><td>先看每项 <code>reasonCode</code> 与 <code>blockedBy</code>，补齐依赖或修正必验路径映射后重跑受影响检查</td></tr>
-        <tr><td>主 Worktree 不在 main 或不洁净</td><td>Agent 先核对状态并保留已有改动，按项目规则准备主 Worktree；需要处置用户改动时先说明具体对象并取得授权</td></tr>
+        <tr><td>主 Worktree 切离主分支、有已跟踪改动或有进行中的 Git 操作</td><td>Agent 先核对状态并保留已有改动，按项目规则准备主 Worktree；需要处置用户改动时先说明具体对象并取得授权</td></tr>
+        <tr><td>主 Worktree 本机文件与目标 tree 路径冲突</td><td>核对列出的本机文件和目标路径；需要移动或处置用户文件时先取得授权，无关文件不用清理</td></tr>
       </tbody>
     </table></div>
     <p>更多见参考手册的<a href="https://github.com/windvalley/harness/blob/main/docs/reference.md#常见问题">常见问题</a>。手工判定一条命令会不会被拦：<code>harness check --kind shell --command "&lt;命令&gt;"</code>；列出所有生效规则：<code>harness rules</code>。</p>

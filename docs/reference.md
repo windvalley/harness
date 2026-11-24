@@ -793,7 +793,8 @@ harness merge  --branch feature/login   # 本地交付：核对证据与评审�
   - `harness status --post-merge` 列出全仓库到期而未登记的义务，有待办时退出码为 1；`status --branch` 在已合入但待验收时退出码同样为 1。
   - 记录验签失败（例如密钥轮换）时按待办处理，重新登记即可关闭；分支被删除后仍可用原分支名登记。
   - 平台以 squash 或 rebase 方式合入时按内容识别为已合入，规则见“远程交付：提交、同步与本地模式的区别”。
-- `merge` 在哪个 Worktree 里运行都可以，但主 Worktree 必须停在主分支、洁净、没有进行中的 merge、rebase 或 cherry-pick。
+- `merge` 在哪个 Worktree 里运行都可以，但主 Worktree 必须停在主分支，没有已跟踪文件的未提交改动，也没有进行中的 merge、rebase 或 cherry-pick 等 git 操作。
+  未跟踪或忽略的文件只在与本次检出冲突时阻塞；不冲突的文件原样保留。
   只用一个目录工作时，合并前先切回主分支。
 - 合并有冲突时，在任务分支上 `git merge main` 解决冲突并提交，再重新 verify、review。
 - 合并后任务 Worktree 保留，需要时按下面的“清理任务 Worktree”清理。
@@ -1367,6 +1368,7 @@ Agent 运行 `harness confirm --branch <分支>` 并展示只读摘要：涉及�
   `.harness/VERSION` 与入口 shim 锁定的版本不一致时以 `version_mismatch` 拒绝；`.harness/VERSION` 本身也是门禁文件，改它要人确认。
 - 配置与基线取自同一个本地主分支提交：读配置之后主分支被别的合并推进时以 `main_moved` 拒绝，不按旧配置判断新基线。
 - 与 `merge` 共用合并锁、主 Worktree 就绪检查、令牌写入、文件同步与回退；更新后刷新本机安装并执行 `merge.postMergeCommand`，失败时退出码为 3，并说明主分支已经更新。
+- 按实际同步的远程 tree 检查主 Worktree 中的未跟踪和忽略文件；有覆盖风险时拒绝更新，没有冲突则在检出时原样保留。
 - 普通代码改动按“信任平台主分支”导入，不在本机重新验证和评审。
 - 本地交付下同样可用，替代由人用绕过开关手动快进的做法。
 
@@ -1392,8 +1394,8 @@ Agent 应检查差异并说明同步方式和影响，在项目授权范围内�
 - 推送：Agent 推送主分支会被拦截，由人推送；Agent 可以推送任务分支，但不能强推。
   本地交付配置了 `delivery.push` 时例外：`harness merge` 自己推送它核对过的主分支提交，见“交付方式”。
 - 拉取：本地主分支受保护，在主分支上 `git pull` 会被 `reference-transaction` 拒绝。
-  快进拉取被拒时 git 已经把远端的文件检出到工作区，主 Worktree 会留下这些改动。
-  拉取前主 Worktree 是洁净的，残留的就只是远端改动，由人运行 `git reset --hard HEAD` 恢复。
+  快进拉取被拒时 Git 可能已经修改主 Worktree 的索引和文件。
+  不要直接重置工作区；先核对索引和文件，确认需要恢复的内容和已有的本机改动，再由人处理。
 
 同步远端主分支优先用 `harness sync`（见上一节）：它快进、核对门禁改动、刷新本机安装并执行合并后命令。
 下面两种做法保留给没有接入 `delivery` 的场景或需要人工判断的情况。
@@ -1476,7 +1478,10 @@ harness pitfall list --flagged  # 只列命中满 3 次、建议固化的
   中文内容一个字符占 3 个字节，所以实际先碰到字节上限，普通条目大约能放 15 条；这是有意限制每次任务要读的内容量。
   超出时淘汰最久未命中、命中最少的条目；已建议固化的条目不淘汰，剩下的条目全是它们时拒绝新增，提示先由人处理。
 - 文件不在门禁文件之列，追加不触发人工确认，随任务分支提交并一起评审。
-  启用了 `main-worktree` 预设（且没有关掉 `main-worktree-edit`）时，`pitfall add` 在主 Worktree 里拒绝执行并退出码 1：主 Worktree 只用来合并，写入会让所有任务的合并被挡住；到任务 Worktree 里运行，记录随任务一起提交。没有启用时写当前所在的工作区，可以是主分支。`pitfall list` 只读，不受限制。
+  启用了 `main-worktree` 预设（且没有关掉 `main-worktree-edit`）时，`pitfall add` 在主 Worktree 里拒绝执行并退出码 1，以免记录留在主 Worktree 而没有随任务提交。
+  到任务 Worktree 里运行，记录随任务一起提交。
+  没有启用时写当前所在的工作区，可以是主分支。
+  `pitfall list` 只读，不受限制。
   并行分支各自记录会产生合并冲突：保留双方的条目与命中记录即可；文件里残留冲突标记时 `pitfall add` 拒绝写入，`conformance` 的 `context` 判据也会报出。
   两个分支分别新增了同一个坑时合并出两条同名条目，下一次 `pitfall add` 会把它们合成一条。
 - 默认卸载保留这个文件，`uninstall --purge` 才连 `.harness/` 一起删。
@@ -1957,8 +1962,9 @@ harness 内置 16 个用例（`assets/golden/builtin.json`），覆盖预设规�
 
 ### 多个会话并行时：main-worktree
 
-`harness merge` 在主 Worktree 里更新主分支，要求它停在主分支且洁净。
-只要有一个 Agent 在主 Worktree 里切走分支或留下改动，所有任务的合并都会被挡住。
+`harness merge` 与 `harness sync` 在主 Worktree 里更新主分支，要求它停在主分支，没有已跟踪文件的未提交改动（包括暂存、修改和删除），也没有进行中的 git 操作。
+未跟踪或被忽略的文件按更新基线与最终 tree 的检出路径核对：同名、文件与目录的父子冲突，以及 `core.ignoreCase` 启用时的大小写冲突都会阻塞；同一目录下不会被覆盖的文件照常保留。
+预检发现冲突时会列出具体路径，不更新主分支，不自动清理、移动或 stash 本机文件。
 新项目的 `init` 默认在 `.harness/policy.json` 的 `presets` 里启用 `main-worktree`，已有项目升级时不自动添加。
 需要关闭时从 `presets` 删除 `main-worktree`；配置属于门禁改动，合入前由人确认。
 启用后：
@@ -1973,13 +1979,15 @@ harness 内置 16 个用例（`assets/golden/builtin.json`），覆盖预设规�
 `harness merge` 用 `commit-tree` 和快进更新主分支，不经过 `pre-commit`，不受影响。
 需要由人在主 Worktree 手工提交的项目，在 `disabled` 里关掉 `main-worktree-commit`，其余两条照常。
 `main-worktree-edit` 也看 Shell 命令，按写入目标实际落在哪个 Worktree 判定，不看当前目录：
-重定向（`>`、`>>`、`tee`）、`cp`、`mv`、`rm`、`touch`、`mkdir`、`sed -i`、`dd of=`、`find -delete`、`git apply` 这类能静态认出目标的写法，从 Linked Worktree 用绝对路径写回主 Worktree 同样被拒，被忽略的本机文件照旧放行。
+重定向（`>`、`>>` 等）、`tee`、`cp`、`mv`、`rm`、`touch`、`mkdir`、`sed -i`、`dd of=`、`find -delete`、`git apply` 这类能静态认出目标的写法，从 Linked Worktree 用绝对路径写回主 Worktree 同样被拒，被忽略的本机文件照旧放行。
+未引用且未转义的重定向符即使紧贴参数（如 `git show HEAD:README.md>scratch.txt`）也会识别；重定向相对于 Shell 所在目录，`git -C` 不改变它的落点。
 解释器（`python`、`node`、`ruby`、`perl`、`php`、`deno`、`bun`）执行行内脚本（`-c`、`-e`、heredoc、管道喂入）时写到哪里取决于脚本，静态看不出来：
 在主 Worktree 里一律拒；在别处执行时，命令文本引用了主 Worktree 里的绝对路径才拒。
 这是静态检查，不是对任意程序写入的完整限制，下面几种仍可能写进主 Worktree：
 执行文件里的脚本（`python3 tools/x.py`、`bash x.sh`）、脚本里拼出来的路径、`xargs` 或构建工具间接写入。
 需要写入前的完整隔离，要靠宿主的沙箱或文件系统权限（例如只把任务 Worktree 设为可写目录），harness 的实时拦截只能看到命令文本。
-`harness status` 与 `harness doctor` 提示主 Worktree 不洁净属于事后检测，用来发现漏网的写入，不能替代写入前拦截。
+本地交付的 `harness status` 可按计划的合并结果预查路径冲突；远程交付的 `status` 与没有目标 tree 的 `harness doctor` 只提示本机文件待核对。
+这些检查不能替代写入前拦截。
 内置黄金任务里的 `g16-main-worktree-merge-only` 只在启用这个预设时重放，未启用时记为跳过。
 
 ### 由 harness 接管 git 钩子目录：git.hooksDir
@@ -2297,7 +2305,8 @@ harness 防的是 Agent 的误操作，以及被提示注入后常见的绕过�
 | `合并被拒绝(bad_commit_message)` | 分支上有提交不符合提交信息规范；`harness status` 会列出具体提交与不符合的条目，在任务分支改写后再重新 verify、review |
 | `bad_branch_name` | 实际分支名不符合 policy，或交付没有明确的分支来源；按提示修正分支名，核对验收清单路径，再运行 `harness status` |
 | `branch_name_rule_invalid` | 分支命名规则配置错误；按 `doctor` 或拒绝提示修正 policy，不绕过检查把错误规则合入主分支 |
-| `主 Worktree 当前不在 main 分支` 或 `存在未提交或未跟踪文件` | Agent 先核对状态并保留已有改动，再按项目规则准备主 Worktree；需要处置用户改动时说明具体对象并取得授权，不能直接丢弃 |
+| `主 Worktree 当前不在 main 分支`、`已跟踪文件有未提交改动` 或存在进行中的 git 操作 | Agent 先核对状态并保留已有改动，再按项目规则准备主 Worktree；需要处置用户改动时说明具体对象并取得授权，不能直接丢弃 |
+| `主 Worktree 本机文件与目标 tree 路径冲突` | 核对提示中的本机路径和目标路径；需要移动或处置用户文件时先取得授权，无关的未跟踪或忽略文件不用清理 |
 | `本机没有安装门禁锁定的版本` | Agent 工具调用被拦截时，由人在项目目录运行 `node ~/github/harness/bin/harness.mjs install --local`，再让 Agent 继续诊断 |
 | `gate_change_unconfirmed` | Agent 展示 `harness confirm --branch <分支>` 摘要；由人在自己的终端执行 `harness confirm --branch <分支> --yes` |
 | 运行 `confirm --yes` 后主分支没有新提交 | 确认只记录，不合并；告诉 Agent 已确认，让它按交付方式继续：本地交付完成合并，远程交付提交 PR/MR |

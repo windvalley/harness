@@ -3,7 +3,7 @@ import { matchAny } from "../lib/glob.mjs";
 import { agentContinues, humanExecutes } from "../lib/next-step.mjs";
 import { changedPaths, git, gitOk, isAncestor, mainWorktreeRoot, resolveCommit, run } from "../lib/git.mjs";
 import { appendLedger, readRecord } from "../lib/store.mjs";
-import { MergeError, acquireLock, afterMainUpdate, advanceMain, describeChange, mainWorktreeProblems } from "../merge/merge.mjs";
+import { MergeError, acquireLock, afterMainUpdate, advanceMain, describeChange, ensureMainReady } from "../merge/merge.mjs";
 import { ensureHooksPath } from "../install/install.mjs";
 import { CONFIRM_KIND } from "../confirm/confirm.mjs";
 import { divergedGuidance, fetchRemoteMain, pinnedVersionAt } from "./remote.mjs";
@@ -169,8 +169,7 @@ export async function syncTask({ cwd, remote: requestedRemote = null, log = cons
   const policy = project.config.merge ?? {};
   const release = acquireLock(root);
   try {
-    const problems = mainWorktreeProblems(project, mainRoot);
-    if (problems.length > 0) throw new MergeError(problems[0], "main_not_ready");
+    ensureMainReady(project, mainRoot);
 
     const hooks = gitHooksConfig(project.config);
     if (hooks) {

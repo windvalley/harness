@@ -608,18 +608,106 @@ describe("合并门禁", () => {
     assert.match(blocked.stderr, /review_blocked/);
   });
 
-  test("主工作树不干净时拒绝且不丢文件", () => {
-    const repo = setup();
-    repo.branch("task/a", { "a.txt": "a\n" });
-    const head = git(repo.root, "rev-parse", "task/a");
+  test("合并原样保留主 Worktree 的无关及同目录异名本机文件", () => {
+    const repo = setup({ files: { ".gitignore": "*.local\n" } });
+    const head = repo.branch("task/a", { "new/from-task.txt": "task\n" });
     writeReview(repo, head, "approve");
-    write(repo.root, "scratch.txt", "手写内容\n");
+    const local = { "scratch.txt": "手写内容\n", "new/notes.txt": "同目录未跟踪\n", "new/settings.local": "同目录忽略文件\n" };
+    for (const [path, content] of Object.entries(local)) write(repo.root, path, content);
+
+    const result = repo.cli("merge", "--branch", "task/a");
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stderr, /本次更新会原样保留/);
+    assert.equal(git(repo.root, "rev-parse", "main"), head);
+    assert.equal(git(repo.root, "status", "--porcelain", "--untracked-files=no"), "");
+    assert.equal(readFileSync(join(repo.root, "new/from-task.txt"), "utf8"), "task\n");
+    for (const [path, content] of Object.entries(local)) assert.equal(readFileSync(join(repo.root, path), "utf8"), content, path);
+  });
+
+  test("合并拒绝同名、忽略、父子路径、大小写和嵌套 Worktree 冲突", () => {
+    const repo = setup();
+    const head = repo.branch("task/a", {
+      "same.txt": "任务文件\n",
+      "ignored/cache.txt": "任务缓存\n",
+      "parent/child.txt": "任务子文件\n",
+      "replaced": "任务替换目录\n",
+      "case.txt": "任务小写文件\n",
+      "worktrees/nested/would-write.txt": "任务触及 Worktree\n",
+    });
+    writeReview(repo, head, "approve");
+    git(repo.root, "config", "core.ignorecase", "true");
+    write(repo.root, ".git/info/exclude", "ignored/\nworktrees/\n");
+    const nested = join(repo.root, "worktrees/nested");
+    git(repo.root, "worktree", "add", "--detach", nested, "main");
+    const local = {
+      "same.txt": "本机文件\n",
+      "ignored/cache.txt": "本机缓存\n",
+      parent: "本机父级文件\n",
+      "replaced/private.txt": "本机子文件\n",
+      "Case.txt": "本机混合大小写文件\n",
+      "worktrees/nested/README.md": "demo\n",
+    };
+    for (const [path, content] of Object.entries(local)) if (!path.startsWith("worktrees/")) write(repo.root, path, content);
     const before = git(repo.root, "rev-parse", "main");
+    const index = git(repo.root, "ls-files", "--stage");
+    const dryRun = repo.cli("merge", "--branch", "task/a", "--dry-run");
+    assert.notEqual(dryRun.status, 0);
+    assert.match(dryRun.stderr, /main_not_ready/);
+    assert.doesNotMatch(dryRun.stderr, /全部门禁通过/);
     const result = repo.cli("merge", "--branch", "task/a");
     assert.notEqual(result.status, 0);
-    assert.match(result.stderr, /未提交或未跟踪/);
+    assert.match(result.stderr, /main_not_ready.*路径冲突/s);
+    for (const path of ["same.txt", "ignored/cache.txt", "parent", "Case.txt"]) assert.ok(result.stderr.includes(path), result.stderr);
+    assert.match(result.stderr, /replaced（目标 replaced）/);
+    assert.match(result.stderr, /worktrees\/nested（目标 worktrees\/nested\/would-write\.txt）/);
     assert.equal(git(repo.root, "rev-parse", "main"), before);
-    assert.equal(readFileSync(join(repo.root, "scratch.txt"), "utf8"), "手写内容\n");
+    assert.equal(git(repo.root, "ls-files", "--stage"), index);
+    assert.equal(git(nested, "rev-parse", "HEAD"), before);
+    assert.equal(existsSync(join(nested, "would-write.txt")), false);
+    for (const [path, content] of Object.entries(local)) assert.equal(readFileSync(join(repo.root, path), "utf8"), content, path);
+  });
+
+  test("合并仍拒绝主 Worktree 已跟踪文件的修改、暂存和删除", () => {
+    const repo = setup({ files: { "gone.txt": "原内容\n" } });
+    const head = repo.branch("task/a", { "a.txt": "任务文件\n" });
+    writeReview(repo, head, "approve");
+    write(repo.root, "README.md", "未暂存\n");
+    write(repo.root, "staged.txt", "已暂存\n");
+    git(repo.root, "add", "staged.txt");
+    rmSync(join(repo.root, "gone.txt"));
+    const before = git(repo.root, "rev-parse", "main");
+    const index = git(repo.root, "ls-files", "--stage");
+    const result = repo.cli("merge", "--branch", "task/a");
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /已跟踪文件有未提交改动/);
+    for (const entry of ["M README.md", "D gone.txt", "A  staged.txt"]) assert.ok(result.stderr.includes(entry), result.stderr);
+    assert.equal(git(repo.root, "rev-parse", "main"), before);
+    assert.equal(git(repo.root, "ls-files", "--stage"), index);
+    assert.equal(readFileSync(join(repo.root, "README.md"), "utf8"), "未暂存\n");
+    assert.equal(existsSync(join(repo.root, "gone.txt")), false);
+  });
+
+  test("引用更新期间出现冲突文件或已跟踪改动时回退主分支，保留本机内容", () => {
+    for (const path of ["incoming.local", "README.md"]) {
+      const repo = setup();
+      const target = repo.branch("task/a", { "incoming.local": "来自任务\n" });
+      writeReview(repo, target, "approve");
+      write(repo.root, ".git/info/exclude", "*.local\n");
+      const before = git(repo.root, "rev-parse", "main");
+      const index = git(repo.root, "ls-files", "--stage");
+      const hook = join(repo.root, ".git/hooks/reference-transaction");
+      const original = readFileSync(hook, "utf8");
+      writeFileSync(hook, original.replace("\n", `\nif [ "$1" = committed ] && [ "$(git rev-parse HEAD)" = ${target} ]; then\n  printf 'local edit\\n' > ${path}\nfi\n`));
+
+      const result = repo.cli("merge", "--branch", "task/a");
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /worktree_sync_failed.*已回退 main/s);
+      assert.match(result.stderr, path === "README.md" ? /已跟踪文件.*变化/ : /路径冲突.*incoming\.local/s);
+      assert.equal(git(repo.root, "rev-parse", "main"), before);
+      assert.equal(git(repo.root, "ls-files", "--stage"), index);
+      assert.equal(readFileSync(join(repo.root, path), "utf8"), "local edit\n");
+      if (path === "README.md") assert.equal(existsSync(join(repo.root, "incoming.local")), false);
+    }
   });
 
   test("冲突时拒绝并列出冲突文件", () => {
