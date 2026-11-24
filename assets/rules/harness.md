@@ -52,7 +52,8 @@
 先按 `core.md` 判断任务分级：直接实施的任务从第 1 步开始；先方案后实施的任务，方案经用户授权后再从第 1 步开始。
 
 1. 按项目规则准备任务分支和工作环境，需要 Worktree 时由 Agent 创建或复用符合隔离要求的目录。
-   新建分支遵循 `.harness/policy.json` 的 `branch-name` 规则；提交前和交付前共用同一份判定，`status` 只读展示结果。
+   新建分支遵循 `.harness/policy.json` 的 `branch-name` 规则；客户端实时钩子能确定仓库和分支名时会在命令执行前检查。
+   提交前和交付前仍共用同一份判定，`status` 只读展示结果。
    无论任务大小，实现前先按 `.harness/templates/acceptance.md` 写验收清单；直接实施只写适用的正常结果、禁止行为与失败结果，不需要另写 spec/plan，也不新增实施授权。
    在任务分支里实现并提交，提交信息按项目规范，`commit-msg` 钩子按 `.harness/policy.json` 的 `commit-message` 规则校验，`verify` 与 `review` 也会在动手前再判一次。
    提交后、`harness verify` 之前按 `method-review.md` 自审，发现问题先改完再提交一次，然后去验证。

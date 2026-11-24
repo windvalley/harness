@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import { chmodSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
 import { APPROVE, CONFIG, commit, fakeReviewer, git, makeRepo, sh, write, writeReview } from "./helpers.mjs";
@@ -38,6 +38,13 @@ function hookCommit(repo, branch) {
   write(repo.root, "probe.txt", "probe\n");
   git(repo.root, "add", "probe.txt");
   return sh(repo.root, "git", ["commit", "-q", "-m", MESSAGE], repo.env);
+}
+
+function codexShell(repo, cmd, { cwd = repo.root, workdir } = {}) {
+  const payload = { cwd, tool_name: "exec_command", tool_input: { cmd, workdir } };
+  const result = sh(repo.root, join(repo.root, ".harness/bin/harness"), ["hook", "--client", "codex"], repo.env, JSON.stringify(payload));
+  assert.equal(result.status, 0, result.stderr);
+  return result.stdout ? JSON.parse(result.stdout).hookSpecificOutput : { permissionDecision: "allow" };
 }
 
 function assertDenied(result, code = "bad_branch_name") {
@@ -144,6 +151,83 @@ describe("分支命名 policy 的真实入口", () => {
     assert.match(refused.stderr, /branch-name|bad_branch_name/);
     assert.match(refused.stderr, /task\/bad-name/);
     assert.equal(git(bad.root, "rev-parse", "HEAD"), before, "拒绝时没有产生提交");
+  });
+
+  test("Codex PreToolUse 在创建 worktree 和分支前拒绝，并给出正确名称示例", () => {
+    const repo = setup();
+    const name = "codex/alert-center-polish";
+    const denied = codexShell(repo, `git worktree add -b ${name} ../alert-center main`);
+    assert.equal(denied.hookEventName, "PreToolUse");
+    assert.equal(denied.permissionDecision, "deny");
+    for (const text of [name, RULE.reason, RULE.fix, RULE.example, RULE.id]) {
+      assert.ok(denied.permissionDecisionReason.includes(text), text);
+    }
+    assert.equal(existsSync(join(repo.root, "..", "alert-center")), false);
+    assert.equal(git(repo.root, "branch", "--list", name), "");
+
+    assert.equal(codexShell(repo, "git worktree add -b fix/alert-center-polish ../alert-center main").permissionDecision, "allow");
+    git(repo.root, "worktree", "add", "-b", "fix/alert-center-polish", "../alert-center", "main");
+    assert.equal(git(join(repo.root, "..", "alert-center"), "branch", "--show-current", repo.env), "fix/alert-center-polish");
+  });
+
+  test("创建时采用主分支上的自定义规则，同一规则可以关闭", () => {
+    const rule = { ...RULE, pattern: "^team/ABC-[0-9]+$", example: "team/ABC-123", fix: "使用项目工单前缀" };
+    const repo = setup({ rule });
+    git(repo.root, "checkout", "-qb", "team/ABC-1");
+    commit(repo.root, "test: 写入任务分支自己的 policy", {
+      ".harness/policy.json": JSON.stringify({ rules: [RULE] }),
+    });
+    const denied = codexShell(repo, "git checkout -b feature/login");
+    assert.equal(denied.permissionDecision, "deny");
+    assert.match(denied.permissionDecisionReason, /team\/ABC-123/);
+    assert.equal(codexShell(repo, "git switch --create=team/ABC-2").permissionDecision, "allow");
+
+    const disabled = setup({ rule, disabled: [rule.id] });
+    assert.equal(codexShell(disabled, "git worktree add -b codex/disabled ../disabled main").permissionDecision, "allow");
+  });
+
+  test("只按当前项目的 policy 检查本仓库及其 Linked Worktree 中的创建命令", () => {
+    const repo = setup();
+    const other = makeRepo({ install: false });
+    repos.push(other);
+    git(repo.root, "worktree", "add", "-b", "fix/linked", "../linked tree", "main");
+    const linked = join(repo.root, "..", "linked tree");
+    const create = "worktree add -b codex/followup ../followup main";
+    for (const [command, workdir] of [
+      [`cd "${linked}" && git ${create}`],
+      [`git -C "${linked}" ${create}`],
+      [`git ${create}`, linked],
+    ]) {
+      assert.equal(codexShell(repo, command, { workdir }).permissionDecision, "deny", command);
+    }
+    for (const [command, workdir] of [
+      [`cd "${other.root}" && git ${create}`],
+      [`git -C "${other.root}" ${create}`],
+      [`git ${create}`, other.root],
+      [`cd "$TARGET" && git ${create}`],
+      [`git -C missing -C .. ${create}`],
+      [`git ${create}`, join(repo.root, "missing")],
+    ]) {
+      assert.equal(codexShell(repo, command, { workdir }).permissionDecision, "allow", command);
+    }
+  });
+
+  test("git -C 和 cd -P 按实际目录识别仓库，不将符号链接和上级目录按字面抵消", () => {
+    const repo = setup();
+    const other = makeRepo({ install: false });
+    repos.push(other);
+    const subdir = join(other.root, "nested");
+    mkdirSync(subdir);
+    symlinkSync(subdir, join(repo.root, "foreign"), "dir");
+    for (const prefix of ["-C foreign/..", "-C foreign -C .."]) {
+      assert.equal(git(repo.root, ...prefix.split(" "), "rev-parse", "--show-toplevel"), git(other.root, "rev-parse", "--show-toplevel"));
+      const command = `git ${prefix} worktree add -b codex/foreign ../foreign-worktree main`;
+      assert.equal(codexShell(repo, command).permissionDecision, "allow", command);
+    }
+    const probe = sh(repo.root, "sh", ["-c", "cd -P foreign/.. && git rev-parse --show-toplevel"], repo.env);
+    assert.equal(probe.status, 0, probe.stderr);
+    assert.equal(probe.stdout.trim(), git(other.root, "rev-parse", "--show-toplevel"));
+    assert.equal(codexShell(repo, "cd -P foreign/.. && git switch -c codex/foreign").permissionDecision, "allow");
   });
 
   test("非法名称不阻止内容验证和评审，但通过后仍不能交付", () => {

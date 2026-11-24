@@ -176,8 +176,8 @@
         { "kind": "shell", "command": "git switch -c task/x", "expect": "deny", "rule": "main-worktree-leave-main", "linkedWorktree": false, "onMainBranch": true },
         { "kind": "shell", "command": "git checkout task/x", "expect": "deny", "rule": "main-worktree-leave-main", "linkedWorktree": false, "onMainBranch": true },
         { "kind": "shell", "command": "git switch main", "expect": "allow", "linkedWorktree": false },
-        { "kind": "shell", "command": "git worktree add -b task/x ../x main", "expect": "allow", "linkedWorktree": false, "onMainBranch": true },
-        { "kind": "shell", "command": "git switch -c task/y", "expect": "allow", "linkedWorktree": true },
+        { "kind": "shell", "command": "git worktree add ../x task/x", "expect": "allow", "linkedWorktree": false, "onMainBranch": true },
+        { "kind": "shell", "command": "git switch task/y", "expect": "allow", "linkedWorktree": true },
         { "kind": "commit", "expect": "deny", "rule": "main-worktree-commit", "linkedWorktree": false },
         { "kind": "commit", "expect": "allow", "linkedWorktree": true }
       ]

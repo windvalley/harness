@@ -1,7 +1,7 @@
 import { existsSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import { currentBranch, isLinkedWorktree, locatePath, repoRoot } from "../lib/git.mjs";
-import { loadGuardProject } from "../lib/config.mjs";
+import { loadGuardProject, mainBranch } from "../lib/config.mjs";
 import { appendLedger } from "../lib/store.mjs";
 import { evaluateCall, formatDenial } from "../policy/engine.mjs";
 import { resolvePolicy } from "../policy/resolve.mjs";
@@ -144,7 +144,10 @@ export function guard({ adapter, payload, log = () => {} }) {
       located.context = { ...located.context, planPending: worktreePlanPending({ root: located.root, branch: located.context.branch, project }) };
     }
     if (session) noteBranches(touched, { root: project.root, call: located.call, context: located.context, cwd: resolve(cwd) });
-    result = evaluateCall({ policy: resolved, root: located.root, call: located.call, context: located.context, cwd: resolve(cwd), locate, locateTarget });
+    result = evaluateCall({
+      policy: resolved, root: located.root, call: located.call, context: located.context,
+      cwd: resolve(cwd), locate, locateTarget, mainRef: mainBranch(project),
+    });
     if (result.decision === "deny") break;
   }
   if (session && touched.size > 0) {

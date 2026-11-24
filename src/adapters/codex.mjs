@@ -30,7 +30,8 @@ export const codex = {
     const input = payload.tool_input ?? {};
     if (SHELL_TOOLS.has(tool)) {
       const command = input.command ?? input.cmd ?? input.script;
-      return { call: { kind: "shell", command: String(command ?? "") }, tool };
+      const workdir = typeof input.workdir === "string" && input.workdir ? { workdir: input.workdir } : {};
+      return { call: { kind: "shell", command: String(command ?? ""), ...workdir }, tool };
     }
     if (WRITE_TOOLS.has(tool)) {
       const path = input.file_path ?? input.path;

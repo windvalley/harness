@@ -237,6 +237,71 @@ describe("命令判定", () => {
   });
 });
 
+describe("创建分支前检查命名", () => {
+  const rule = { id: "task-name", kind: "branch-name", pattern: "^fix/[a-z-]+$", reason: "分支命名", fix: "使用 fix/ 前缀" };
+  const judge = (command, rules = [rule]) => evaluateCall({
+    policy: { rules }, root: "/repo", call: { kind: "shell", command }, mainRef: "master",
+  });
+
+  test("识别明确建分支的常见参数写法与主分支例外", () => {
+    for (const command of [
+      "git worktree add -qb 'codex/invalid' ../worktree master",
+      'git worktree add --lock --reason "note -b fix/name" -b codex/invalid ../worktree master',
+      "git worktree add -b " + "\\\n  codex/invalid ../worktree master",
+      "git worktree add ../worktree master -b codex/invalid",
+      'git worktree add -b codex/invalid -- "$TARGET" master',
+      "git checkout -bcodex/invalid # 这只是注释",
+      'git switch --create="codex/invalid"',
+      "git status && command git switch -c codex/invalid",
+    ]) {
+      const result = judge(command);
+      assert.equal(result.rule, rule.id, command);
+      assert.match(result.detail, /codex\/invalid/, command);
+    }
+    assert.equal(judge("git switch -c master").decision, "allow");
+    assert.equal(judge("git switch -c main").rule, rule.id);
+  });
+
+  test("不把现有分支、分离检出或无法确认的内容当作新分支", () => {
+    for (const command of [
+      "git worktree add ../existing codex/existing",
+      "git worktree add --detach ../snapshot codex/existing",
+      "git worktree add -B codex/existing ../existing",
+      "git switch -C codex/existing",
+      "git checkout -B codex/existing",
+      "git checkout -- -b codex/filename",
+      "git worktree add -b codex/first -b fix/second ../worktree master",
+      "git worktree add -b codex/first ../worktree master -Bfix/second",
+      "git worktree add -b codex/first --detach ../worktree master",
+      "git switch -c codex/first -Cfix/second",
+      "git switch -c codex/first --create=fix/second",
+      "git switch -c codex/first --no-create",
+      "git checkout -b codex/first master -Bfix/second",
+      'git worktree add --lock --reason "-b" ../existing codex/existing',
+      'git worktree add --lock --reason="note -b codex/mentioned -- more" -b fix/valid ../worktree master',
+      'git worktree add -b "$BRANCH" ../dynamic master',
+      'git worktree add -b codex/unknown "$OPTIONS" ../dynamic master',
+      "git switch -c $(pick_branch)",
+      'git switch -c "codex/"unknown',
+      "git switch -c '@{-1}'",
+      'echo "git switch -c codex/mentioned"',
+      "echo value # ; git switch -c codex/comment",
+      "echo value\\; git switch -c codex/argument",
+      "cat <<'EOF'\ngit switch -c codex/here-doc\nEOF",
+      "bash -c 'git switch -c codex/script'",
+    ]) assert.equal(judge(command).decision, "allow", command);
+  });
+
+  test("配置错误只在已确认要创建分支时给出修正提示", () => {
+    const invalid = [{ ...rule, pattern: "[" }];
+    assert.equal(judge("git status", invalid).decision, "allow");
+    const result = judge("git switch -c fix/example", invalid);
+    assert.equal(result.decision, "deny");
+    assert.match(result.detail, /pattern 正则无效/);
+    assert.match(result.fix, /policy\.json/);
+  });
+});
+
 describe("主 Worktree 只用来合并（main-worktree 预设）", () => {
   const guarded = resolvePolicy({ presets: ["secrets", "git-safety", "gate-self", "main-worktree"], disabled: [], rules: [] });
   const main = { linkedWorktree: false, onMainBranch: true, branch: "main" };

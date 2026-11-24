@@ -37,7 +37,7 @@ Agent 调用工具 ----> [1] 实时拦截：读写文件、执行命令之前按
 
 | 层 | 何时生效 | 管什么 | 覆盖谁 |
 | --- | --- | --- | --- |
-| 实时拦截 | 支持并已启用钩子的客户端调用工具之前 | 读取密钥、改写门禁入口、不可逆的 git 操作、绕过开关 | 已正确接入钩子的客户端 |
+| 实时拦截 | 支持并已启用钩子的客户端调用工具之前 | 读取密钥、改写门禁入口、不可逆的 git 操作、绕过开关、明确新建的任务分支名称 | 已正确接入钩子的客户端 |
 | git 钩子 | 本机钩子安装并生效时的提交与引用更新 | 分支命名、提交信息、暂存的密钥文件、主分支的写入 | 经过本机 git 钩子的客户端和人 |
 | 受控交付 | 通过 `harness merge` 或 `harness submit` 交付时 | 验证证据、独立评审、实施授权、门禁改动与交付设置变化的人工确认 | 使用 harness 交付命令的任务 |
 
@@ -708,10 +708,15 @@ Agent 按规则准备工作环境、执行验证与独立评审，并在交付�
 
 | 位置 | 什么时候 | 不合规时 |
 | --- | --- | --- |
+| Agent 实时拦截（`PreToolUse`） | 对本仓库执行可静态识别的 `git worktree add -b`、`git switch -c`（`--create`）或 `git checkout -b` 之前 | 拒绝该工具调用，提示实际名称、规则和命名示例（如已配置） |
 | `pre-commit` 钩子 | 每次提交，包括手工提交 | 拒绝提交，不产生提交 |
 | `harness status` | 只读检查 | 列一项 `branch-name` 并标 `FAIL` |
 | `harness merge`、`harness submit` | 交付之前 | 以 `bad_branch_name` 再次拒绝，绕过钩子或提交后改名也不能通过 |
 | `harness doctor` | 项目诊断 | 规则配置错误时显示 `project:branch-name` |
+
+提前检查要求客户端工具钩子已启用，并且能从直接命令确定目标是当前仓库及其新建分支的名称。
+已有分支的挂载、分离检出、可能重置分支的 `-B` / `-C`、隐式建分支、脚本或动态参数不由这层命名检查拒绝。
+未经过工具钩子的操作不受提前检查约束，后续的提交与交付检查仍然生效。
 
 `verify`、`review` 面向提交内容，不因分支名称不合规而拒绝；任务分支提议的规则配置错误仍会在开始检查或调用评审者前报出，避免错误配置进入主分支。
 检查前先按 Git 解析实际分支：`HEAD` 使用当前分支，`refs/heads/feature/login` 使用 `feature/login`，远程跟踪引用去掉实际远程名前缀后判断。
@@ -1885,7 +1890,7 @@ TDD 当前实现与还原实现的测试、coverage 子命令同样保留已知�
 | `shell-forbid` | 命令 | `patterns`、`scope` | 实时拦截 |
 | `shell-secret-access` | 命令里出现密钥文件 | `patterns`、`allowVerbs` | 实时拦截 |
 | `commit-message` | 提交信息 | `pattern`、`types`、`lang`、`header`、`body`、`forbidPatterns`、`example`，见“提交信息” | `commit-msg`；`verify`、`review` 前置检查；`status`；合并 |
-| `branch-name` | 任务分支命名 | `pattern`、`example`，见“分支命名” | `pre-commit` 提前拒绝；交付前最终检查；`status` 只读展示；`doctor` 配置诊断 |
+| `branch-name` | 任务分支命名 | `pattern`、`example`，见“分支命名” | Agent 建分支前实时拦截；`pre-commit` 与交付检查兜底；`status` 只读展示；`doctor` 配置诊断 |
 | `commit-forbid` | 能否在当前位置提交 | `when` | `pre-commit` |
 
 - 路径字段是相对仓库根的 glob；`patterns`、`pattern` 是 JavaScript 正则，写在 JSON 里反斜杠要写两次。

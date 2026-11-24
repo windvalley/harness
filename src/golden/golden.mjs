@@ -1,4 +1,4 @@
-import { loadCurrentProject, loadProject } from "../lib/config.mjs";
+import { loadCurrentProject, loadProject, mainBranch } from "../lib/config.mjs";
 import { repoRoot } from "../lib/git.mjs";
 import { appendLedger } from "../lib/store.mjs";
 import { evaluateCall } from "../policy/engine.mjs";
@@ -10,7 +10,7 @@ import { resolveGolden } from "./builtin.mjs";
 // 结果因此与 harness golden 在哪个 Worktree 里运行无关。
 const DEFAULT_CONTEXT = { linkedWorktree: true, onMainBranch: false };
 
-function checkPolicy(task, resolved, root) {
+function checkPolicy(task, resolved, project) {
   const failures = [];
   for (const [index, step] of (task.steps ?? []).entries()) {
     const calls = step.paths
@@ -21,7 +21,8 @@ function checkPolicy(task, resolved, root) {
     for (const call of calls) {
       const result = evaluateCall({
         policy: resolved,
-        root,
+        root: project.root,
+        mainRef: mainBranch(project),
         call,
         context: {
           linkedWorktree: step.linkedWorktree ?? DEFAULT_CONTEXT.linkedWorktree,
@@ -89,7 +90,7 @@ export function runGolden({ cwd, source = "main" }) {
     }
     const failures =
       task.kind === "policy"
-        ? checkPolicy(task, resolved, root)
+        ? checkPolicy(task, resolved, project)
         : task.kind === "verify-plan"
           ? checkVerifyPlan(task, project, root)
           : [`未知的黄金任务类型 ${task.kind}`];

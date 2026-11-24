@@ -552,9 +552,10 @@ describe("安装与自检", () => {
     assert.match(golden.stdout, /SKIP g04-recursive-delete.*项目停用/);
   });
 
-  test("启用可选预设后，起始黄金任务里对应的用例参与重放", () => {
+  test("启用可选预设后，使用自定义分支命名也能重放对应的黄金任务", () => {
     const presets = ["secrets", "git-safety", "gate-self", "main-worktree", "plan-first"];
-    const repo = makeRepo({ project: { ".harness/policy.json": { version: 1, presets, disabled: [], rules: [] } } });
+    const rules = [{ id: "team-branch-name", kind: "branch-name", pattern: "^team/ABC-[0-9]+$", reason: "按工单命名", fix: "使用 team/ABC- 工单前缀" }];
+    const repo = makeRepo({ project: { ".harness/policy.json": { version: 1, presets, disabled: [], rules } } });
     repos.push(repo);
     const golden = repo.cli("golden");
     assert.equal(golden.status, 0, golden.stdout + golden.stderr);

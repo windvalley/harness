@@ -22,7 +22,8 @@
 fix/123-login-timeout
 docs/update-install-guide</code></pre></div>
     <p>默认规则允许数字工单号，拒绝客户端名称前缀、大小写混用和下划线。需要 <code>release/</code>、<code>hotfix/</code> 或其他格式时，修改项目 policy 中的 <code>pattern</code> 并同步原规范说明；关闭规则沿用 <code>disabled</code>。</p>
-    <p><code>pre-commit</code> 提前拒绝非法名称，<code>merge</code>、<code>submit</code> 在交付前做最终检查，<code>status</code> 只读展示，<code>doctor</code> 检查配置，判定共用同一份实现。手工提交同样受钩子检查，绕过钩子或提交后改名仍会在交付前被拒绝。</p>
+    <p>客户端启用实时钩子后，<code>git worktree add -b</code>、<code>git switch -c</code> 和 <code>git checkout -b</code> 在仓库和新分支名可以静态确定时，会在执行前检查。已有分支的挂载、分离检出和无法静态确定的建分支命令不由这层拒绝。</p>
+    <p><code>pre-commit</code> 仍在提交时拒绝不合规名称，<code>merge</code>、<code>submit</code> 在交付前做最终检查，<code>status</code> 只读展示，<code>doctor</code> 检查配置。手工提交同样受钩子检查，绕过钩子或提交后改名仍会在交付前被拒绝。</p>
     <p><code>verify</code>、<code>review</code> 面向提交内容，不因分支名称不合规而拒绝，规则配置错误仍会提前报出。只改分支名时核对验收清单路径和 <code>status</code>，内容证据与评审仍有效时直接复用。</p>
     <p>门禁先解析实际分支名称，支持 <code>HEAD</code>、完整分支引用和远程跟踪分支；配置主分支豁免任务命名要求，原主分支保护保持生效。SHA、tag 和 detached HEAD 可做纯内容验证与评审，但不代表命名通过，启用规则后的交付必须有明确分支来源，detached HEAD 提交会被拒绝。</p>
     <p>实际判定取主分支 policy，任务分支不能通过修改自己的配置放行。项目命名要求直接维护在 policy，规则变更经人工确认合入后生效；<code>upgrade</code> 更新指引并保留项目 policy。字段错误、无效正则或重复规则会在进入主分支前被拒绝，详见<a href="https://github.com/windvalley/harness/blob/main/docs/reference.md#分支命名">分支命名参考</a>。</p>

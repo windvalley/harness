@@ -825,7 +825,7 @@ function cmdCheck(argv) {
       ? { kind: "shell", command: values.command ?? "" }
       : { kind: values.kind, path: values.path, content: values.content, glob: values.glob };
   const context = { onMainBranch: values["on-main"], linkedWorktree: values["linked-worktree"], ignored: values.ignored };
-  const result = evaluateCall({ policy: resolved, root: project.root, call, context });
+  const result = evaluateCall({ policy: resolved, root: project.root, call, context, mainRef: mainBranch(project) });
   if (result.decision === "deny") {
     process.stderr.write(`${formatDenialText(result)}\n`);
     return 1;

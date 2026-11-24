@@ -1,7 +1,9 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, relative, resolve } from "node:path";
+import { isAbsolute, relative, resolve, sep } from "node:path";
+import { commonDir } from "../lib/git.mjs";
 import { matchAny } from "../lib/glob.mjs";
+import { branchNameProblems, resolveBranchRule } from "./branch-name.mjs";
 
 const WRAPPERS = new Set([
   "sudo",
@@ -81,7 +83,7 @@ export function evaluatePath({ policy, root, relPath, access, content, existingH
 }
 
 /** 按 shell 分隔符切开命令，命令段与分隔符按出现顺序交替给出：{ seg } 或 { op }。 */
-function tokenizeCommand(command) {
+function tokenizeCommand(command, { direct = false } = {}) {
   const items = [];
   let current = "";
   let quote = "";
@@ -92,9 +94,15 @@ function tokenizeCommand(command) {
   };
   for (let i = 0; i < command.length; i++) {
     const ch = command[i];
+    if (direct && ch === "\\" && quote !== "'") {
+      const next = command[++i];
+      if (next === undefined) return [];
+      if (next !== "\n") current += ch + next;
+      continue;
+    }
     if (quote) {
       current += ch;
-      if (ch === quote && command[i - 1] !== "\\") quote = "";
+      if (ch === quote && (direct || command[i - 1] !== "\\")) quote = "";
       continue;
     }
     if (ch === '"' || ch === "'") {
@@ -102,6 +110,14 @@ function tokenizeCommand(command) {
       current += ch;
       continue;
     }
+    if (direct && ch === "#" && (!current || /\s$/.test(current))) {
+      i = command.indexOf("\n", i);
+      if (i === -1) break;
+      flush("\n");
+      continue;
+    }
+    // 提前校验只看直接命令，不在子 shell、重定向、管道或条件分支里推测参数和目录。
+    if (direct && ("`(){}<>|".includes(ch) || (ch === "&" && command[i + 1] !== "&"))) return [];
     if (ch === "&" || ch === "|") {
       const doubled = command[i + 1] === ch;
       if (doubled) i += 1;
@@ -122,6 +138,7 @@ function tokenizeCommand(command) {
     }
     current += ch;
   }
+  if (direct && quote) return [];
   flush();
   return items;
 }
@@ -208,15 +225,48 @@ function resolveDir(base, word) {
   return base === null ? null : resolve(base, text);
 }
 
+function physicalDirectory(base, text) {
+  if (text === null || (base === null && !isAbsolute(text))) return null;
+  try {
+    // 保留路径中的 ..，让文件系统先处理它前面的符号链接。
+    const dir = realpathSync.native(isAbsolute(text) ? text : `${base}${sep}${text}`);
+    return statSync(dir).isDirectory() ? dir : null;
+  } catch {
+    return null;
+  }
+}
+
 const WORD = /"(?:[^"\\]|\\.)*"|'[^']*'|\S+/g;
+// 同一个 shell 词可以包含引号，例如 --reason="里边的 -b 不是选项"。
+const DIRECT_WORD = /(?:"(?:[^"\\]|\\.)*"|'[^']*'|\\.|[^\s"'\\])+/g;
 const CONTROL_PREFIX = /^(?:(?:if|then|else|elif|do|while|until|!|time|builtin|command)\s+)+/;
 
 /** cd 类命令改到哪个目录：不是 cd 返回 undefined，目录无法确定返回 null。 */
-function cdTarget(norm, dir) {
-  const match = norm.replace(CONTROL_PREFIX, "").match(/^(cd|pushd|popd)(?:\s+(.*))?$/);
+function cdTarget(norm, dir, { direct = false } = {}) {
+  const match = norm.replace(CONTROL_PREFIX, "").match(/^(cd|pushd|popd)(?:\s+(.*))?$/s);
   if (!match) return undefined;
   if (match[1] === "popd") return null;
-  const words = (match[2] ?? "").match(WORD) ?? [];
+  const words = (match[2] ?? "").match(direct ? DIRECT_WORD : WORD) ?? [];
+  if (direct) {
+    if (match[1] !== "cd") return null;
+    let physicalMode = false;
+    while (words.length > 0) {
+      const option = literalWord(words[0]);
+      if (!option?.startsWith("-")) break;
+      words.shift();
+      if (option === "--") break;
+      if (!/^-[LP]+$/.test(option)) return null;
+      physicalMode = option.endsWith("P");
+    }
+    if (words.length !== 1) return null;
+    const text = literalWord(words[0]);
+    if (!text || (process.env.CDPATH && !isAbsolute(text) && !/^\.\.?(?:\/|$)/.test(text))) return null;
+    const physical = physicalDirectory(dir, text);
+    if (physicalMode) return physical;
+    // 逻辑 cd 会先折叠 ..；两种路径得到不同目录时不推定 shell 的逻辑工作目录。
+    const logical = resolveDir(dir, words[0]);
+    return physical !== null && physicalDirectory(null, logical) === physical ? logical : null;
+  }
   while (/^-[LPe@]+$|^--$/.test(words[0] ?? "")) words.shift();
   if (words.length === 0) return match[1] === "cd" ? homedir() : null;
   if (words.length > 1) return null;
@@ -226,14 +276,26 @@ function cdTarget(norm, dir) {
 const GIT_GLOBAL_OPTIONS =
   /\bgit\s+((?:(?:-C\s+(?:"[^"]*"|'[^']*'|\S+)|-c\s+\S+|--git-dir(?:=|\s+)\S+|--work-tree(?:=|\s+)\S+|--no-pager|-P|--no-optional-locks|--literal-pathspecs)\s+)+)/;
 
+const INDIRECT_SHELL = /^(?:\.\s|(?:source|eval|exec|export|unset|set|if|then|elif|else|fi|while|until|for|select|case|esac|function|do|done)\b)/;
+
 /** git 命令实际作用的目录：-C 依次叠加；--git-dir、--work-tree 与 GIT_DIR 之类的环境变量让目录无法确定。 */
-function gitDirOf(raw, dir) {
+function gitDirOf(raw, dir, { direct = false } = {}) {
   if (/(?:^|\s)GIT_(?:DIR|WORK_TREE)=/.test(raw)) return null;
-  const options = raw.match(GIT_GLOBAL_OPTIONS);
-  if (!options) return dir;
+  const command = direct ? stripEnvAssignments(raw).replace(/^command\s+/, "") : raw;
+  const options = command.match(GIT_GLOBAL_OPTIONS);
+  if (!options || (direct && options.index !== 0)) return dir;
   if (/--git-dir|--work-tree/.test(options[1])) return null;
   let current = dir;
-  for (const option of options[1].matchAll(/-C\s+("[^"]*"|'[^']*'|\S+)/g)) current = resolveDir(current, option[1]);
+  for (const option of options[1].matchAll(/-C\s+("[^"]*"|'[^']*'|\S+)/g)) {
+    if (!direct) {
+      current = resolveDir(current, option[1]);
+      continue;
+    }
+    const path = literalWord(option[1]);
+    if (path === "") continue;
+    current = physicalDirectory(current, path);
+    if (current === null) break;
+  }
   return current;
 }
 
@@ -242,8 +304,8 @@ function gitDirOf(raw, dir) {
  * cd 改变同一 shell 里后续段的目录；括号子 shell、反引号、bash -c、eval 与 $() 里的 cd 不外溢；
  * 管道或后台执行的 cd 是否生效取决于 shell，之后的目录记为无法确定。
  */
-export function locateSegments(command, start, depth = 0) {
-  const items = tokenizeCommand(command);
+export function locateSegments(command, start, { direct = false, depth = 0 } = {}) {
+  const items = tokenizeCommand(command, { direct });
   const result = [];
   const stack = [];
   let dir = start;
@@ -255,17 +317,92 @@ export function locateSegments(command, start, depth = 0) {
     if (op === "`") inBacktick = !inBacktick;
     if (!seg) continue;
     const norm = normalizeSegment(seg);
-    const at = gitDirOf(seg, dir);
+    if (direct && (INDIRECT_SHELL.test(norm) || /(?:^|\s)(?:CDPATH|GIT_COMMON_DIR)=/.test(seg))) return [];
+    const at = gitDirOf(seg, dir, { direct });
     result.push({ raw: seg, norm, dir: at });
-    if (depth < MAX_NESTING) {
-      for (const inner of nestedCommands(seg)) result.push(...locateSegments(inner, at, depth + 1));
+    if (!direct && depth < MAX_NESTING) {
+      for (const inner of nestedCommands(seg)) result.push(...locateSegments(inner, at, { depth: depth + 1 }));
     }
-    const target = cdTarget(norm, dir);
+    const target = cdTarget(direct ? stripEnvAssignments(seg) : norm, dir, { direct });
     if (target === undefined) continue;
     const detached = ["|", "&"].includes(items[i - 1]?.op) || ["|", "&"].includes(items[i + 1]?.op);
     dir = detached ? null : target;
   }
   return result;
+}
+
+const SIMPLE_BRANCH_OPTIONS = /^(?:-[qftl]+|--(?:no-)?(?:quiet|force|track|lock|checkout|guess-remote|relative-paths|guess|progress|ignore-other-worktrees)|--track=(?:direct|inherit))$/;
+
+function branchCreationName(norm) {
+  const match = norm.match(/^(?:command\s+)?git\s+(worktree\s+add|switch|checkout)\s+/);
+  if (!match) return null;
+  const args = norm.slice(match[0].length).match(DIRECT_WORD) ?? [];
+  const worktree = match[1].startsWith("worktree");
+  const switching = match[1] === "switch";
+  const shortFlag = switching ? /^-[qf]*c(.*)$/s : /^-[qf]*b(.*)$/s;
+  let name = null;
+  let positional = 0;
+  for (let i = 0; i < args.length; i++) {
+    const raw = args[i];
+    const word = literalWord(raw);
+    if (word === "--") {
+      if (match[1] === "checkout" && i < args.length - 1) return null;
+      positional += args.length - i - 1;
+      break;
+    }
+
+    const arg = word ?? raw;
+    const short = arg.match(shortFlag);
+    const long = switching ? arg.match(/^--create=(.*)$/s) : null;
+    if (short || long || (switching && word === "--create")) {
+      // 重复选项可能改写名称；@{-N} 会由 Git 按切换历史展开。
+      if (name !== null) return null;
+      const attached = long?.[1] ?? (short?.[1] || null);
+      const operand = attached ?? args[++i] ?? "";
+      name = word !== null && attached !== null ? attached : literalWord(operand);
+      if (!name || name.startsWith("-") || /^@\{-\d+\}$/.test(name)) return null;
+    } else if (worktree && word === "--reason") {
+      if (args[++i] === undefined || literalWord(args[i]) === null) return null;
+    } else if (worktree && arg.startsWith("--reason=")) {
+      if (word === null && literalWord(raw.slice("--reason=".length)) === null) return null;
+    } else if (word !== null && !word.startsWith("-")) {
+      positional += 1;
+    } else if (!SIMPLE_BRANCH_OPTIONS.test(word ?? "")) {
+      // 未知参数、-B/-C、--detach 等不在这一层推测。
+      return null;
+    }
+  }
+  if (worktree ? positional < 1 || positional > 2 : positional > 1) return null;
+  return name;
+}
+
+function evaluateBranchCreation({ policy, command, root, cwd = root, workdir, mainRef }) {
+  if (!rulesOfKind(policy, "branch-name").length) return { decision: "allow" };
+  const start = workdir === undefined ? cwd : physicalDirectory(cwd, workdir);
+  if (start === null) return { decision: "allow" };
+  let projectCommonDir;
+  for (const { norm, dir } of locateSegments(command, start, { direct: true })) {
+    if (dir === null) continue;
+    const name = branchCreationName(norm);
+    if (!name) continue;
+    // 分支建在执行 git 的仓库，不在 worktree add 的目标路径所在的仓库。
+    if (dir !== cwd) {
+      try {
+        if (commonDir(dir) !== (projectCommonDir ??= commonDir(root))) continue;
+      } catch {
+        continue;
+      }
+    }
+    let spec;
+    try {
+      spec = resolveBranchRule(policy);
+    } catch (error) {
+      return deny({ id: "branch-name", reason: "分支命名规则不能用", fix: "请修正 .harness/policy.json 中的 branch-name 规则" }, error.message);
+    }
+    const [problem] = branchNameProblems({ spec, name, mainRef });
+    if (problem) return deny(spec.rule, spec.example ? `${problem}；示例：${spec.example}` : problem);
+  }
+  return { decision: "allow" };
 }
 
 export function ruleApplies(rule, context) {
@@ -525,12 +662,14 @@ function evaluateSearch({ policy, root, call, context }) {
  * 统一入口：所有客户端先把调用归一为 call，再交给这里判定。
  * call.kind 取 shell / write / read / search / commit，客户端差异只留在适配器里；commit 由 git 的 pre-commit 产生。
  */
-export function evaluateCall({ policy, root, call, context = {}, cwd, locate, locateTarget }) {
+export function evaluateCall({ policy, root, call, context = {}, cwd, locate, locateTarget, mainRef = "main" }) {
   switch (call.kind) {
     case "shell": {
       const command = String(call.command ?? "");
       const forbidden = evaluateShell({ policy, command, context, cwd, locate });
       if (forbidden.decision === "deny") return forbidden;
+      const branch = evaluateBranchCreation({ policy, command, root, cwd, workdir: call.workdir, mainRef });
+      if (branch.decision === "deny") return branch;
       return evaluateShellWrites({ policy, command, context, cwd, locate, locateTarget });
     }
     case "write":
