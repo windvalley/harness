@@ -1,153 +1,13 @@
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, join, relative } from "node:path";
-import { homedir, tmpdir } from "node:os";
-import { createHash } from "node:crypto";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, isAbsolute, join } from "node:path";
 import { PACKAGE_ROOT } from "../policy/resolve.mjs";
-import { commonDir, git, hooksPlacement, mainWorktreeRoot, repoRoot, run, samePath } from "../lib/git.mjs";
+import { commonDir, git, hooksPlacement, mainWorktreeRoot, repoRoot, samePath } from "../lib/git.mjs";
 import { gitHooksConfig, loadCurrentProject } from "../lib/config.mjs";
 import { loadKey } from "../lib/store.mjs";
 import { packageVersion, writeRules } from "./managed.mjs";
+import { installVersion, publishVersion, readVersionPin, storeRoot, versionDir } from "./version-store.mjs";
 
-// 代码装在用户目录并按版本不可变；仓库里只放 shim 与配置。
-// 这样改门禁代码不落在任何任务分支里，任务分支也就无法放宽自己的门禁。
-export function storeRoot() {
-  return process.env.HARNESS_STORE || join(homedir(), ".local", "share", "harness", "versions");
-}
-
-export function versionDir(version = packageVersion()) {
-  return join(storeRoot(), version);
-}
-
-export function storeEntry(version = packageVersion()) {
-  return join(versionDir(version), "bin", "harness.mjs");
-}
-
-function copyTree(from, to) {
-  mkdirSync(to, { recursive: true });
-  for (const entry of readdirSafe(from)) {
-    const source = join(from, entry);
-    const target = join(to, entry);
-    if (isDir(source)) copyTree(source, target);
-    else copyFileSync(source, target);
-  }
-}
-
-function readdirSafe(dir) {
-  try {
-    return readdirSync(dir);
-  } catch {
-    return [];
-  }
-}
-
-function isDir(path) {
-  try {
-    return statSync(path).isDirectory();
-  } catch {
-    return false;
-  }
-}
-
-/** 把当前源码树装进版本目录，并写内容哈希清单。 */
-export function publishVersion({ version = packageVersion() } = {}) {
-  const target = versionDir(version);
-  const incoming = hashTree(PACKAGE_ROOT, ["src", "assets", "bin", "package.json"]);
-  if (existsSync(target)) {
-    const installedFile = join(target, "MANIFEST.json");
-    if (existsSync(installedFile)) {
-      const installed = JSON.parse(readFileSync(installedFile, "utf8"));
-      if (JSON.stringify(installed.files) !== JSON.stringify(incoming.files)) {
-        // 版本目录按版本号不可变：同一个版本号换了代码，锁定这个版本的项目会在不同机器上跑出不同的门禁，
-        // 而清单随之重写，doctor 也发现不了。改了门禁代码要先升版本号。
-        throw new Error(
-          `版本 ${version} 已经安装在 ${target}，内容与当前代码不同。版本目录按版本号不可变：改了门禁代码先升版本号再安装；` +
-            "确认要丢弃已安装的内容时，由人删除这个目录后重试",
-        );
-      }
-      // 内容与清单一致直接复用；目录被就地改动过时按同一份代码重新安装，恢复清单记录的内容。
-      if (verifyVersion({ version }).ok) return { version, dir: target, existed: true };
-    }
-    rmSync(target, { recursive: true, force: true });
-  }
-  const tmp = `${target}.tmp-${process.pid}`;
-  mkdirSync(tmp, { recursive: true });
-  for (const entry of ["src", "assets", "bin", "package.json"]) {
-    const source = join(PACKAGE_ROOT, entry);
-    if (!existsSync(source)) continue;
-    const dest = join(tmp, entry);
-    if (isDir(source)) copyTree(source, dest);
-    else copyFileSync(source, dest);
-  }
-  const manifest = hashTree(tmp, ["src", "assets", "bin", "package.json"]);
-  writeFileSync(join(tmp, "MANIFEST.json"), `${JSON.stringify(manifest, null, 2)}\n`);
-  mkdirSync(storeRoot(), { recursive: true });
-  copyTree(tmp, target);
-  rmSync(tmp, { recursive: true, force: true });
-  return { version, dir: target, existed: false, files: Object.keys(manifest.files).length };
-}
-
-// 只统计实际分发的目录，根目录下的 README、测试等不参与比对。
-function hashTree(root, entries) {
-  const files = {};
-  const walk = (dir) => {
-    for (const entry of readdirSafe(dir)) {
-      const full = join(dir, entry);
-      if (isDir(full)) walk(full);
-      else {
-        const rel = relative(root, full).split("\\").join("/");
-        files[rel] = createHash("sha256").update(readFileSync(full)).digest("hex");
-      }
-    }
-  };
-  for (const entry of entries) {
-    const full = join(root, entry);
-    if (!existsSync(full)) continue;
-    if (isDir(full)) walk(full);
-    else files[relative(root, full).split("\\").join("/")] = createHash("sha256").update(readFileSync(full)).digest("hex");
-  }
-  return { version: packageVersion(), files };
-}
-
-/** 校验已安装版本的内容与清单一致，防止装好的门禁被就地改写。 */
-export function verifyVersion({ version = packageVersion() } = {}) {
-  const dir = versionDir(version);
-  const manifestFile = join(dir, "MANIFEST.json");
-  if (!existsSync(manifestFile)) return { ok: false, reason: `版本 ${version} 未安装` };
-  const manifest = JSON.parse(readFileSync(manifestFile, "utf8"));
-  const drift = [];
-  for (const [rel, hash] of Object.entries(manifest.files)) {
-    const full = join(dir, rel);
-    if (!existsSync(full)) {
-      drift.push(`${rel} 缺失`);
-      continue;
-    }
-    const actual = createHash("sha256").update(readFileSync(full)).digest("hex");
-    if (actual !== hash) drift.push(`${rel} 内容被改动`);
-  }
-  return drift.length === 0 ? { ok: true, files: Object.keys(manifest.files).length } : { ok: false, reason: drift.join("; ") };
-}
-
-/** 列出已安装的全部版本，按语义化版本排序。 */
-export function listVersions() {
-  const root = storeRoot();
-  if (!existsSync(root)) return [];
-  return readdirSafe(root)
-    .filter((name) => /^\d+\.\d+\.\d+/.test(name) && isDir(join(root, name)))
-    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
-}
-
-/** 清理旧版本目录；keep 指定要保留的版本，其余删除。 */
-export function pruneVersions({ keep = [], dryRun = false } = {}) {
-  const root = storeRoot();
-  const keepSet = new Set(keep);
-  const removed = [];
-  for (const version of listVersions()) {
-    if (keepSet.has(version)) continue;
-    removed.push(version);
-    if (!dryRun) rmSync(join(root, version), { recursive: true, force: true });
-  }
-  return { removed, kept: [...keepSet], dryRun };
-}
+export { installVersion, listVersions, pruneVersions, publishVersion, storeEntry, storeRoot, verifyVersion, versionDir } from "./version-store.mjs";
 
 export function shimPath(root) {
   return join(root, ".harness", "bin", "harness");
@@ -721,88 +581,23 @@ export function installAll({ cwd, takeOver = false }) {
  */
 export function installLocal({ cwd }) {
   const root = repoRoot(cwd);
-  const pinned = pinnedVersion(root);
-  if (pinned && pinned !== packageVersion()) return installPinned({ root, version: pinned });
+  const version = pinnedVersion(root) ?? packageVersion();
+  const published = installVersion({ version });
   loadKey();
-  const published = publishVersion();
   const hooksConfig = currentHooksConfig(root);
   const { tracked } = hooksPlacement(root, { hooksDir: hooksConfig?.hooksDir });
   // 入库的钩子随分支分发，合入时已经是新内容；只刷新共用目录，避免把主 Worktree 改脏。
   const hooks = tracked ? null : writeGitHooks({ root });
   const hooksPath = hooksConfig ? ensureHooksPath({ root, hooks: hooksConfig }) : null;
   const dsh = writeDshPlugin();
-  return { root, published, hooks, hooksTracked: tracked, hooksPath, dsh };
+  return { root, published, fromTag: published.fromTag, hooks, hooksTracked: tracked, hooksPath, dsh };
 }
 
-/** 项目入口锁定的版本：优先读 .harness/VERSION，没有时从入口 shim 里解析。 */
+export function projectVersionPin(root) {
+  const read = (file) => (existsSync(file) ? readFileSync(file, "utf8") : null);
+  return readVersionPin(read(join(root, ".harness", "VERSION")), read(shimPath(root)));
+}
+
 export function pinnedVersion(root) {
-  const file = join(root, ".harness", "VERSION");
-  if (existsSync(file)) return readFileSync(file, "utf8").trim() || null;
-  const shim = shimPath(root);
-  if (!existsSync(shim)) return null;
-  return readFileSync(shim, "utf8").match(/:-([0-9][^}"]*)\}/)?.[1] ?? null;
-}
-
-/**
- * 在新机器上使用一个已接入的项目：项目锁定的版本不一定是本地 harness 仓库当前的版本。
- * 从 harness 仓库的标签导出那个版本的代码装进版本目录，再由那个版本自己完成本机刷新，
- * 这样本机装的门禁与项目锁定的版本一致，也不改动任何入库文件。
- */
-function installPinned({ root, version }) {
-  let fromTag = false;
-  if (!verifyVersion({ version }).ok) {
-    publishFromTag(version);
-    fromTag = true;
-  }
-  const cli = join(versionDir(version), "src", "cli.mjs");
-  // DSH 插件本机只有一份、按项目锁定的版本转发，由当前代码维护；旧版本自己的 install 不会生成它。
-  // 0.3 及以前没有 --local，它的 install 会重写入库文件；这时只装版本，共用钩子由当前代码补上。
-  if (existsSync(cli) && readFileSync(cli, "utf8").includes("installLocal")) {
-    const delegated = run(process.execPath, [storeEntry(version), "install", "--local"], { cwd: root });
-    if (delegated.status !== 0) throw new Error(`版本 ${version} 刷新本机失败: ${delegated.stderr.trim()}`);
-    return { root, published: { version }, fromTag, output: delegated.stdout, dsh: writeDshPlugin() };
-  }
-  const { tracked } = hooksPlacement(root);
-  const hooks = tracked ? null : writeGitHooks({ root });
-  return { root, published: { version }, fromTag, hooks, hooksTracked: tracked, dsh: writeDshPlugin() };
-}
-
-/**
- * 只把指定版本装进本机版本目录，不改项目里的任何文件，也不刷新共用钩子。
- * sync 遇到目标提交锁定的版本本机没装时用它补装；由人执行。
- */
-export function installVersion({ version }) {
-  if (!/^\d+\.\d+\.\d+/.test(String(version ?? ""))) throw new Error(`版本号格式不对: ${version}`);
-  if (version === packageVersion()) {
-    const published = publishVersion({ version });
-    return { version, dir: published.dir, existed: published.existed, fromTag: false };
-  }
-  const existing = verifyVersion({ version });
-  if (existing.ok) return { version, dir: versionDir(version), existed: true, fromTag: false };
-  publishFromTag(version);
-  const installed = verifyVersion({ version });
-  if (!installed.ok) throw new Error(`安装版本 ${version} 后校验失败: ${installed.reason}`);
-  return { version, dir: versionDir(version), existed: false, fromTag: true };
-}
-
-function publishFromTag(version) {
-  const tag = `v${version}`;
-  if (git(PACKAGE_ROOT, ["rev-parse", "--verify", "--quiet", `refs/tags/${tag}`]).status !== 0) {
-    throw new Error(
-      `项目锁定的版本是 ${version}，但 ${PACKAGE_ROOT} 里没有标签 ${tag}。` +
-        `先在 harness 仓库 git fetch --tags；或者把项目升级到当前版本 ${packageVersion()}（在任务分支运行 harness upgrade）`,
-    );
-  }
-  const tmp = mkdtempSync(join(tmpdir(), "harness-tag-"));
-  try {
-    const tar = join(tmp, "code.tar");
-    const archived = git(PACKAGE_ROOT, ["archive", "--format=tar", `--output=${tar}`, tag, "src", "assets", "bin", "package.json"]);
-    if (archived.status !== 0) throw new Error(`导出标签 ${tag} 失败: ${archived.stderr.trim()}`);
-    const extracted = run("tar", ["-xf", tar, "-C", tmp]);
-    if (extracted.status !== 0) throw new Error(`解开标签 ${tag} 失败: ${extracted.stderr.trim()}`);
-    const published = run(process.execPath, [join(tmp, "bin", "harness.mjs"), "publish"], { cwd: tmp });
-    if (published.status !== 0) throw new Error(`安装版本 ${version} 失败: ${published.stderr.trim()}`);
-  } finally {
-    rmSync(tmp, { recursive: true, force: true });
-  }
+  return projectVersionPin(root).version;
 }

@@ -23,10 +23,10 @@ import {
   HOOK_NAMES,
   hooksPathState,
   isHarnessClientHook,
+  projectVersionPin,
   shimPath,
-  verifyVersion,
-  versionDir,
 } from "./install.mjs";
+import { isVersion, verifyVersion, versionDir } from "./version-store.mjs";
 
 // 读取 Codex 用户配置里是否已有本项目钩子的 trusted_hash 记录；event 是 Codex 记录信任时用的事件名，每个事件各信任一次。
 // 路径要按真实路径比较：git 常返回 /private/var/...，用户配置里可能写成 /var/...，两者是同一目录。
@@ -206,12 +206,27 @@ export function doctor({ cwd = process.cwd(), checkRemote = false } = {}) {
   const checks = [];
 
   const version = packageVersion();
-  const store = versionDir(version);
-  const integrity = verifyVersion({ version });
+  let locked = version;
+  try {
+    const pin = projectVersionPin(root);
+    locked = pin.shim ?? pin.file ?? version;
+    const label = (value) => (value === null ? "未声明" : isVersion(value) ? value : "格式无效");
+    const valid = [pin.file, pin.shim].every((value) => value === null || isVersion(value));
+    const detail = `CLI ${version}；.harness/VERSION ${label(pin.file)}；shim ${label(pin.shim)}`;
+    checks.push({
+      id: "project:version",
+      ok: valid && !pin.mismatch,
+      detail: !valid ? `${detail}。修正版本格式后重试` : pin.mismatch ? `${detail}。两处锁定版本不一致，在任务分支运行 harness upgrade` : detail,
+    });
+  } catch (error) {
+    checks.push({ id: "project:version", ok: false, detail: `无法读取项目版本锁定信息: ${error.message}` });
+  }
+  const store = isVersion(locked) ? versionDir(locked) : null;
+  const integrity = verifyVersion({ version: locked });
   checks.push({
     id: "store",
     ok: integrity.ok,
-    detail: integrity.ok ? `版本 ${version} 已安装(${integrity.files} 个文件)，内容与清单一致` : integrity.reason,
+    detail: integrity.ok ? `版本 ${locked} 已安装(${integrity.files} 个文件)，内容与清单一致` : integrity.reason,
   });
 
   const key = keyStatus();

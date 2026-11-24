@@ -1210,8 +1210,7 @@ export async function main(argv) {
         if (values.local) {
           const local = installLocal({ cwd: process.cwd() });
           if (local.fromTag) print(`项目锁定版本 ${local.published.version}，已从 harness 仓库的标签 v${local.published.version} 安装`);
-          if (local.output) process.stdout.write(local.output);
-          else print(`已刷新本机: 版本 ${local.published.version}${local.hooksTracked ? "；钩子目录随分支入库，无需刷新" : `；git 钩子 ${local.hooks.dir}`}`);
+          print(`已刷新本机: 版本 ${local.published.version}${local.hooksTracked ? "；钩子目录随分支入库，无需刷新" : `；git 钩子 ${local.hooks.dir}`}`);
           if (local.hooksPath) print(`  ${formatHooksPath(local.hooksPath)}`);
           if (local.dsh) print(`  ${formatDshPlugin(local.dsh)}`);
           return local.hooksPath?.state === "overridden" ? 1 : 0;

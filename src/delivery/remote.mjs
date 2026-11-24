@@ -1,5 +1,6 @@
 import { showBlob } from "../lib/git.mjs";
 import { tail } from "../lib/redact.mjs";
+import { readVersionPin } from "../install/version-store.mjs";
 
 /** 只对有明确诊断的远端失败分类。 */
 export function remoteFailureReason(result) {
@@ -158,8 +159,5 @@ export function remoteBranchTip({ root, remote, branch, run }) {
  * 入口 shim 里写的版本决定钩子与命令实际运行哪一份；两者不一致时返回 mismatch，调用方应拒绝。
  */
 export function pinnedVersionAt(root, ref) {
-  const file = showBlob(root, ref, ".harness/VERSION")?.trim() || null;
-  const shimText = showBlob(root, ref, ".harness/bin/harness");
-  const shim = shimText?.match(/:-([0-9][^}"]*)\}/)?.[1] ?? null;
-  return { version: file ?? shim, file, shim, mismatch: Boolean(file && shim && file !== shim) };
+  return readVersionPin(showBlob(root, ref, ".harness/VERSION"), showBlob(root, ref, ".harness/bin/harness"));
 }
