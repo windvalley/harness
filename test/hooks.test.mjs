@@ -4,7 +4,7 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
-import { commit, CONFIG, git, makeRepo, sh, write, writeReview } from "./helpers.mjs";
+import { commit, CONFIG, copyPackage, git, makeRepo, sh, write, writeReview } from "./helpers.mjs";
 import { PACKAGE_ROOT as PACKAGE_ROOT_TEST } from "./helpers.mjs";
 import { starterVerify } from "../src/install/init.mjs";
 import { OPTIONS } from "../src/install/optional.mjs";
@@ -1133,12 +1133,16 @@ describe("多 Worktree 与已有钩子", () => {
 });
 
 describe("版本管理", () => {
-  test("versions 列出已安装版本，prune 保留指定版本", () => {
+  test("versions 列出已安装版本，prune 保留指定版本", (t) => {
     const repo = setup();
-    // 手工造一个更老的版本目录，模拟多版本累积
     const store = repo.env.HARNESS_STORE;
     const older = "0.0.9";
-    mkdirSync(join(store, older), { recursive: true });
+    const pkg = copyPackage();
+    t.after(() => rmSync(pkg, { recursive: true, force: true }));
+    const manifest = JSON.parse(readFileSync(join(pkg, "package.json"), "utf8"));
+    write(pkg, "package.json", JSON.stringify({ ...manifest, version: older }));
+    const publish = sh(repo.root, process.execPath, [join(pkg, "bin/harness.mjs"), "publish"], repo.env);
+    assert.equal(publish.status, 0, publish.stderr);
     const listed = repo.cli("versions");
     assert.equal(listed.status, 0, listed.stderr);
     assert.match(listed.stdout, new RegExp(currentVersion().replaceAll(".", "\\.")));
@@ -1147,6 +1151,10 @@ describe("版本管理", () => {
     const dry = repo.cli("prune", "--dry-run");
     assert.equal(dry.status, 0, dry.stderr);
     assert.match(dry.stdout, /0\.0\.9/);
+    assert.ok(existsSync(join(store, older)));
+    assert.equal(repo.cli("prune").status, 0);
+    assert.equal(existsSync(join(store, older)), false);
+    assert.ok(existsSync(join(store, currentVersion())));
   });
 });
 

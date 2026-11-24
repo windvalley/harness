@@ -9,6 +9,7 @@
 node ~/github/harness/bin/harness.mjs install --local
 .harness/bin/harness doctor</code></pre></div>
     <p><code>install --local</code> 按项目锁定的版本安装代码（必要时从对应的 <code>v&lt;版本&gt;</code> 标签导出），再写入本机的钩子与插件目录，不改任何入库文件。装好之前，Claude Code、Codex 与 Antigravity 的实时拦截会拒绝一切调用并提示这条命令。</p>
+    <p>版本在暂存目录校验完整后才进入正式目录，<code>versions</code> 与 <code>prune</code> 只处理通过校验的正式版本。<code>doctor</code> 分别显示运行中的 CLI、项目 VERSION 与入口锁定版本。清单可确认且内容损坏时，用原版本代码重新安装即可；清单缺失或无效时，先人工检查并移开该目录，工具不会自动覆盖。清理旧版本前先核对其他项目的锁定版本。</p>
 
     <h3 id="handoff">跨会话交接</h3>
     <p>需要换会话、换执行者或把任务上下文贴到 PR/MR 时，从现有状态生成 Markdown 交接视图：</p>
