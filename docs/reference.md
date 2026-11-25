@@ -1537,6 +1537,7 @@ node ~/github/harness/bin/harness.mjs install --local
 
 `install --local` 读取项目锁定的版本：harness 仓库当前就是这个版本时直接安装，否则从对应的标签（例如 `v0.7.2`）导出那一版安装。
 然后写入本机的 git 钩子和共用的 DeepSeek Harness 插件，不改动任何入库文件。
+可以先加 `--dry-run` 预览钩子、Git 配置及需要准备的本机共享资源。
 找不到标签时先运行 `git -C ~/github/harness fetch --tags`。
 
 装好之前：
@@ -1583,7 +1584,9 @@ git commit -m "chore(harness): 升级到 <版本>" -m "- 更新入口锁定的�
 先把项目自己的说明迁到 `AGENTS.md` 托管块之外；确认要用当前版本覆盖冲突文件时，由人在自己的终端明确运行 `upgrade --force`，Agent 不得自行使用。
 这项“由人执行”目前只有流程规范约束，没有专门的 Agent 拦截规则，不能把它描述成机器保障，见[授权与执行矩阵](#授权与执行矩阵)。
 `--force` 只覆盖托管规则、模板与清单，不改变配置文件的保留规则，也不会穿过符号链接父目录。
-`upgrade --dry-run` 列出会新增、更新或删除的托管文件、版本标记、入口与 `AGENTS.md` 托管块，以及会被移除的黄金任务旧副本；它不写文件、不安装版本目录，钩子与客户端配置在正式升级时才重新生成，预览里不逐项比对。
+`upgrade --dry-run` 列出会新增、更新或删除的目标，包含托管文件、版本标记、入口、`AGENTS.md` 托管块、黄金任务旧副本所在文件、Git 钩子、客户端配置和忽略规则。
+`init`、`upgrade`、`install` 和 `install --local` 的预览与正式执行使用同一套安装计划，正式执行持有仓库安装锁后会重新核对输入。
+预览不写项目、Git 元数据或本机共享安装目录；检查 Git 忽略规则或历史版本时可能使用私有临时目录，检查结束就清理。
 预览有冲突时退出码为 1；`upgrade` 只接受 `--dry-run` 与 `--force`，其他参数一律报错，不会被忽略。
 `AGENTS.md` 里的托管块也会刷新，块外的内容保持不动。
 `config.json`、`policy.json`、`verify.json` 保持不动，新版本带来的可选预设与配置要自己加，见 `CHANGELOG.md` 的升级说明。
@@ -1607,6 +1610,21 @@ node ~/github/harness/bin/harness.mjs install --local   # 按新锁定的版本�
 
 想让这次同步也走本机门禁（“与远端同步（旧做法）”的做法一），要先装好新版本：verify 里的 `harness-golden` 检查会用远端分支的入口运行，本机没有它锁定的版本时这项检查失败。
 `node ~/github/harness/bin/harness.mjs version` 与 `git show origin/main:.harness/VERSION` 一致时，运行 `node ~/github/harness/bin/harness.mjs publish` 装好新版本，再按做法一合入。
+
+### 恢复中断的项目安装
+
+安装会先校验写入目标和客户端配置，再准备本机共享资源，最后写入项目文件、Git 钩子与 `core.hooksPath`。
+项目写入失败时自动回滚，已准备的本机版本、证据密钥和 DeepSeek Harness 插件不随项目回滚。
+如果进程被强杀或自动回滚未能完成，`doctor` 会报告 `<git-common-dir>/harness-install/state.json` 中的待恢复记录，后续项目安装也会停在预检，避免叠加改动。
+保留该记录与同目录的私有备份，在原 Worktree、原分支与原提交上执行 `harness install --recover`；若项目入口不完整或仍锁定旧版本，用带恢复命令的新版源码入口。
+
+```bash
+node "$harness_source/bin/harness.mjs" install --recover
+```
+
+恢复只回退仍与本次安装写入结果一致的目标，不覆盖中断后再改过的文件或配置。
+遇到冲突时会列出未恢复的项并保留原件与记录；先另存需要保留的人工改动，再将冲突项调整为安装前或本次安装写入的状态，才能重试恢复。
+恢复完成后先运行 `doctor`，再决定是否重新安装。
 
 ## 配置
 
@@ -2247,7 +2265,8 @@ Agent 完成任务后的汇报里要带一行代码评审的评审者，方案�
 | `escalate <open\|list\|show\|answer\|resume\|resolve>` | 例外上报；`resolve --id <编号> --reason <原因> --evidence <引用>` 记录技术解除，保留历史且不改变门禁 |
 | `pitfall add --signature <特征> --symptom <现象> --fix <做法>`、`pitfall list [--flagged]` | 记录与查看本项目反复踩的坑，见“坑位记录” |
 | `init [--dry-run] [--take-over] [--force]` | 接入当前项目，`--dry-run` 只预览 |
-| `install [--take-over]`、`install --local`、`install --version <版本>` | 重新生成入口、钩子与客户端配置；`--local` 只刷新本机，不改入库文件；`--version` 只把指定版本装进版本目录 |
+| `install [--take-over] [--dry-run]`、`install --local [--dry-run]`、`install --version <版本> [--dry-run]` | 重新生成入口、钩子与客户端配置；`--local` 只刷新本机，不改入库文件；`--version` 只把指定版本装进版本目录 |
+| `install --recover` | 在原 Worktree 和检出回滚中断的项目安装，保留有冲突的人工改动 |
 | `upgrade [--dry-run] [--force]` | 把项目升级到运行它的 harness 版本；`--dry-run` 只预览且冲突时退出 1；`--force` 由人明确覆盖托管规则、模板与清单冲突 |
 | `uninstall [--dry-run] [--purge]` | 解除接入 |
 | `versions`、`prune [--keep <v,...>] [--dry-run]` | 列出、清理本机安装的版本 |

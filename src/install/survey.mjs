@@ -152,7 +152,7 @@ function trustedMainRefOrNull(root) {
 }
 
 /** 把调查结果写成给人看的报告。takeOver 表示本次是否接管冲突项。 */
-export function formatSurvey(report, { takeOver = false, planned = [], stack = [] } = {}) {
+export function formatSurvey(report, { takeOver = false, stack = [] } = {}) {
   const lines = [];
   lines.push("现状");
   lines.push(`  主分支: ${report.mainRef ?? "(还没有提交)"}；当前分支: ${report.branch}${report.linked ? "（Linked Worktree）" : ""}`);
@@ -183,12 +183,6 @@ export function formatSurvey(report, { takeOver = false, planned = [], stack = [
       lines.push(`  - ${conflict.summary}`);
       lines.push(`    ${takeOver ? "将移除原有内容" : conflict.impact}`);
     }
-  }
-
-  if (planned.length > 0) {
-    lines.push("");
-    lines.push("将写入");
-    for (const item of planned) lines.push(`  ${item.action === "create" ? "新建" : "修改"} ${item.rel}`);
   }
 
   if (report.legacyDirs.length > 0) {

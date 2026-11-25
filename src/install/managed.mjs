@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, sep } from "node:path";
 import { PACKAGE_ROOT } from "../policy/resolve.mjs";
 import { humanExecutes } from "../lib/next-step.mjs";
+import { readRegularText } from "./install-transaction.mjs";
 
 export const MARK_START = "<!-- harness:start -->";
 export const MARK_END = "<!-- harness:end -->";
@@ -23,14 +24,6 @@ export function renderManagedBlock(text, body) {
   const end = text.indexOf(MARK_END);
   if (start >= 0 && end > start) return `${text.slice(0, start)}${block}${text.slice(end + MARK_END.length)}`;
   return `${text.replace(/\n+$/, "")}\n\n${block}\n`;
-}
-
-/** 替换或追加 AGENTS.md 里的托管块；块外内容原样保留。 */
-export function writeManagedBlock({ root, body }) {
-  const file = join(root, "AGENTS.md");
-  const created = !existsSync(file);
-  writeFileSync(file, renderManagedBlock(created ? null : readFileSync(file, "utf8"), body));
-  return { path: "AGENTS.md", created };
 }
 
 export function removeManagedBlock({ root }) {
@@ -77,9 +70,9 @@ const sha = (text) => createHash("sha256").update(text).digest("hex");
 function readRegular(file) {
   try {
     const stat = lstatSync(file);
-    if (stat.isSymbolicLink()) return { exists: true, text: null, problem: "符号链接" };
+    if (stat.isSymbolicLink()) return { exists: true, text: null, problem: "符号链接", link: true };
     if (!stat.isFile()) return { exists: true, text: null, problem: "不是普通文件" };
-    return { exists: true, text: readFileSync(file, "utf8"), problem: null };
+    return { exists: true, text: readRegularText(file), problem: null };
   } catch (error) {
     if (error.code === "ENOENT") return { exists: false, text: null, problem: null };
     throw error;
@@ -103,8 +96,7 @@ function parentProblem(root, rel) {
   return null;
 }
 
-function manifestState(root) {
-  const found = readRegular(join(root, MANAGED_MANIFEST));
+function manifestState(found) {
   if (found.problem) return { files: null, problem: `${MANAGED_MANIFEST} 是${found.problem}` };
   if (!found.exists) return { files: null, problem: null };
   try {
@@ -124,29 +116,35 @@ function manifestState(root) {
 }
 
 function previousHash(previousRoot, rel) {
-  if (!previousRoot) return null;
+  if (!previousRoot || parentProblem(previousRoot, rel)) return null;
   const found = readRegular(join(previousRoot, rel));
   return found.exists && !found.problem ? sha(found.text) : null;
 }
 
 /** 计算托管规则变更。旧项目没有清单时，以锁定版本的已安装资源作为比较基线。 */
 export function planManagedRules({ root, previousRoot = null, force = false }) {
+  const actions = [];
+  const conflicts = [];
+  const manifestParent = parentProblem(root, MANAGED_MANIFEST);
+  if (manifestParent) return { actions, conflicts: [{ path: MANAGED_MANIFEST, reason: manifestParent }] };
   const entries = ruleEntries();
   const desired = Object.fromEntries(entries.map(([rel, content]) => [rel, sha(content)]));
-  const manifest = manifestState(root);
+  const currentManifest = readRegular(join(root, MANAGED_MANIFEST));
+  const manifest = manifestState(currentManifest);
   const old = manifest.files ?? {};
-  const conflicts = [];
   const conflict = (path, reason, forceable = true) => {
     if (!force || !forceable) conflicts.push({ path, reason });
   };
-  if (manifest.problem) conflict(MANAGED_MANIFEST, manifest.problem);
-  const actions = [];
+  if (manifest.problem) conflict(MANAGED_MANIFEST, manifest.problem, !currentManifest.problem || currentManifest.link);
   for (const rel of [...new Set([...Object.keys(old), ...Object.keys(desired)])].sort()) {
     const path = `.harness/${rel}`;
     const parent = parentProblem(root, path);
-    if (parent) conflict(path, parent, false);
+    if (parent) {
+      conflict(path, parent, false);
+      continue;
+    }
     const current = readRegular(join(root, path));
-    if (current.problem) conflict(path, current.problem);
+    if (current.problem) conflict(path, current.problem, current.link);
     const currentHash = current.exists && !current.problem ? sha(current.text) : null;
     const wanted = Object.hasOwn(desired, rel) ? desired[rel] : null;
     const previous = manifest.files ? old[rel] : previousHash(previousRoot, rel);
@@ -159,43 +157,18 @@ export function planManagedRules({ root, previousRoot = null, force = false }) {
     else if (currentHash !== wanted) actions.push({ action: "更新", path, rel, content: entries.find(([name]) => name === rel)[1] });
   }
   const manifestText = `${JSON.stringify({ version: 1, files: desired }, null, 2)}\n`;
-  const currentManifest = readRegular(join(root, MANAGED_MANIFEST));
   const manifestChanged = !currentManifest.exists || currentManifest.text !== manifestText;
   return { actions, conflicts, manifestText, manifestChanged };
 }
 
 export function managedConflictError(plan) {
   if (plan.conflicts.length === 0) return null;
-  return new Error(
+  const error = new Error(
     `托管文件冲突:\n${plan.conflicts.map(({ path, reason }) => `  - ${path}: ${reason}`).join("\n")}\n` +
       `先把项目自己的说明迁到 AGENTS.md 托管块之外；确认用当前版本覆盖这些托管文件时，${humanExecutes("harness upgrade --force")}`,
   );
-}
-
-/** 写入托管规则、模板及其内容清单；默认拒绝覆盖本地修改或跟随符号链接。 */
-export function writeRules({ root, version, previousRoot = null, force = false }) {
-  const plan = planManagedRules({ root, previousRoot, force });
-  const problem = managedConflictError(plan);
-  if (problem) throw problem;
-  for (const item of plan.actions) {
-    const target = join(root, item.path);
-    if (item.action === "删除") {
-      rmSync(target, { force: true });
-      continue;
-    }
-    const current = readRegular(target);
-    if (current.problem) rmSync(target, { force: true });
-    mkdirSync(dirname(target), { recursive: true });
-    writeFileSync(target, item.content);
-  }
-  const manifestFile = join(root, MANAGED_MANIFEST);
-  if (readRegular(manifestFile).problem) rmSync(manifestFile, { force: true });
-  mkdirSync(dirname(manifestFile), { recursive: true });
-  if (plan.manifestChanged) writeFileSync(manifestFile, plan.manifestText);
-  const versionFile = join(root, ".harness", "VERSION");
-  mkdirSync(dirname(versionFile), { recursive: true });
-  writeFileSync(versionFile, `${version}\n`);
-  return plan.actions.map(({ path }) => path);
+  error.conflicts = plan.conflicts;
+  return error;
 }
 
 export function managedBlockBody() {

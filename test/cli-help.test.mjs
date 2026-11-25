@@ -117,7 +117,7 @@ describe("upgrade --dry-run", () => {
     assert.match(result.stdout, /新增\s+\.harness\/rules\/core\.md/);
     assert.match(result.stdout, /更新\s+AGENTS\.md/);
     assert.doesNotMatch(result.stdout, /(新增|更新)\s+\.harness\/rules\/harness\.md/, "没变化的文件不列");
-    assert.match(result.stdout, /没有写入任何文件/);
+    assert.match(result.stdout, /没有写入项目或本机共享安装目录/);
     assert.match(result.stdout, /config\.json、policy\.json、verify\.json/);
     assert.match(result.stdout, /Agent 可直接继续执行：harness upgrade/);
     assert.deepEqual(snapshot(repo), before);

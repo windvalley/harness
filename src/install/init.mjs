@@ -1,11 +1,12 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
-import { git, gitOk, hooksPlacement, refExists, repoRoot } from "../lib/git.mjs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { git, gitOk, refExists } from "../lib/git.mjs";
 import { PACKAGE_ROOT } from "../policy/resolve.mjs";
-import { HOOK_NAMES, installAll, pinnedVersion, publishVersion, shimBody, shimPath, storeEntry, versionDir, worktreeHooksConfig } from "./install.mjs";
-import { planBuiltinCopies, pruneBuiltinCopies } from "../golden/builtin.mjs";
-import { managedBlockBody, managedConflictError, packageVersion, planManagedRules, renderManagedBlock, writeManagedBlock, writeRules } from "./managed.mjs";
-import { ensurePitfallsFile, PITFALL_FILE } from "../pitfall/pitfall.mjs";
+import { storeEntry, runProjectInstall } from "./install.mjs";
+import { planBuiltinCopies } from "../golden/builtin.mjs";
+import { managedBlockBody, packageVersion, renderManagedBlock } from "./managed.mjs";
+import { parseInstallJson } from "./install-transaction.mjs";
+import { PITFALL_FILE, PITFALL_HEADER } from "../pitfall/pitfall.mjs";
 import { survey } from "./survey.mjs";
 import { RISK_DEFAULTS, planSettings } from "../plan/plan.mjs";
 
@@ -42,8 +43,7 @@ function defaultConfig({ mainBranch }) {
   };
 }
 
-function starterPolicy({ mainBranch }) {
-  const hooks = git(process.cwd(), ["config", "--get", "core.hooksPath"]).stdout.trim();
+function starterPolicy() {
   return {
     version: 1,
     presets: ["secrets", "git-safety", "gate-self", "main-worktree", "plan-first"],
@@ -279,122 +279,56 @@ export function detectMainBranch(root) {
   return "main";
 }
 
-/** 计算 init 会写哪些文件，用于预览；与真正执行共用同一份判断。 */
-function plannedWrites(root, { force }) {
-  const items = [];
-  const consider = (rel) => items.push({ rel, action: existsSync(join(root, rel)) ? "modify" : "create" });
-  for (const name of ["config.json", "policy.json", "verify.json", "golden/tasks.json"]) {
-    const rel = `.harness/${name}`;
-    if (force || !existsSync(join(root, rel))) consider(rel);
-  }
-  if (!existsSync(join(root, PITFALL_FILE))) consider(PITFALL_FILE);
-  for (const rel of [".harness/bin/harness", ".harness/rules/", ".harness/templates/", ".harness/managed-files.json", ".agents/hooks.json", ".claude/settings.json", ".codex/hooks.json", ".gitignore", "AGENTS.md"]) {
-    consider(rel);
-  }
-  const { rel: hooksRel, tracked } = hooksPlacement(root, { hooksDir: worktreeHooksConfig(root)?.hooksDir });
-  if (tracked) for (const name of HOOK_NAMES) consider(`${hooksRel}/${name}`);
-  return items;
-}
-
 function stackOf(verify) {
   const generic = new Set(["lint", "harness-golden"]);
   return verify.checks.map((check) => check.id).filter((id) => !generic.has(id));
 }
 
-function previousAssetsRoot(root) {
-  const pinned = pinnedVersion(root);
-  if (!pinned) return null;
-  const assets = join(versionDir(pinned), "assets");
-  return existsSync(assets) ? assets : null;
-}
-
-/**
- * 接入或升级一个项目。
- * dryRun 只调查与预览，不写任何文件；takeOver 时由 harness 接管其他工具的主分支保护与 Agent 拦截钩子。
- */
-export function initProject({ cwd = process.cwd(), force = false, dryRun = false, takeOver = false } = {}) {
-  const root = repoRoot(cwd);
-  const report = survey({ root });
-  const stack = stackOf(starterVerify({ cwd: root }));
-  const planned = plannedWrites(root, { force });
-  if (dryRun) return { root, dryRun: true, report, stack, planned };
-
-  const previousRoot = previousAssetsRoot(root);
-  const managedProblem = managedConflictError(planManagedRules({ root, previousRoot, force }));
-  if (managedProblem) throw managedProblem;
-  const mainBranch = detectMainBranch(root);
-  const dir = join(root, ".harness");
-  mkdirSync(dir, { recursive: true });
-  const written = [];
-
-  const create = (rel, value) => {
-    const file = join(root, ".harness", rel);
-    if (existsSync(file) && !force) return false;
-    mkdirSync(dirname(file), { recursive: true });
-    writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
-    written.push(`.harness/${rel}`);
-    return true;
-  };
-
-  const version = packageVersion();
-  create("config.json", defaultConfig({ mainBranch }));
-  create("policy.json", starterPolicy({ mainBranch }));
-  create("verify.json", starterVerify({ cwd: root }));
-  if (!existsSync(join(dir, "golden", "tasks.json"))) {
-    mkdirSync(join(dir, "golden"), { recursive: true });
-    // 规则回归用例由 harness 内置并随版本更新；这里只放项目自己的用例。
-    const body = { version: 1, doc: "项目自己的黄金任务。内置用例随 harness 版本更新，同 id 的用例覆盖内置，disableBuiltin 列出要停用的内置用例 id。", tasks: [] };
-    writeFileSync(join(dir, "golden", "tasks.json"), `${JSON.stringify(body, null, 2)}\n`);
-    written.push(".harness/golden/tasks.json");
-  }
-  mkdirSync(join(dir, "acceptance"), { recursive: true });
-  if (ensurePitfallsFile(root)) written.push(PITFALL_FILE);
-
-  writeRules({ root, version, previousRoot, force });
-  writeManagedBlock({ root, body: managedBlockBody() });
-  const install = installAll({ cwd: root, takeOver });
-  return { root, version, written, install, report, stack, planned, takeOver };
-}
-
-export function upgradeProject({ cwd = process.cwd(), force = false } = {}) {
-  const root = repoRoot(cwd);
-  const version = packageVersion();
-  const previousRoot = previousAssetsRoot(root);
-  const managedProblem = managedConflictError(planManagedRules({ root, previousRoot, force }));
-  if (managedProblem) throw managedProblem;
-  publishVersion({ version });
-  writeRules({ root, version, previousRoot, force });
-  ensurePitfallsFile(root);
-  // 托管块随版本更新：Agent 每次都会加载 AGENTS.md，任务分级等硬性要求写在这里才不会被跳过。
-  writeManagedBlock({ root, body: managedBlockBody() });
-  const shim = installAll({ cwd: root });
-  const golden = pruneBuiltinCopies(root);
-  return { root, version, shim, golden };
-}
-
-/**
- * upgrade 的只读预览：逐个比对规则、模板、版本标记、入口与 AGENTS.md 托管块，列出会新增或更新的文件。
- * git 钩子与客户端配置由 installAll 重新生成，这里不逐项比对。
- */
-export function planUpgrade({ cwd = process.cwd(), force = false } = {}) {
-  const root = repoRoot(cwd);
-  const version = packageVersion();
-  const files = [];
-  const managed = planManagedRules({ root, previousRoot: previousAssetsRoot(root), force });
-  files.push(...managed.actions.map(({ action, path }) => ({ action, path })));
-  const compare = (rel, content) => {
-    const file = join(root, rel);
-    if (!existsSync(file)) files.push({ action: "新增", path: rel });
-    else if (readFileSync(file, "utf8") !== content) files.push({ action: "更新", path: rel });
-  };
-  if (managed.manifestChanged) files.push({ action: existsSync(join(root, ".harness/managed-files.json")) ? "更新" : "新增", path: ".harness/managed-files.json" });
-  compare(".harness/VERSION", `${version}\n`);
-  if (!existsSync(join(root, PITFALL_FILE))) files.push({ action: "新增", path: PITFALL_FILE });
-  compare(relative(root, shimPath(root)), shimBody(version));
+function planProjectScaffolding(root, changes) {
+  const pitfalls = join(root, PITFALL_FILE);
+  if (changes.read(pitfalls) === null) changes.set(pitfalls, PITFALL_HEADER);
   const agents = join(root, "AGENTS.md");
-  const current = existsSync(agents) ? readFileSync(agents, "utf8") : null;
-  if (current === null) files.push({ action: "新增", path: "AGENTS.md" });
-  else if (renderManagedBlock(current, managedBlockBody()) !== current) files.push({ action: "更新", path: "AGENTS.md" });
-  const { removed, overrides } = planBuiltinCopies(root);
-  return { root, version, pinned: pinnedVersion(root), files, conflicts: managed.conflicts, golden: { removed, overrides } };
+  changes.set(agents, renderManagedBlock(changes.read(agents), managedBlockBody()));
+}
+
+const jsonText = (value) => `${JSON.stringify(value, null, 2)}\n`;
+const GOLDEN_REL = ".harness/golden/tasks.json";
+
+export function initProject({ cwd = process.cwd(), force = false, dryRun = false, takeOver = false } = {}) {
+  return runProjectInstall({
+    cwd, command: "init", force, dryRun, takeOver,
+    planExtra: ({ root, changes }) => {
+      const verify = starterVerify({ cwd: root });
+      for (const [name, value] of Object.entries({ config: defaultConfig({ mainBranch: detectMainBranch(root) }), policy: starterPolicy(), verify })) {
+        const file = join(root, ".harness", `${name}.json`);
+        if (changes.read(file) === null || force) changes.set(file, jsonText(value));
+      }
+      const golden = join(root, GOLDEN_REL);
+      if (changes.read(golden) === null) {
+        changes.set(golden, jsonText({ version: 1, doc: "项目自己的黄金任务。内置用例随 harness 版本更新，同 id 的用例覆盖内置，disableBuiltin 列出要停用的内置用例 id。", tasks: [] }));
+      }
+      changes.mkdir(join(root, ".harness/acceptance"));
+      planProjectScaffolding(root, changes);
+      return { stack: stackOf(verify) };
+    },
+    inspect: ({ root }) => ({ report: survey({ root }) }),
+  });
+}
+
+export function upgradeProject({ cwd = process.cwd(), force = false, dryRun = false } = {}) {
+  return runProjectInstall({
+    cwd, command: "upgrade", force, dryRun,
+    planExtra: ({ root, changes }) => {
+      planProjectScaffolding(root, changes);
+      const file = join(root, GOLDEN_REL);
+      const text = changes.read(file);
+      const golden = text === null ? {} : parseInstallJson(text, file);
+      if (golden.tasks !== undefined && (!Array.isArray(golden.tasks) || golden.tasks.some((task) => !task || typeof task.id !== "string"))) {
+        throw new Error(`${file} 的 tasks 应是带 id 的任务数组`);
+      }
+      const { kept, removed, overrides } = planBuiltinCopies(golden);
+      if (removed.length > 0) changes.set(file, jsonText({ ...golden, tasks: kept }));
+      return { golden: { removed, overrides } };
+    },
+  });
 }

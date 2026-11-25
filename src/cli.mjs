@@ -33,13 +33,15 @@ import { answerEscalation, listEscalations, openEscalation, readEscalation, reso
 import { addPitfall, FLAG_HITS, formatPitfalls, listPitfalls, MAX_HITS } from "./pitfall/pitfall.mjs";
 import { runGolden } from "./golden/golden.mjs";
 import { computeMetrics, formatMetrics } from "./golden/metrics.mjs";
-import { initProject, planUpgrade, upgradeProject } from "./install/init.mjs";
+import { initProject, upgradeProject } from "./install/init.mjs";
+import { recoverProjectInstall } from "./install/install-transaction.mjs";
 import { unconfiguredOptions } from "./install/optional.mjs";
 import { uninstall } from "./install/uninstall.mjs";
 import { branchStatus, formatObligations, formatStatus, openPostMergeObligations } from "./status.mjs";
 import { branchHandoff, formatHandoff, redactHandoff } from "./handoff.mjs";
 import { stopCheck } from "./stop/stop.mjs";
 import { installAll, installLocal, installVersion, listVersions, pruneVersions, publishVersion, versionDir } from "./install/install.mjs";
+import { planVersionInstall } from "./install/version-store.mjs";
 import { formatSurvey } from "./install/survey.mjs";
 import { followUps } from "./install/followups.mjs";
 import { doctor, formatDoctor } from "./install/doctor.mjs";
@@ -79,7 +81,7 @@ const USAGE = `harness <命令> [参数]    任一命令加 --help 查看该命�
                                                     含 .env 这类本机文件时需单独同意并加 --with-local-files
 
 体检与度量
-  doctor  [--check-remote]                            安装与接入自检；指定时只读查询远程仓库的 PR/MR
+  doctor  [--check-remote]                            安装、接入与待恢复事务自检；指定时只读查询远程仓库的 PR/MR
   conformance                                        检查 L3 判据
   metrics  [--days <n>]                              按周度量
   golden   [--worktree]                              重放黄金任务；--worktree 按工作区配置而不是主分支
@@ -87,7 +89,9 @@ const USAGE = `harness <命令> [参数]    任一命令加 --help 查看该命�
 
 接入与维护
   init     [--dry-run] [--take-over] [--force]       接入或升级当前项目：先调查现状，--dry-run 只预览
-  install  [--take-over] [--local] [--version <v>]   重新生成入口与钩子；--local 只刷新本机共用部分；--version 只装指定版本
+  install  [--take-over] [--local] [--dry-run]      重新生成入口与钩子；--local 只刷新本机部分；--dry-run 只预览
+  install  --version <v> [--dry-run]                只装指定版本，不改项目文件或刷新钩子
+  install  --recover                               在原 Worktree 和检出回滚一次中断的项目安装
   upgrade  [--dry-run] [--force]                     升级项目到当前版本；--dry-run 只预览，--force 明确覆盖冲突的托管规则与模板
   uninstall [--purge] [--dry-run]                    解除接入；--purge 连 .harness/ 一起删
   reviewer <list|set|remove|prefer|test>              本机评审者：列出、新增或修改、删除、是否优先不同模型、实测一个；见 harness reviewer
@@ -992,6 +996,17 @@ function cmdKey(argv) {
   return 2;
 }
 
+function printInstallPlan(plan, { newLabel = "新增" } = {}) {
+  for (const { path, reason } of plan.conflicts) print(`  冲突  ${path}: ${reason}`);
+  if (plan.conflicts.length > 0) return;
+  for (const { path, action } of plan.files) print(`  ${action === "新增" ? newLabel : action} ${path}`);
+  const writes = plan.shared.filter(({ action }) => action !== "复用");
+  if (writes.length > 0) {
+    print("本机共享准备（不随项目回滚）");
+    for (const { path, action } of writes) print(`  ${action} ${path}`);
+  }
+}
+
 function cmdInit(argv) {
   const { values } = parseArgs({
     args: argv,
@@ -1004,20 +1019,26 @@ function cmdInit(argv) {
   const cwd = process.cwd();
   const takeOver = values["take-over"];
   const result = initProject({ cwd, force: values.force, dryRun: values["dry-run"], takeOver });
+  if (result.conflicts.length > 0) {
+    print(`接入预览（${result.root}）未通过:`);
+    printInstallPlan(result);
+    print("存在托管文件冲突，正式接入会拒绝。先迁移项目自己的说明；预览未写入任何文件。");
+    return 1;
+  }
   const report = result.report;
-  print(formatSurvey(report, { takeOver, planned: result.planned, stack: result.stack }));
+  print(formatSurvey(report, { takeOver, stack: result.stack }));
   if (result.dryRun) {
+    if (result.files.length > 0 || result.shared.some(({ action }) => action !== "复用")) {
+      print("\n将写入");
+      printInstallPlan(result, { newLabel: "新建" });
+    }
     print("");
-    print("以上为预览，没有写入任何文件。确认后去掉 --dry-run 执行。");
+    print("以上为预览，没有写入项目或本机共享安装目录。确认后去掉 --dry-run 执行。");
     return 0;
   }
 
   print("");
   print(`已写入（版本 ${result.version}，代码在 ${versionDir(result.version)}）`);
-  if (result.install.gitignore.shimIgnored) {
-    process.stderr.write("[harness] 入口仍被 .gitignore 忽略，请手工放行 .harness/bin/harness，否则 Linked Worktree 里没有入口\n");
-    return 1;
-  }
 
   const branch = report.branch;
   const onMain = report.onMain || !report.mainRef;
@@ -1094,37 +1115,95 @@ function currentBranchForStatus() {
 
 function cmdUpgrade(argv) {
   const { values } = parseArgs({ args: argv, options: { "dry-run": { type: "boolean", default: false }, force: { type: "boolean", default: false } } });
-  const force = values.force;
-  if (values["dry-run"]) {
-    const plan = planUpgrade({ force });
-    print(`升级预览（${plan.root}）: 版本 ${plan.pinned ?? "未锁定"} -> ${plan.version}`);
-    for (const file of plan.files) print(`  ${file.action}  ${file.path}`);
-    for (const conflict of plan.conflicts) print(`  冲突  ${conflict.path}: ${conflict.reason}`);
-    if (plan.golden.removed.length > 0) print(`  将移除 .harness/golden/tasks.json 里与内置相同的旧副本: ${plan.golden.removed.join(", ")}`);
-    if (plan.golden.overrides.length > 0) print(`  这些用例覆盖内置用例且与当前内置不同，升级时保留: ${plan.golden.overrides.join(", ")}`);
-    print("git 钩子与客户端配置（.claude、.codex、DSH 插件）在正式升级时重新生成，预览不逐项比对。");
-    print("以上为预览，没有写入任何文件，也没有安装版本目录。config.json、policy.json、verify.json 升级时同样不会改动。");
-    if (plan.conflicts.length > 0) {
+  const result = upgradeProject({ force: values.force, dryRun: values["dry-run"] });
+  if (result.dryRun) {
+    print(`升级预览（${result.root}）: 版本 ${result.pinned ?? "未锁定"} -> ${result.version}`);
+    printInstallPlan(result);
+    if (result.golden?.removed.length > 0) print(`  将移除 .harness/golden/tasks.json 里与内置相同的旧副本: ${result.golden.removed.join(", ")}`);
+    if (result.golden?.overrides.length > 0) print(`  这些用例覆盖内置用例且与当前内置不同，升级时保留: ${result.golden.overrides.join(", ")}`);
+    print("以上为预览，没有写入项目或本机共享安装目录。config.json、policy.json、verify.json 升级时同样不会改动。");
+    if (result.conflicts.length > 0) {
       print(`存在托管文件冲突，正式升级会拒绝。先迁移项目自己的说明；确认用当前版本覆盖时，${humanExecutes("harness upgrade --force")}。`);
       return 1;
     }
-    if (plan.files.length === 0 && plan.golden.removed.length === 0) print(noNextAction("规则、模板、入口与 AGENTS.md 托管块已是最新"));
+    if (result.files.length === 0 && result.shared.every(({ action }) => action === "复用")) print(noNextAction("项目安装已是最新，没有需要写入的项目或本机共享文件"));
     else print(agentContinues("harness upgrade"));
     return 0;
   }
-  const result = upgradeProject({ force });
-  print(`已升级到 ${result.version}，入口 ${result.shim.shim}`);
+  print(`已升级到 ${result.version}，入口 ${result.install.shim}`);
   if (result.golden.removed.length > 0) print(`  已从 .harness/golden/tasks.json 移除与内置相同的旧副本: ${result.golden.removed.join(", ")}`);
   if (result.golden.overrides.length > 0) {
     print(`  这些用例覆盖内置用例且与当前内置不同: ${result.golden.overrides.join(", ")}`);
     print("  是自己改过的就保留；只是旧版本的拷贝就从 tasks.json 删掉，改用内置版本。");
   }
-  if (result.shim.hooksPath) print(`  ${formatHooksPath(result.shim.hooksPath)}`);
+  if (result.install.hooksPath) print(`  ${formatHooksPath(result.install.hooksPath)}`);
   const missing = unconfiguredOptions(result.root);
   if (missing.length > 0) {
     print("尚未配置的可选项（upgrade 不改 config.json 与 verify.json，要启用就在任务分支里加，门禁文件改动需要人确认）:");
     for (const text of missing) print(`  - ${text}`);
   }
+  return 0;
+}
+
+function cmdInstall(argv) {
+  const { values } = parseArgs({
+    args: argv,
+    options: {
+      "take-over": { type: "boolean", default: false },
+      local: { type: "boolean", default: false },
+      version: { type: "string" },
+      "dry-run": { type: "boolean", default: false },
+      recover: { type: "boolean", default: false },
+    },
+  });
+  const cwd = process.cwd();
+  const dryRun = values["dry-run"];
+  const takeOver = values["take-over"];
+  if (values.recover) {
+    if (values.local || values.version !== undefined || takeOver || dryRun) {
+      process.stderr.write("install --recover 必须单独使用\n");
+      return 2;
+    }
+    print(recoverProjectInstall({ cwd }) ? "已回滚中断的项目安装，本机共享资源未改动。" : "没有待恢复的项目安装。");
+    return 0;
+  }
+  if (values.version !== undefined) {
+    if (values.local || takeOver) {
+      process.stderr.write("--version 只把指定版本装进本机版本目录，不改项目文件；不能与 --local 或 --take-over 一起用\n");
+      return 2;
+    }
+    if (dryRun) {
+      const { dir, action, tag } = planVersionInstall({ version: values.version });
+      print(`版本安装预览: ${action} ${dir}${tag ? `（标签 ${tag}）` : ""}`);
+      print("以上为预览，没有写入版本目录。");
+      return 0;
+    }
+    const outcome = installVersion({ version: values.version });
+    print(`已安装版本 ${outcome.version} 到 ${outcome.dir}（项目文件未改动，本机共用钩子也未刷新）`);
+    if (outcome.fromTag) print("  代码来自 harness 仓库的标签，本机已有版本目录未受影响");
+    return 0;
+  }
+  const result = values.local ? installLocal({ cwd, dryRun }) : installAll({ cwd, dryRun, takeOver });
+  if (dryRun) {
+    print(`${values.local ? "本机安装" : "项目安装"}预览（${result.root}）: 版本 ${result.version}`);
+    printInstallPlan(result);
+    print("以上为预览，没有写入项目或本机共享安装目录。");
+    return result.conflicts.length > 0 ? 1 : 0;
+  }
+  if (values.local) {
+    if (result.fromTag) print(`项目锁定版本 ${result.published.version}，已从 harness 仓库的标签 v${result.published.version} 安装`);
+    print(`已刷新本机: 版本 ${result.published.version}${result.hooksTracked ? "；钩子目录随分支入库，无需刷新" : `；git 钩子 ${result.hooks.dir}`}`);
+    if (result.hooksPath) print(`  ${formatHooksPath(result.hooksPath)}`);
+    if (result.dsh) print(`  ${formatDshPlugin(result.dsh)}`);
+    return 0;
+  }
+  print(`已安装版本 ${result.published.version}，入口 ${result.shim}`);
+  for (const hook of result.hooks.hooks) print(`  git 钩子 ${hook.file}${hook.updated ? "(已接入)" : "(已存在)"}`);
+  if (result.hooksPath) print(`  ${formatHooksPath(result.hooksPath)}`);
+  print(`  Claude PreToolUse: ${result.claude}`);
+  print(`  Codex hooks: ${result.codex}`);
+  print(`  ${formatDshPlugin(result.dsh)}`);
+  if (result.shimTracked === false) print("  下一步: 提交 .harness/bin/harness，否则 Linked Worktree 里没有入口");
   return 0;
 }
 
@@ -1188,47 +1267,8 @@ export async function main(argv) {
       }
       case "init":
         return cmdInit(rest);
-      case "install": {
-        const { values } = parseArgs({
-          args: rest,
-          options: {
-            "take-over": { type: "boolean", default: false },
-            local: { type: "boolean", default: false },
-            version: { type: "string" },
-          },
-        });
-        if (values.version) {
-          if (values.local || values["take-over"]) {
-            process.stderr.write("--version 只把指定版本装进本机版本目录，不改项目文件；不能与 --local 或 --take-over 一起用\n");
-            return 2;
-          }
-          const outcome = installVersion({ version: values.version });
-          print(`已安装版本 ${outcome.version} 到 ${outcome.dir}（项目文件未改动，本机共用钩子也未刷新）`);
-          if (outcome.fromTag) print("  代码来自 harness 仓库的标签，本机已有版本目录未受影响");
-          return 0;
-        }
-        if (values.local) {
-          const local = installLocal({ cwd: process.cwd() });
-          if (local.fromTag) print(`项目锁定版本 ${local.published.version}，已从 harness 仓库的标签 v${local.published.version} 安装`);
-          print(`已刷新本机: 版本 ${local.published.version}${local.hooksTracked ? "；钩子目录随分支入库，无需刷新" : `；git 钩子 ${local.hooks.dir}`}`);
-          if (local.hooksPath) print(`  ${formatHooksPath(local.hooksPath)}`);
-          if (local.dsh) print(`  ${formatDshPlugin(local.dsh)}`);
-          return local.hooksPath?.state === "overridden" ? 1 : 0;
-        }
-        const result = installAll({ cwd: process.cwd(), takeOver: values["take-over"] });
-        print(`已安装版本 ${result.published.version}，入口 ${result.shim}`);
-        for (const hook of result.hooks.hooks) print(`  git 钩子 ${hook.file}${hook.updated ? "(已接入)" : "(已存在)"}`);
-        if (result.hooksPath) print(`  ${formatHooksPath(result.hooksPath)}`);
-        print(`  Claude PreToolUse: ${result.claude}`);
-        print(`  Codex hooks: ${result.codex}`);
-        print(`  ${formatDshPlugin(result.dsh)}`);
-        if (result.gitignore.shimIgnored) {
-          process.stderr.write(`[harness] 入口仍被 .gitignore 忽略，请手工放行 ${".harness/bin/harness"}，否则 Linked Worktree 里没有入口\n`);
-          return 1;
-        }
-        if (result.shimTracked === false) print(`  下一步: 提交 .harness/bin/harness，否则 Linked Worktree 里没有入口`);
-        return 0;
-      }
+      case "install":
+        return cmdInstall(rest);
       case "status": {
         const { values } = parseArgs({ args: rest, options: { branch: { type: "string" }, handoff: { type: "boolean", default: false }, "post-merge": { type: "boolean", default: false }, json: { type: "boolean", default: false } } });
         if (values.handoff && values["post-merge"]) {

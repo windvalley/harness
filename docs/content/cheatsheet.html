@@ -23,7 +23,9 @@
         <tr><td><code>metrics [--days &lt;n&gt;]</code></td><td>按周统计合并、验证、评审与拦截情况</td></tr>
         <tr><td><code>rules</code>、<code>check --kind ...</code></td><td>列出生效规则；手工判定一次调用</td></tr>
         <tr><td><code>golden [--worktree]</code></td><td>重放黄金任务</td></tr>
-        <tr><td><code>install --local</code>、<code>install --version &lt;版本&gt;</code>、<code>upgrade [--dry-run] [--force]</code></td><td>新机器安装；只把指定版本装进版本目录；升级项目到当前版本，<code>--dry-run</code> 只预览，<code>--force</code> 由人明确覆盖托管冲突</td></tr>
+        <tr><td><code>install [--local] [--dry-run]</code>、<code>install --version &lt;版本&gt; [--dry-run]</code></td><td>安装项目或刷新本机；也可只装指定版本。<code>--dry-run</code> 只预览</td></tr>
+        <tr><td><code>upgrade [--dry-run] [--force]</code></td><td>升级项目到当前版本；<code>--force</code> 由人明确覆盖托管冲突</td></tr>
+        <tr><td><code>install --recover</code></td><td>在原 Worktree 和检出回滚中断安装，不覆盖冲突的人工改动</td></tr>
         <tr><td><code>reviewer list</code>、<code>set</code>、<code>remove</code>、<code>prefer</code>、<code>test</code></td><td>管理本机评审者：客户端、模型、推理强度、端点与 key</td></tr>
         <tr><td><code>key status</code>、<code>key rotate [--yes]</code></td><td>查看证据密钥；轮换由人执行</td></tr>
         <tr><td><code>pitfall add --signature &lt;特征&gt; --symptom &lt;现象&gt; --fix &lt;做法&gt;</code>、<code>pitfall list [--flagged]</code></td><td>记录本项目反复踩的坑，同一特征再次记录只累加命中次数；<code>--flagged</code> 只列命中满 3 次、建议固化的条目</td></tr>

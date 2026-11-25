@@ -1,5 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 import { assetPath } from "../install/managed.mjs";
 
@@ -31,20 +30,7 @@ export function resolveGolden(projectGolden) {
  * 升级时清理项目里与当前内置用例完全相同的旧副本：它们没有任何自定义内容，留着会盖住以后的内置更新。
  * 与内置不同的同 id 用例不动，交给人决定是自己的改动还是过期副本。
  */
-export function pruneBuiltinCopies(root) {
-  const plan = planBuiltinCopies(root);
-  if (plan.removed.length > 0) {
-    const file = join(root, ".harness", "golden", "tasks.json");
-    writeFileSync(file, `${JSON.stringify({ ...plan.golden, tasks: plan.kept }, null, 2)}\n`);
-  }
-  return { removed: plan.removed, overrides: plan.overrides };
-}
-
-/** pruneBuiltinCopies 的只读判定：哪些旧副本会被移除，哪些同 id 用例与内置不同。 */
-export function planBuiltinCopies(root) {
-  const file = join(root, ".harness", "golden", "tasks.json");
-  if (!existsSync(file)) return { removed: [], overrides: [], kept: [], golden: null };
-  const golden = JSON.parse(readFileSync(file, "utf8"));
+export function planBuiltinCopies(golden) {
   const builtin = new Map(builtinTasks().map((task) => [task.id, task]));
   const removed = [];
   const overrides = [];
@@ -57,5 +43,5 @@ export function planBuiltinCopies(root) {
       if (base) overrides.push(task.id);
     }
   }
-  return { removed, overrides, kept, golden };
+  return { removed, overrides, kept };
 }

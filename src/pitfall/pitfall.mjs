@@ -11,7 +11,7 @@ const LABEL = { signature: "signature", symptom: "现象", fix: "做法" };
 // 只认冲突块的起止行：单独的 ======= 也是 Markdown 标题下划线，不能当冲突。
 const CONFLICT = /^(<{7}|>{7})( |$)/m;
 
-const HEADER = `# 项目坑位记录
+export const PITFALL_HEADER = `# 项目坑位记录
 
 踩到本项目的环境类问题（构建、路径、工具版本、平台行为）并解决后，运行 \`harness pitfall add\` 记录。
 通用工程知识不记。
@@ -78,7 +78,7 @@ function render({ preamble, entries }) {
 
 function load(root) {
   const file = join(root, PITFALL_FILE);
-  const text = existsSync(file) ? readFileSync(file, "utf8") : HEADER;
+  const text = existsSync(file) ? readFileSync(file, "utf8") : PITFALL_HEADER;
   if (CONFLICT.test(text)) throw new Error(`${PITFALL_FILE} 里还有未解决的合并冲突，先解决冲突（保留双方的条目与命中记录）再记录`);
   return parsePitfalls(text);
 }
@@ -153,15 +153,6 @@ export function formatPitfalls(entries) {
   return entries
     .map((entry) => `${entry.flagged ? "[建议固化] " : ""}${entry.signature}（命中 ${entry.hits.length} 次，最近 ${lastHit(entry) || "-"}）\n  现象: ${entry.symptom}\n  做法: ${entry.fix}`)
     .join("\n");
-}
-
-/** 首次接入或升级时补一个只有说明的空文件；已有的文件不动。 */
-export function ensurePitfallsFile(root) {
-  const file = join(root, PITFALL_FILE);
-  if (existsSync(file)) return false;
-  mkdirSync(dirname(file), { recursive: true });
-  writeFileSync(file, HEADER);
-  return true;
 }
 
 /** 供 status 使用：文件内容读不到时返回 null。 */

@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { git, run } from "../lib/git.mjs";
 import { PACKAGE_ROOT } from "../policy/resolve.mjs";
 import { withInstallLock } from "./install-lock.mjs";
+import { inspectDirectory, statIfPresent } from "./install-paths.mjs";
 import { packageVersion } from "./managed.mjs";
 
 const VERSION = /^\d+\.\d+\.\d+(?:-[\da-z-]+(?:\.[\da-z-]+)*)?(?:\+[\da-z-]+(?:\.[\da-z-]+)*)?$/i;
@@ -33,15 +34,6 @@ export function readVersionPin(versionText, shimText) {
   const file = versionText?.trim() || null;
   const shim = shimText?.match(/^\s*HARNESS_VERSION="\$\{HARNESS_VERSION:-([0-9][^}"]*)\}"/m)?.[1] ?? null;
   return { version: file ?? shim, file, shim, mismatch: Boolean(file && shim && file !== shim) };
-}
-
-function statIfPresent(file) {
-  try {
-    return lstatSync(file);
-  } catch (error) {
-    if (error.code !== "ENOENT") throw error;
-    return null;
-  }
 }
 
 function plainFile(file) {
@@ -132,8 +124,13 @@ export function verifyVersion({ version = packageVersion() } = {}) {
   }
 }
 
+const versionLockPath = (version) => join(storeRoot(), ".locks", version);
+const backupPath = (version) => join(storeRoot(), `.repair-${version}`);
+
 function versionLock(version, action) {
-  return withInstallLock(join(storeRoot(), ".locks", version), action);
+  const lock = versionLockPath(version);
+  inspectDirectory(lock);
+  return withInstallLock(lock, action);
 }
 
 function checkIdentity(dir, incoming) {
@@ -149,6 +146,14 @@ function checkIdentity(dir, incoming) {
   return manifest;
 }
 
+function publishState(target, backup, incoming) {
+  const exists = Boolean(statIfPresent(target));
+  const healthy = exists && verifyTree(target, checkIdentity(target, incoming)).ok;
+  const repairing = !healthy && Boolean(statIfPresent(backup));
+  if (repairing) checkIdentity(backup, incoming);
+  return { exists, healthy, repairing };
+}
+
 function discardScratch(dir) {
   try {
     rmSync(dir, { recursive: true, force: true });
@@ -160,13 +165,11 @@ function discardScratch(dir) {
 /** 当前源码和历史标签共用发布器，正式目录只由同盘 rename 产生。 */
 function publishTree(source, version) {
   const target = versionDir(version);
-  const backup = join(storeRoot(), `.repair-${version}`);
+  const backup = backupPath(version);
   const incoming = scanTree(source, version);
   return versionLock(version, () => {
-    const exists = Boolean(statIfPresent(target));
-    if (exists && verifyTree(target, checkIdentity(target, incoming)).ok) return { version, dir: target, existed: true };
-    const repairing = Boolean(statIfPresent(backup));
-    if (repairing) checkIdentity(backup, incoming);
+    const { exists, healthy, repairing } = publishState(target, backup, incoming);
+    if (healthy) return { version, dir: target, existed: true };
 
     const stage = mkdtempSync(join(storeRoot(), `.stage-${version}-`));
     let quarantine;
@@ -248,12 +251,8 @@ export function resolveVersionTag(version) {
   return { tag, commit: ref.stdout.trim() };
 }
 
-/** 只装版本，不写项目文件或刷新钩子。健康的历史版本不需要标签即可复用。 */
-export function installVersion({ version }) {
-  if (version === undefined) throw new Error("请指定需要安装的版本号");
-  const dir = versionDir(version);
-  if (version === packageVersion()) return { ...publishVersion({ version }), fromTag: false };
-  if (verifyVersion({ version }).ok) return { version, dir, existed: true, fromTag: false };
+function withVersionSource(version, action) {
+  if (version === packageVersion()) return action(PACKAGE_ROOT);
   const { tag, commit } = resolveVersionTag(version);
   const tmp = mkdtempSync(join(tmpdir(), "harness-tag-"));
   try {
@@ -262,8 +261,29 @@ export function installVersion({ version }) {
     if (archived.status !== 0) throw new Error(`导出标签 ${tag} 失败: ${archived.stderr.trim()}`);
     const extracted = run("tar", ["-xf", tar, "-C", tmp]);
     if (extracted.status !== 0) throw new Error(`解开标签 ${tag} 失败: ${extracted.stderr.trim()}`);
-    return { ...publishTree(tmp, version), fromTag: true };
+    return action(tmp, tag);
   } finally {
     discardScratch(tmp);
   }
+}
+
+/** 不写版本库；发布器在持有版本锁后仍会检查身份和完整性。 */
+export function planVersionInstall({ version }) {
+  const dir = versionDir(version);
+  if (version !== packageVersion() && verifyVersion({ version }).ok) return { dir, action: "复用" };
+  inspectDirectory(versionLockPath(version));
+  return withVersionSource(version, (source, tag) => {
+    const { exists, healthy, repairing } = publishState(dir, backupPath(version), scanTree(source, version));
+    if (healthy) return { dir, action: "复用" };
+    inspectDirectory(storeRoot());
+    return { dir, action: `${tag ? "从标签" : ""}${exists || repairing ? "修复" : "安装"}`, tag };
+  });
+}
+
+/** 只装版本，不写项目文件或刷新钩子。健康的历史版本不需要标签即可复用。 */
+export function installVersion({ version }) {
+  if (version === undefined) throw new Error("请指定需要安装的版本号");
+  const dir = versionDir(version);
+  if (version !== packageVersion() && verifyVersion({ version }).ok) return { version, dir, existed: true, fromTag: false };
+  return withVersionSource(version, (source, tag) => ({ ...publishTree(source, version), fromTag: Boolean(tag) }));
 }

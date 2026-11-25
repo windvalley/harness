@@ -152,6 +152,9 @@ test("损坏、身份未知、临时目录不列出、不由 prune 清理，也�
   assert.equal(repo.rawCli("versions").stdout, "");
   assert.match(repo.rawCli("prune", "--keep", "0.0.0").stdout, /已删除 0 个旧版本/);
   assert.match(repo.rawCli("publish").stderr, /无法确认.*未覆盖/);
+  const preview = repo.rawCli("install", "--version", version, "--dry-run");
+  assert.equal(preview.status, 1);
+  assert.match(preview.stderr, /无法确认.*未覆盖/);
   assert.equal(readFileSync(join(target, "MANIFEST.json"), "utf8"), "{\n");
   assert.ok(existsSync(join(store, "0.0.9.tmp-123")));
   const doctor = repo.rawCli("doctor");
@@ -164,6 +167,10 @@ test("历史版本由当前发布器安装，健康版本可从不含标签的�
   t.after(() => rmSync(copied, { recursive: true, force: true }));
   for (const older of ["0.3.0", "0.4.0"]) {
     if (sh(PACKAGE_ROOT, "git", ["rev-parse", "--verify", "--quiet", `refs/tags/v${older}`]).status !== 0) continue;
+    const preview = repo.rawCli("install", "--version", older, "--dry-run");
+    assert.equal(preview.status, 0, preview.stderr);
+    assert.match(preview.stdout, /版本安装预览: 从标签安装/);
+    assert.equal(existsSync(join(store, older)), false);
     const install = repo.rawCli("install", "--version", older);
     assert.equal(install.status, 0, install.stderr);
     assert.match(install.stdout, /标签/);

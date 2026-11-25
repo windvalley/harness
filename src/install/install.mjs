@@ -1,13 +1,21 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, join } from "node:path";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { PACKAGE_ROOT } from "../policy/resolve.mjs";
-import { commonDir, git, hooksPlacement, mainWorktreeRoot, repoRoot, samePath } from "../lib/git.mjs";
-import { gitHooksConfig, loadCurrentProject } from "../lib/config.mjs";
-import { loadKey } from "../lib/store.mjs";
-import { packageVersion, writeRules } from "./managed.mjs";
-import { installVersion, publishVersion, readVersionPin, storeRoot, versionDir } from "./version-store.mjs";
+import { commonDir, git, hooksPlacement, mainWorktreeRoot, repoRoot, samePath, showBlob } from "../lib/git.mjs";
+import { gitHooksConfig, loadCurrentProject, trustedMainRef } from "../lib/config.mjs";
+import { keyPath, keyStatus, loadKey } from "../lib/store.mjs";
+import { MANAGED_MANIFEST, managedConflictError, packageVersion, planManagedRules } from "./managed.mjs";
+import { installVersion, isVersion, planVersionInstall, readVersionPin, storeRoot, versionDir } from "./version-store.mjs";
+import { planGitignore, SHIM_REL, verifyShimIgnore } from "./install-ignore.mjs";
+import { withInstallLock } from "./install-lock.mjs";
+import { inspectDirectory, statIfPresent } from "./install-paths.mjs";
+import {
+  applyProjectChanges, createProjectChanges, HOOK_NAMES, installCheckout, installLocation, parseInstallJson,
+  pendingInstall, readRegularText, replaceInstallFile, validateProjectInstall, withProjectInstallLock,
+} from "./install-transaction.mjs";
 
 export { installVersion, listVersions, pruneVersions, publishVersion, storeEntry, storeRoot, verifyVersion, versionDir } from "./version-store.mjs";
+export { HOOK_NAMES } from "./install-transaction.mjs";
 
 export function shimPath(root) {
   return join(root, ".harness", "bin", "harness");
@@ -58,17 +66,8 @@ exec node "$entry" "$@"
 `;
 }
 
-export function writeShim({ root, version = packageVersion() }) {
-  const file = shimPath(root);
-  mkdirSync(join(file, ".."), { recursive: true });
-  writeFileSync(file, shimBody(version));
-  chmodSync(file, 0o755);
-  return file;
-}
-
 const HOOK_MARK = "# harness:hook";
 const HOOK_END = "# harness:hook-end";
-export const HOOK_NAMES = ["pre-commit", "commit-msg", "reference-transaction"];
 
 /** hooks 是 gitHooksConfig 的结果；为 null 时按 core.hooksPath 或 .git/hooks 定位。 */
 export function gitHooksDir(root, hooks = null) {
@@ -87,10 +86,22 @@ export function currentHooksConfig(root) {
 }
 
 /** 当前 Worktree 里的项目配置所声明的钩子目录；install 写的是这个 Worktree，按它自己的配置。 */
-export function worktreeHooksConfig(root) {
+export function worktreeHooksConfig(root, read = readRegularText) {
   const file = join(root, ".harness", "config.json");
-  if (!existsSync(file)) return null;
-  return gitHooksConfig(JSON.parse(readFileSync(file, "utf8")));
+  const text = read(file);
+  return text === null ? null : gitHooksConfig(parseInstallJson(text, file));
+}
+
+function localHooksConfig(root, read) {
+  let ref;
+  try {
+    ref = trustedMainRef(root);
+  } catch {
+    // 空仓库也能安装；没有主分支配置时读当前 Worktree。
+  }
+  const rel = ".harness/config.json";
+  const text = ref ? showBlob(root, ref, rel) : null;
+  return text === null ? worktreeHooksConfig(root, read) : gitHooksConfig(parseInstallJson(text, `${ref}:${rel}`));
 }
 
 /**
@@ -115,9 +126,8 @@ export function stripHookBlock(text) {
  * 追加在末尾会失效：已有的 pre-commit 常见写法是“没有相关改动就 exit 0”，
  * reference-transaction 则会先把标准输入读完，追加的块既拿不到输入也可能永远不执行。
  */
-export function insertHookBlock({ file, block, dropForeign = false }) {
-  mkdirSync(join(file, ".."), { recursive: true });
-  const existing = existsSync(file) ? readFileSync(file, "utf8") : "";
+function planHookBlock(changes, { file, block, dropForeign = false }) {
+  const existing = changes.read(file) ?? "";
   // 接管时只留 shebang，其他工具写进来的内容整段移除。
   const kept = dropForeign ? (existing.startsWith("#!") ? existing.split("\n")[0] : "") : stripHookBlock(existing);
   const body = kept.replace(/\n+$/, "");
@@ -126,9 +136,7 @@ export function insertHookBlock({ file, block, dropForeign = false }) {
   const head = hasShebang ? [lines[0]] : ["#!/bin/sh"];
   const rest = hasShebang ? lines.slice(1) : lines;
   const next = `${[...head, block.trimEnd(), ...rest].join("\n")}\n`;
-  writeFileSync(file, next);
-  chmodSync(file, 0o755);
-  return { file, updated: existing !== next };
+  return { file, updated: changes.set(file, next, { mode: 0o755 }) };
 }
 
 /**
@@ -149,14 +157,13 @@ harness_enabled() {
  * takeOver 只作用于 reference-transaction：原有的主分支保护会拒绝 harness 的合并，接管时移除；
  * pre-commit 与 commit-msg 里的原有脚本（lint、提交信息校验等）一律保留。
  */
-export function writeGitHooks({ root, takeOver = false, hooks = null }) {
-  if (hooks) return writeManagedHooks({ root, hooks });
-  const dir = gitHooksDir(root);
+function planGitHooks({ dir, changes, takeOver = false, hooks = null }) {
+  if (hooks) return planManagedHooks({ dir, changes, hooks });
   const results = [];
 
   for (const name of ["pre-commit", "commit-msg"]) {
     results.push(
-      insertHookBlock({
+      planHookBlock(changes, {
         file: join(dir, name),
         // 提交前检查只是提前提示：入口缺失或本机没装锁定的版本时提示后放行；真正的约束在合并与引用保护。
         block: `${HOOK_MARK} ${name}
@@ -182,7 +189,7 @@ ${HOOK_END}`,
 
   // 标准输入只能读一次：harness 先读走，判定后用 here-doc 原样交还给钩子里原有的脚本。
   results.push(
-    insertHookBlock({
+    planHookBlock(changes, {
       file: join(dir, "reference-transaction"),
       dropForeign: takeOver,
       block: `${HOOK_MARK} reference-transaction
@@ -301,20 +308,19 @@ ${HOOK_END}
 }
 
 /** 文件是不是 harness 接管模式生成的：去掉 harness 块后只剩 shebang。 */
-function managedHookReady(file) {
-  if (!existsSync(file)) return false;
-  const text = readFileSync(file, "utf8");
-  return text.includes(HOOK_MARK) && stripHookBlock(text).split("\n").every((line) => !line.trim() || line.startsWith("#!"));
+function managedHookContent(text) {
+  return Boolean(text?.includes(HOOK_MARK)) && stripHookBlock(text).split("\n").every((line) => !line.trim() || line.startsWith("#!"));
 }
 
 /**
  * 接管模式：钩子目录整个由 harness 生成。目录里已有其他工具写的内容时拒绝覆盖，
  * 提示把它们移到项目钩子目录，否则会被静默冲掉。
  */
-export function writeManagedHooks({ root, hooks }) {
-  const dir = join(root, hooks.hooksDir);
-  mkdirSync(dir, { recursive: true });
-  const foreign = HOOK_NAMES.filter((name) => existsSync(join(dir, name)) && !managedHookReady(join(dir, name)));
+function planManagedHooks({ dir, changes, hooks }) {
+  const foreign = HOOK_NAMES.filter((name) => {
+    const text = changes.read(join(dir, name));
+    return text !== null && !managedHookContent(text);
+  });
   if (foreign.length > 0) {
     const target = hooks.projectHooks ?? "git.projectHooks 指定的目录";
     throw new Error(
@@ -323,11 +329,8 @@ export function writeManagedHooks({ root, hooks }) {
   }
   const results = HOOK_NAMES.map((name) => {
     const file = join(dir, name);
-    const before = existsSync(file) ? readFileSync(file, "utf8") : "";
     const body = managedHookBody(name, hooks.projectHooks);
-    writeFileSync(file, body);
-    chmodSync(file, 0o755);
-    return { file, updated: before !== body };
+    return { file, updated: changes.set(file, body, { mode: 0o755 }) };
   });
   return { dir, hooks: results, managed: true };
 }
@@ -347,7 +350,10 @@ export function hooksPathState({ root, hooks }) {
   const target = join(mainWorktreeRoot(root), hooks.hooksDir);
   const { current, resolved } = resolvedHooksPath(root);
   if (resolved && samePath(resolved, target)) return { state: "ok", target, current };
-  const ready = HOOK_NAMES.every((name) => managedHookReady(join(target, name)));
+  const ready = HOOK_NAMES.every((name) => {
+    const file = join(target, name);
+    return existsSync(file) && managedHookContent(readFileSync(file, "utf8"));
+  });
   return { state: ready ? "mismatch" : "pending", target, current };
 }
 
@@ -366,6 +372,23 @@ export function ensureHooksPath({ root, hooks }) {
   return { ...after, state: after.state === "ok" ? "switched" : "overridden", previous: before.current };
 }
 
+function planHooksPath({ root, hooks, changes }) {
+  const target = join(mainWorktreeRoot(root), hooks.hooksDir);
+  const { current, resolved } = resolvedHooksPath(root);
+  const ready = HOOK_NAMES.every((name) => {
+    const file = join(target, name);
+    const state = changes.stat(file);
+    return state?.type === "file" && (state.mode & 0o111) !== 0 && managedHookContent(changes.read(file));
+  });
+  const base = { target, current, previous: current };
+  if (resolved && samePath(resolved, target)) return { ...base, state: "ok" };
+  if (!ready) return { ...base, state: "pending" };
+  const scope = git(root, ["config", "--show-scope", "--null", "--get", "core.hooksPath"]).stdout.split("\0", 1)[0];
+  if (["worktree", "command"].includes(scope)) throw new Error(`core.hooksPath 被 ${scope} 级配置覆盖，请修正后再安装`);
+  changes.config(target);
+  return { ...base, state: "switched" };
+}
+
 /**
  * 判断一条客户端钩子命令是不是 harness 的；也认 0.2 及以前生成在 .harness/bin/ 下的入口脚本。
  * 只认这两种写法，其他工具的同名脚本不算，是否移除由接管决定。
@@ -375,9 +398,15 @@ export function isHarnessClientHook(command) {
   return /\.harness\/bin\/harness"?\s+hook\s+--client\b/.test(text) || /\.harness\/bin\/(claude|codex)-hook\.mjs/.test(text);
 }
 
-function keepEntries(entries, takeOver) {
-  return (entries ?? []).filter((entry) => {
-    const commands = (entry.hooks ?? [entry]).map((item) => item.command);
+function keepEntries(entries, takeOver, file) {
+  const invalid = () => new Error(`${file} 的钩子事件配置无效，应是钩子对象数组`);
+  if (entries === undefined) return [];
+  if (!Array.isArray(entries)) throw invalid();
+  return entries.filter((entry) => {
+    const handlers = entry?.hooks ?? [entry];
+    if (!Array.isArray(handlers) || !entry || typeof entry !== "object" || Array.isArray(entry) ||
+        handlers.some((item) => !item || typeof item !== "object" || Array.isArray(item))) throw invalid();
+    const commands = handlers.map((item) => item.command);
     if (commands.some(isHarnessClientHook)) return false;
     return !takeOver;
   });
@@ -393,49 +422,37 @@ const STOP_SUFFIX = " --event stop";
  * Stop 事件里的 harness 条目换成最新的一份。其他工具的 Stop 钩子（例如结束提醒）一律保留，
  * 接管只针对拦截类的 PreToolUse，不能顺带删掉用户自己的提醒。
  */
-function withStopHook(hooks, command, flat = false) {
+function withStopHook(hooks, command, file, flat = false) {
   const handler = { type: "command", command };
-  return { ...hooks, Stop: [...keepEntries(hooks.Stop, false), flat ? handler : { hooks: [handler] }] };
+  return { ...hooks, Stop: [...keepEntries(hooks.Stop, false, file), flat ? handler : { hooks: [handler] }] };
 }
 
 /**
- * Claude Code 的 PreToolUse 与 Stop 钩子配置；保留文件里其他设置。
+ * Claude Code 与 Codex 的 PreToolUse 和 Stop 钩子配置；保留文件里其他设置。
  * 其他工具的 PreToolUse 钩子默认保留，takeOver 时移除。
  */
-export function writeClaudeSettings({ root, takeOver = false }) {
-  const file = join(root, ".claude", "settings.json");
-  mkdirSync(join(file, ".."), { recursive: true });
-  const current = existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : {};
-  const hook = { type: "command", command: CLAUDE_HOOK_COMMAND };
-  const matcher = "Bash|Write|Edit|MultiEdit|NotebookEdit|Read|Grep";
-  const kept = keepEntries(current.hooks?.PreToolUse, takeOver);
-  current.hooks = withStopHook({ ...(current.hooks ?? {}), PreToolUse: [...kept, { matcher, hooks: [hook] }] }, CLAUDE_HOOK_COMMAND + STOP_SUFFIX);
-  writeFileSync(file, `${JSON.stringify(current, null, 2)}\n`);
-  return file;
-}
-
-/** Codex 的项目级钩子文件；与 Claude 同构但用 permissionDecision 表达拒绝。规则同上：其他工具的钩子默认保留。 */
-export function writeCodexHooks({ root, takeOver = false }) {
-  const file = join(root, ".codex", "hooks.json");
-  mkdirSync(join(file, ".."), { recursive: true });
-  const current = existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : {};
-  const kept = keepEntries(current.hooks?.PreToolUse, takeOver);
-  const ours = { matcher: "*", hooks: [{ type: "command", command: CODEX_HOOK_COMMAND }] };
-  current.hooks = withStopHook({ ...(current.hooks ?? {}), PreToolUse: [...kept, ours] }, CODEX_HOOK_COMMAND + STOP_SUFFIX);
-  writeFileSync(file, `${JSON.stringify(current, null, 2)}\n`);
+function planClientHooks({ file, changes, takeOver, command, matcher }) {
+  const text = changes.read(file);
+  const current = text === null ? {} : parseInstallJson(text, file);
+  const hooks = current.hooks ?? {};
+  if (typeof hooks !== "object" || Array.isArray(hooks)) throw new Error(`${file} 的 hooks 配置不是对象`);
+  const kept = keepEntries(hooks.PreToolUse, takeOver, file);
+  const ours = { matcher, hooks: [{ type: "command", command }] };
+  current.hooks = withStopHook({ ...hooks, PreToolUse: [...kept, ours] }, command + STOP_SUFFIX, file);
+  changes.set(file, `${JSON.stringify(current, null, 2)}\n`);
   return file;
 }
 
 /** Antigravity 按自定义名称分组保存事件；默认保留其他分组，takeOver 只移除其他 PreToolUse，其他事件不动。 */
-export function writeAntigravityHooks({ root, takeOver = false }) {
+function planAntigravityHooks({ root, changes, takeOver }) {
   const file = join(root, ".agents", "hooks.json");
-  mkdirSync(join(file, ".."), { recursive: true });
-  const current = existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : {};
+  const text = changes.read(file);
+  const current = text === null ? {} : parseInstallJson(text, file);
   for (const group of Object.values(current)) {
     if (!group || typeof group !== "object" || Array.isArray(group)) continue;
     for (const [event, foreign] of [["PreToolUse", takeOver], ["Stop", false]]) {
-      if (!Array.isArray(group[event])) continue;
-      const kept = keepEntries(group[event], foreign);
+      if (!Object.hasOwn(group, event)) continue;
+      const kept = keepEntries(group[event], foreign, file);
       if (kept.length > 0) group[event] = kept;
       else delete group[event];
     }
@@ -445,37 +462,11 @@ export function writeAntigravityHooks({ root, takeOver = false }) {
   current.harness = withStopHook(
     { ...ours, enabled: true, PreToolUse: [...(ours.PreToolUse ?? []), { matcher: "*", hooks: [hook] }] },
     ANTIGRAVITY_HOOK_COMMAND + STOP_SUFFIX,
+    file,
     true,
   );
-  writeFileSync(file, `${JSON.stringify(current, null, 2)}\n`);
+  changes.set(file, `${JSON.stringify(current, null, 2)}\n`);
   return file;
-}
-
-const SHIM_REL = ".harness/bin/harness";
-
-/**
- * 维护 .gitignore。
- * 入口 shim 必须入库：Go 项目常有全局的 `bin/` 忽略规则，会连带忽略 `.harness/bin/`，
- * 那样 Linked Worktree 里没有入口，客户端拦截与 git 钩子都会静默失效。
- */
-export function ensureGitignore({ root }) {
-  const file = join(root, ".gitignore");
-  const original = existsSync(file) ? readFileSync(file, "utf8") : "";
-  // 0.2 及以前要求忽略 .harness/bin/，现在入口要入库，把这一行去掉。
-  const lines = original.split("\n").filter((line) => line.trim() !== ".harness/bin/");
-  const legacy = lines.length !== original.split("\n").length;
-  while (lines.length > 0 && lines.at(-1) === "") lines.pop();
-  const save = () => writeFileSync(file, lines.length > 0 ? `${lines.join("\n")}\n` : "");
-  const ensure = (line) => {
-    if (!lines.some((item) => item.trim() === line)) lines.push(line);
-    save();
-  };
-  if (legacy) save();
-  // 父目录被排除时单独放行文件无效，先放行目录本身，仍被忽略再放行文件。
-  const ignored = () => git(root, ["check-ignore", "--quiet", "--no-index", SHIM_REL]).status === 0;
-  if (ignored()) ensure("!.harness/bin/");
-  if (ignored()) ensure(`!${SHIM_REL}`);
-  return { file, shimIgnored: ignored() };
 }
 
 /** 本机共用的 DeepSeek Harness 插件目录，与版本目录同级；每个 profile 注册一次，所有项目共用。 */
@@ -524,73 +515,160 @@ export function dshPluginStale() {
  * 插件按会话所在仓库锁定的版本导入门禁代码，与哪个项目、哪个版本生成它无关。
  * 已有的插件由更新的版本生成时保持不变，旧版本的 install 不会把它换回旧代码。
  */
-export function writeDshPlugin() {
-  const dir = dshPluginDir();
+function planDshPlugin() {
+  const dir = resolve(dshPluginDir());
   const version = packageVersion();
   const manifestFile = join(dir, "package.json");
-  if (existsSync(manifestFile)) {
+  try {
+    inspectDirectory(dir, { writable: false });
+    const manifest = readRegularText(manifestFile);
     let current = null;
     try {
-      current = JSON.parse(readFileSync(manifestFile, "utf8")).version;
+      if (manifest !== null) current = JSON.parse(manifest)?.version;
     } catch {
       // 读不出版本的插件按损坏处理，下面整份重写。
     }
     if (typeof current === "string" && current.localeCompare(version, undefined, { numeric: true }) > 0) {
-      return { dir, version: current, updated: false };
+      return { dir, version: current, files: [] };
     }
+    const files = Object.entries(dshPluginFiles()).flatMap(([name, body]) => {
+      const file = join(dir, name);
+      const before = name === "package.json" ? manifest : readRegularText(file);
+      return before === body ? [] : [{ file, body, action: before === null ? "新增" : "更新" }];
+    });
+    if (files.length > 0) {
+      inspectDirectory(dir);
+      inspectDirectory(dshLock(dir));
+    }
+    return { dir, version, files };
+  } catch (error) {
+    throw new Error(`预检冲突（DSH 插件）: ${error.message}`);
   }
-  const files = dshPluginFiles();
-  mkdirSync(dir, { recursive: true });
-  let updated = false;
-  for (const [name, body] of Object.entries(files)) {
-    const file = join(dir, name);
-    if (existsSync(file) && readFileSync(file, "utf8") === body) continue;
-    writeFileSync(file, body);
-    updated = true;
-  }
-  return { dir, version, updated };
 }
 
-export function installAll({ cwd, takeOver = false }) {
-  const root = repoRoot(cwd);
-  loadKey();
-  const published = publishVersion();
-  const pinned = pinnedVersion(root);
-  const previousRoot = pinned ? join(versionDir(pinned), "assets") : null;
-  writeRules({ root, version: published.version, previousRoot });
-  // 旧版生成过带本机绝对路径的入口脚本，入口改为 shim 后不再需要。
-  for (const name of ["claude-hook.mjs", "codex-hook.mjs"]) rmSync(join(root, ".harness", "bin", name), { force: true });
-  const shim = writeShim({ root });
-  // 按当前 Worktree 的配置写：任务分支加上或改了钩子目录配置时，生成的钩子随分支提交，合入前由人确认。
-  const hooksConfig = worktreeHooksConfig(root);
-  const hooks = writeGitHooks({ root, takeOver, hooks: hooksConfig });
-  const hooksPath = hooksConfig ? ensureHooksPath({ root, hooks: hooksConfig }) : null;
-  const claude = writeClaudeSettings({ root, takeOver });
-  const codex = writeCodexHooks({ root, takeOver });
-  const dsh = writeDshPlugin();
-  const antigravity = writeAntigravityHooks({ root, takeOver });
-  const gitignore = ensureGitignore({ root });
-  const shimTracked = git(root, ["ls-files", "--error-unmatch", SHIM_REL]).status === 0;
-  return { root, published, shim, hooks, hooksPath, claude, codex, dsh, antigravity, gitignore, shimTracked };
+const dshLock = (dir) => join(dirname(dir), ".dsh-install-lock");
+
+function prepareDshPlugin(plan) {
+  const { dir, version, files } = plan;
+  if (files.length === 0) return { dir, version, updated: false };
+  return withInstallLock(dshLock(dir), () => {
+    // 另一个项目可能刚装完新版插件，持锁重新确认，不会降级或互相覆盖。
+    const current = planDshPlugin();
+    mkdirSync(dir, { recursive: true });
+    for (const { file, body } of current.files) replaceInstallFile(file, body);
+    return { dir, version: current.version, updated: current.files.length > 0 };
+  });
 }
 
-/**
- * 只刷新本机这一份：安装版本、所有 Worktree 共用的钩子目录、本机共用的 DSH 插件，不碰任何入库文件。
- * 合并工具在入口或钩子改动合入后，用新入口在主 Worktree 调用它，保证共用钩子与新版本一致。
- * 项目接管了钩子目录时，钩子文件随分支入库，这里只让 core.hooksPath 指向主 Worktree 里的那份。
- */
-export function installLocal({ cwd }) {
+function planKey() {
+  const file = resolve(keyPath());
+  inspectDirectory(dirname(file), { writable: false });
+  const stat = statIfPresent(file);
+  if (stat && !stat.isFile()) throw new Error(`证据密钥路径不是普通文件: ${file}`);
+  if (!stat) inspectDirectory(dirname(file));
+  const key = keyStatus();
+  if (key.exists && !key.valid) throw new Error(key.reason);
+  return { path: file, action: key.exists ? "复用" : "生成" };
+}
+
+function planFileActions(root, entries) {
+  return entries.map(({ kind, file, before, after }) => ({
+    path: kind === "hooks-path" ? `core.hooksPath (${file})` : file.startsWith(`${root}/.git/`) || !file.startsWith(`${root}/`) ? file : relative(root, file),
+    action: after === null ? "删除" : before === null ? "新增" : "更新",
+  }));
+}
+
+/** 先完整规划，再准备本机共享资源，最后应用同一份项目变更。 */
+export function runProjectInstall({ cwd, command, dryRun = false, force = false, takeOver = false, planExtra, inspect }) {
   const root = repoRoot(cwd);
-  const version = pinnedVersion(root) ?? packageVersion();
-  const published = installVersion({ version });
-  loadKey();
-  const hooksConfig = currentHooksConfig(root);
-  const { tracked } = hooksPlacement(root, { hooksDir: hooksConfig?.hooksDir });
-  // 入库的钩子随分支分发，合入时已经是新内容；只刷新共用目录，避免把主 Worktree 改脏。
-  const hooks = tracked ? null : writeGitHooks({ root });
-  const hooksPath = hooksConfig ? ensureHooksPath({ root, hooks: hooksConfig }) : null;
-  const dsh = writeDshPlugin();
-  return { root, published, fromTag: published.fromTag, hooks, hooksTracked: tracked, hooksPath, dsh };
+  const location = installLocation(commonDir(root));
+  const local = command === "install --local";
+  const planInstall = () => {
+    const pending = pendingInstall(location);
+    if (pending) throw new Error(pending);
+    const checkout = installCheckout(root);
+    const changes = createProjectChanges(root, location.common);
+    const pin = readVersionPin(changes.read(join(root, ".harness", "VERSION")), changes.read(shimPath(root)));
+    const version = local ? pin.version ?? packageVersion() : packageVersion();
+    const plan = { root, version, pinned: isVersion(pin.version) ? pin.version : null, dryRun, files: [], shared: [], conflicts: [] };
+    if (!local) {
+      const previousRoot = plan.pinned ? join(versionDir(plan.pinned), "assets") : null;
+      const managed = planManagedRules({ root, previousRoot, force });
+      const problem = managedConflictError(managed);
+      if (problem) {
+        if (dryRun) return { result: { ...plan, conflicts: managed.conflicts } };
+        throw problem;
+      }
+      for (const { path, content } of managed.actions) changes.set(join(root, path), content, { allowLink: force });
+      if (managed.manifestChanged) changes.set(join(root, MANAGED_MANIFEST), managed.manifestText, { allowLink: force });
+    }
+
+    const extra = planExtra?.({ root, changes });
+    const hooksConfig = local ? localHooksConfig(root, changes.read) : worktreeHooksConfig(root, changes.read);
+    const placement = hooksPlacement(root, { hooksDir: hooksConfig?.hooksDir });
+    const hooksDir = resolve(placement.dir);
+    const install = { root, hooksTracked: placement.tracked };
+    if (!local) {
+      changes.set(join(root, ".harness", "VERSION"), `${version}\n`);
+      for (const name of ["claude-hook.mjs", "codex-hook.mjs"]) changes.set(join(root, ".harness", "bin", name), null, { allowLink: true });
+      install.shim = shimPath(root);
+      changes.set(install.shim, shimBody(version), { mode: 0o755 });
+    }
+    // 入库钩子由分支分发，--local 只刷新未入库的钩子和本机配置。
+    install.hooks = local && placement.tracked ? null : planGitHooks({ dir: hooksDir, changes, takeOver: !local && takeOver, hooks: hooksConfig });
+    install.hooksPath = hooksConfig ? planHooksPath({ root, hooks: hooksConfig, changes }) : null;
+    if (!local) {
+      install.claude = planClientHooks({
+        file: join(root, ".claude", "settings.json"), changes, takeOver, command: CLAUDE_HOOK_COMMAND, matcher: "Bash|Write|Edit|MultiEdit|NotebookEdit|Read|Grep",
+      });
+      install.codex = planClientHooks({ file: join(root, ".codex", "hooks.json"), changes, takeOver, command: CODEX_HOOK_COMMAND, matcher: "*" });
+      install.antigravity = planAntigravityHooks({ root, changes, takeOver });
+      planGitignore(root, changes);
+    }
+    const context = { root, common: location.common, checkout, hooksDir };
+    const entries = [...changes.entries.values()];
+    validateProjectInstall(context, location, entries);
+    const store = planVersionInstall({ version });
+    const key = planKey();
+    const dsh = planDshPlugin();
+    plan.files = planFileActions(root, entries);
+    plan.shared = [{ path: store.dir, action: store.action }, key, ...dsh.files.map(({ file, action }) => ({ path: file, action }))];
+    const result = { ...plan, ...extra, ...inspect?.({ root }) };
+    return { result, context, entries, install, hooksConfig, dsh };
+  };
+  const preview = planInstall();
+  if (dryRun) return preview.result;
+
+  return withProjectInstallLock(location, () => {
+    // 等锁期间其他安装或人工编辑可能改变输入，以锁内的新计划为准。
+    const { result, context, entries, install, hooksConfig, dsh } = planInstall();
+    const { version } = result;
+    install.published = installVersion({ version });
+    install.fromTag = install.published.fromTag;
+    loadKey();
+    install.dsh = prepareDshPlugin(dsh);
+    applyProjectChanges(context, location, command, entries, () => {
+      if (install.hooksPath?.state === "switched") {
+        if (hooksPathState({ root, hooks: hooksConfig }).state !== "ok") throw new Error("core.hooksPath 未生效，请检查更高优先级的 Git 配置");
+        install.hooksPath.current = install.hooksPath.target;
+      }
+      if (!local) {
+        verifyShimIgnore(root);
+        install.shimTracked = git(root, ["ls-files", "--error-unmatch", SHIM_REL]).status === 0;
+      }
+    });
+    return { ...result, install };
+  });
+}
+
+export function installAll(options) {
+  const result = runProjectInstall({ ...options, command: "install" });
+  return result.install ?? result;
+}
+
+export function installLocal(options) {
+  const result = runProjectInstall({ ...options, command: "install --local" });
+  return result.install ?? result;
 }
 
 export function projectVersionPin(root) {

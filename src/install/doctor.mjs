@@ -2,7 +2,7 @@ import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { deliverySettings, loadCurrentProject, mainBranch, trustedMainRef } from "../lib/config.mjs";
-import { git, isLinkedWorktree, mainWorktreeRoot, repoRoot } from "../lib/git.mjs";
+import { commonDir, git, isLinkedWorktree, mainWorktreeRoot, repoRoot } from "../lib/git.mjs";
 import { keyStatus } from "../lib/store.mjs";
 import { mainWorktreeReadiness } from "../merge/main-worktree.mjs";
 import { commandExists, describePlan, maxDiffChars, planReviewers, resolveBackend } from "../review/review.mjs";
@@ -15,6 +15,7 @@ import { packageVersion, MARK_START } from "./managed.mjs";
 import { leftoverWorktrees } from "../worktree/clean.mjs";
 import { findOpen, platformRepo, platformStatus } from "../delivery/platform.mjs";
 import { describeRegistration, dshRegistrations } from "./dsh.mjs";
+import { installLocation, pendingInstall } from "./install-transaction.mjs";
 import {
   currentHooksConfig,
   dshPluginDir,
@@ -204,8 +205,15 @@ export function commitMessageCheck(project) {
 export function doctor({ cwd = process.cwd(), checkRemote = false } = {}) {
   const root = repoRoot(cwd);
   const checks = [];
-
   const version = packageVersion();
+  let recovery;
+  try {
+    recovery = pendingInstall(installLocation(commonDir(root)));
+  } catch (error) {
+    recovery = `无法读取安装恢复记录，请先核对记录和权限，不要删除备份: ${error.message}`;
+  }
+  // 中断后项目可能尚未写完，先给出可执行的恢复提示，不把半安装状态当成独立故障。
+  if (recovery) return { root, version, store: null, checks: [{ id: "install:recovery", ok: false, detail: recovery }], ok: false };
   let locked = version;
   try {
     const pin = projectVersionPin(root);
