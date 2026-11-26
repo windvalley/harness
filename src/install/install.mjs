@@ -520,7 +520,7 @@ function planDshPlugin() {
   const version = packageVersion();
   const manifestFile = join(dir, "package.json");
   try {
-    inspectDirectory(dir, { writable: false });
+    inspectDirectory(dir, { writable: false, allowSymlinks: true });
     const manifest = readRegularText(manifestFile);
     let current = null;
     try {
@@ -537,8 +537,8 @@ function planDshPlugin() {
       return before === body ? [] : [{ file, body, action: before === null ? "新增" : "更新" }];
     });
     if (files.length > 0) {
-      inspectDirectory(dir);
-      inspectDirectory(dshLock(dir));
+      inspectDirectory(dir, { allowSymlinks: true });
+      inspectDirectory(dshLock(dir), { allowSymlinks: true });
     }
     return { dir, version, files };
   } catch (error) {
@@ -562,10 +562,10 @@ function prepareDshPlugin(plan) {
 
 function planKey() {
   const file = resolve(keyPath());
-  inspectDirectory(dirname(file), { writable: false });
+  inspectDirectory(dirname(file), { writable: false, allowSymlinks: true });
   const stat = statIfPresent(file);
   if (stat && !stat.isFile()) throw new Error(`证据密钥路径不是普通文件: ${file}`);
-  if (!stat) inspectDirectory(dirname(file));
+  if (!stat) inspectDirectory(dirname(file), { allowSymlinks: true });
   const key = keyStatus();
   if (key.exists && !key.valid) throw new Error(key.reason);
   return { path: file, action: key.exists ? "复用" : "生成" };

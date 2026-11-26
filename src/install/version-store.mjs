@@ -129,7 +129,7 @@ const backupPath = (version) => join(storeRoot(), `.repair-${version}`);
 
 function versionLock(version, action) {
   const lock = versionLockPath(version);
-  inspectDirectory(lock);
+  inspectDirectory(lock, { allowSymlinks: true });
   return withInstallLock(lock, action);
 }
 
@@ -271,11 +271,11 @@ function withVersionSource(version, action) {
 export function planVersionInstall({ version }) {
   const dir = versionDir(version);
   if (version !== packageVersion() && verifyVersion({ version }).ok) return { dir, action: "复用" };
-  inspectDirectory(versionLockPath(version));
+  inspectDirectory(versionLockPath(version), { allowSymlinks: true });
   return withVersionSource(version, (source, tag) => {
     const { exists, healthy, repairing } = publishState(dir, backupPath(version), scanTree(source, version));
     if (healthy) return { dir, action: "复用" };
-    inspectDirectory(storeRoot());
+    inspectDirectory(storeRoot(), { allowSymlinks: true });
     return { dir, action: `${tag ? "从标签" : ""}${exists || repairing ? "修复" : "安装"}`, tag };
   });
 }
