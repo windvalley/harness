@@ -20,7 +20,7 @@
 
 <script src="assets/docs.js?v=acdbbf2b96" defer></script>
 </head>
-<body data-page="team" data-index="d3126e991d">
+<body data-page="team" data-index="f8cd3d9ea2">
 <a class="skip-link" href="#main-content">跳到主要内容</a>
 <header class="topbar">
   <div class="topbar-inner">
@@ -52,9 +52,11 @@ node ~/github/harness/bin/harness.mjs install --local
     <p><code>init</code>、<code>upgrade</code>、<code>install</code> 和 <code>install --local</code> 都可以加 <code>--dry-run</code> 预检。预览显示实际会改动的项目文件、适用的钩子和客户端配置，以及需要准备的本机共享资源，不写入这些目标。</p>
 
     <h2 tabindex="-1" id="install-recovery">恢复中断的项目安装</h2>
-    <p>项目写入失败时自动回滚，本机版本、证据密钥和 DeepSeek Harness 插件保持原样。进程被强杀或回滚未完成时，按 <code>doctor</code> 提示在原 Worktree、原分支和原提交运行 <code>harness install --recover</code>。</p>
+    <p>项目写入失败时自动回滚，已准备的版本、证据密钥和 DeepSeek Harness 插件不随项目回滚，可能已被安装或更新。进程被强杀或回滚未完成时，按 <code>doctor</code> 提示在原 Worktree、原分支和原提交运行 <code>harness install --recover</code>。</p>
     <div class="code"><span class="label">项目入口不可用时，从新版源码恢复</span><pre><code>node ~/github/harness/bin/harness.mjs install --recover</code></pre></div>
     <p>恢复不覆盖中断后的人工改动。发生冲突时保留这些改动和私有备份，核对提示后再重试。</p>
+    <p><code>doctor</code> 会区分“另一个安装正在进行”与“上一次中断留下的记录”：前者显示持有者 pid，等它完成即可；后者才需要恢复。回不到原检出时（原地提交过、改过分支名、Worktree 已删除或记录损坏），用 <code>install --recover --adopt</code> 尽力回滚，或用 <code>install --recover --abandon</code> 只归档记录与备份。两者都会把原件归档到 <code>&lt;git-common-dir&gt;/harness-install.&lt;时间戳&gt;/</code>，安装随后即可重试。</p>
+    <p>存在待恢复记录时 <code>uninstall</code> 会拒绝执行，避免删掉恢复所需的原件；先恢复或用 <code>--abandon</code> 归档，再卸载。</p>
 
     <h2 tabindex="-1" id="handoff">跨会话交接</h2>
     <p>需要换会话、换执行者或把任务上下文贴到 PR/MR 时，从现有状态生成 Markdown 交接视图：</p>

@@ -1630,6 +1630,27 @@ node "$harness_source/bin/harness.mjs" install --recover
 遇到冲突时会列出未恢复的项并保留原件与记录；先另存需要保留的人工改动，再将冲突项调整为安装前或本次安装写入的状态，才能重试恢复。
 恢复完成后先运行 `doctor`，再决定是否重新安装。
 
+`doctor` 用安装锁判断这次记录是“另一个安装正在进行”还是“上一次中断留下的”：前者报告 `install:in-progress` 并显示持有者的 pid，不要执行恢复；后者才报告 `install:recovery`。
+进行中的安装还在写项目文件，此时 `install --dry-run` 会直接说明原因，不基于半写状态生成计划。
+
+默认恢复要求回到原 Worktree、原分支和原提交。回不去时（原地提交过、改过分支名、Worktree 已删除，或恢复记录损坏）用下面两条通道之一：
+
+```bash
+node "$harness_source/bin/harness.mjs" install --recover --adopt     # 尽力回滚，能恢复的恢复
+node "$harness_source/bin/harness.mjs" install --recover --abandon   # 不改项目文件，只归档记录与备份
+```
+
+`--adopt` 逐项比对：仍等于本次安装写入结果的恢复成安装前的内容，已经等于安装前的跳过，两者都不是的保留现状并列入「未恢复」清单。
+`--abandon` 完全不碰项目文件，适用于原 Worktree 无法重建、记录损坏或本来就不需要回滚的情况。
+两者结束时都会把 `state.json` 与 `originals-<id>/` 私有备份移进 `<git-common-dir>/harness-install.<时间戳>/`，安装随即可重新运行；归档目录权限为仅本人可访问，需要人工核对时从那里取用原件。
+`--adopt` 会把无法恢复的项也一起归档，它保证的是“安装可以继续”，不是“已完全回滚”。
+
+存在待恢复记录时 `uninstall` 会拒绝执行，提示先恢复；这类记录指向安装前的原件，先删生成物会让恢复永久失败。
+`uninstall --dry-run` 仍可运行，只多打一行警告，方便先看清会删什么。
+记录损坏或不再需要回滚时，用 `install --recover --abandon` 归档后卸载。
+
+版本库、证据密钥与 DeepSeek Harness 插件这些本机共享目录允许路径上有符号链接（`$HOME`、挂载点、外置盘都是常见布局）；项目内的目录级符号链接仍被拒绝，文件级软链见“符号链接策略”。
+
 ## 配置
 
 ### config.json
@@ -2270,7 +2291,7 @@ Agent 完成任务后的汇报里要带一行代码评审的评审者，方案�
 | `pitfall add --signature <特征> --symptom <现象> --fix <做法>`、`pitfall list [--flagged]` | 记录与查看本项目反复踩的坑，见“坑位记录” |
 | `init [--dry-run] [--take-over] [--force]` | 接入当前项目，`--dry-run` 只预览 |
 | `install [--take-over] [--dry-run]`、`install --local [--dry-run]`、`install --version <版本> [--dry-run]` | 重新生成入口、钩子与客户端配置；`--local` 只刷新本机，不改入库文件；`--version` 只把指定版本装进版本目录 |
-| `install --recover` | 在原 Worktree 和检出回滚中断的项目安装，保留有冲突的人工改动 |
+| `install --recover [--adopt\|--abandon]` | 在原 Worktree 和检出回滚中断的项目安装，保留有冲突的人工改动；`--adopt` 尽力回滚并归档原件，`--abandon` 只归档、不改项目文件 |
 | `upgrade [--dry-run] [--force]` | 把项目升级到运行它的 harness 版本；`--dry-run` 只预览且冲突时退出 1；`--force` 由人明确覆盖托管规则、模板与清单冲突 |
 | `uninstall [--dry-run] [--purge]` | 解除接入 |
 | `versions`、`prune [--keep <v,...>] [--dry-run]` | 列出、清理本机安装的版本 |
