@@ -505,7 +505,7 @@ function rollback(context, location, state, { strict = true } = {}) {
     }
   }
   if (left.length > 0 && strict) {
-    throw new Error(`恢复未完成，保留未恢复的项与安装记录 ${location.file}：\n  ${left.join("\n  ")}\n${commandHint}`);
+    throw new Error(`恢复未完成，保留未恢复的项与安装记录 ${location.file}：\n  ${left.join("\n  ")}`);
   }
   return { left };
 }
@@ -575,7 +575,12 @@ export function recoverProjectInstall({ cwd, adopt = false, abandon = false }) {
     const state = journal(location);
     if (!state) return { recovered: false };
     const context = { root, common: location.common };
-    const result = rollback(context, location, state, { strict: !adopt });
+    let result;
+    try {
+      result = rollback(context, location, state, { strict: !adopt });
+    } catch (error) {
+      throw new Error(`${error.message}\n${commandHint}`);
+    }
     if (!adopt) {
       finishRecovery(location);
       return { recovered: true };

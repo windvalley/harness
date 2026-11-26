@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { deliverySettings, loadCurrentProject, mainBranch, trustedMainRef } from "../lib/config.mjs";
@@ -16,6 +16,7 @@ import { leftoverWorktrees } from "../worktree/clean.mjs";
 import { findOpen, platformRepo, platformStatus } from "../delivery/platform.mjs";
 import { describeRegistration, dshRegistrations } from "./dsh.mjs";
 import { installLocation, pendingInstallState } from "./install-transaction.mjs";
+import { liveLockHolders } from "./install-lock.mjs";
 import {
   currentHooksConfig,
   dshPluginDir,
@@ -306,6 +307,7 @@ export function doctor({ cwd = process.cwd(), checkRemote = false } = {}) {
               : "PreToolUse 与收尾检查 Stop 已接入且已信任",
   });
 
+  checks.push(installLockCheck(root));
   checks.push(dshCheck());
 
   const antigravity = antigravityHookInstalled(join(root, ".agents", "hooks.json"));
@@ -430,6 +432,33 @@ export function doctor({ cwd = process.cwd(), checkRemote = false } = {}) {
   }
 
   return { root, version, store, checks, ok: checks.every((check) => check.ok) };
+}
+
+/**
+ * 安装锁目录：有存活持有者说明有安装正在运行；文件不匹配 pid-哈希 命名时列出来，交给人决定是否删除。
+ * 锁协议本身不在这里改动，这里只让“卡住的安装”有可查的线索。
+ */
+export function installLockCheck(root) {
+  const location = installLocation(commonDir(root));
+  const holders = liveLockHolders(location.lock);
+  if (holders.length > 0) {
+    const pids = holders.map((item) => item.pid).join("、");
+    return { id: "install:lock", ok: false, verified: false, detail: `安装锁被 pid ${pids} 持有，另一个安装正在进行；完成后再操作，长时间不动时先确认该进程` };
+  }
+  let unknown = [];
+  try {
+    unknown = readdirSync(location.lock).filter((name) => !/^\d+-[0-9a-f]{24}$/.test(name));
+  } catch {
+    // 锁目录不存在：没有锁，也就没有残留。
+  }
+  if (unknown.length > 0) {
+    return {
+      id: "install:lock",
+      ok: false,
+      detail: `${location.lock} 里有无法识别的文件 ${unknown.join("、")}，安装不会自动清理；确认没有安装进程后手工删除`,
+    };
+  }
+  return { id: "install:lock", ok: true, detail: "没有安装锁占用" };
 }
 
 /**

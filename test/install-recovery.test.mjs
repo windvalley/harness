@@ -610,3 +610,35 @@ test("无效的 .harness/VERSION 直接报错，不被静默改写", () => {
   write(repo.root, ".harness/VERSION", `${repo.rawCli("version").stdout.trim()}\n`);
   assert.equal(repo.rawCli("install").status, 0);
 });
+
+test("自动回滚未能完成时恢复提示只出现一次", () => {
+  const repo = setup({ project: { ".harness/config.json": { ...CONFIG, git: { hooksDir: ".harness/hooks" } } } });
+  const hook = join(repo.root, ".claude/settings.json");
+  write(repo.root, ".claude/settings.json", '{"fixture":true}\n');
+  const failed = runFault(repo, `
+if (to.endsWith("/.claude/settings.json")) { fs.writeFileSync(${JSON.stringify(join(repo.root, ".git/config.lock"))}, "foreign\\n"); throw new Error("fixture-write-failed"); }`, "install");
+  assert.equal(failed.status, 1, failed.stdout + failed.stderr);
+  assert.match(failed.stderr, /恢复未完成/);
+  assert.equal((failed.stderr.match(/install --recover/g) ?? []).length, 1, `提示重复:\\n${failed.stderr}`);
+  unlinkSync(join(repo.root, ".git/config.lock"));
+  assert.equal(repo.rawCli("install", "--recover").status, 0);
+});
+
+test("doctor 报告安装锁的持有者与无法识别的残留文件", () => {
+  const repo = setup();
+  const stateDir = join(repo.root, ".git/harness-install");
+  const lockDir = join(stateDir, "lock");
+  mkdirSync(lockDir, { recursive: true, mode: 0o700 });
+  chmodSync(stateDir, 0o700);
+  // pid 1 恒活，等价于“另一个安装正在进行”。
+  writeFileSync(join(lockDir, "1-0123456789abcdef01234567"), "");
+  const busy = repo.rawCli("doctor");
+  assert.match(busy.stdout, /install:lock: .*pid 1/);
+  unlinkSync(join(lockDir, "1-0123456789abcdef01234567"));
+  writeFileSync(join(lockDir, "stale-name"), "");
+  const unknown = repo.rawCli("doctor");
+  assert.match(unknown.stdout, /install:lock: .*stale-name/);
+  unlinkSync(join(lockDir, "stale-name"));
+  const clean = repo.rawCli("doctor");
+  assert.match(clean.stdout, /install:lock: 没有安装锁占用/);
+});
