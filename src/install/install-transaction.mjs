@@ -294,10 +294,6 @@ export function pendingInstallState(location) {
   return { status: "stale", holders: [], detail: `${summary}。${commandHint}` };
 }
 
-export function pendingInstall(location) {
-  const found = pendingInstallState(location);
-  return found ? found.detail : null;
-}
 
 export function withProjectInstallLock(location, action) {
   inspectDirectory(location.lock);
