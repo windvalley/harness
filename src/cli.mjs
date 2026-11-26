@@ -1019,14 +1019,16 @@ function cmdInit(argv) {
   const cwd = process.cwd();
   const takeOver = values["take-over"];
   const result = initProject({ cwd, force: values.force, dryRun: values["dry-run"], takeOver });
+  const report = result.report;
+  // 先给现状：有冲突时这份调查结果同样有用，缺了它用户看不到原有工具与钩子目录。
+  print(formatSurvey(report, { takeOver, stack: result.stack }));
   if (result.conflicts.length > 0) {
+    print("");
     print(`接入预览（${result.root}）未通过:`);
     printInstallPlan(result);
     print("存在托管文件冲突，正式接入会拒绝。先迁移项目自己的说明；预览未写入任何文件。");
     return 1;
   }
-  const report = result.report;
-  print(formatSurvey(report, { takeOver, stack: result.stack }));
   if (result.dryRun) {
     if (result.files.length > 0 || result.shared.some(({ action }) => action !== "复用")) {
       print("\n将写入");

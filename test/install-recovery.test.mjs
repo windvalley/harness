@@ -582,3 +582,16 @@ test("存在待恢复记录时拒绝卸载，--dry-run 只给警告", () => {
   const removed = repo.rawCli("uninstall");
   assert.equal(removed.status, 0, removed.stdout + removed.stderr);
 });
+
+test("init 预览遇到托管冲突时仍输出调查现状", () => {
+  const repo = setup();
+  write(repo.root, ".harness/rules/core.md", "# 项目自己的修改\n");
+  const before = snapshot(repo);
+  const preview = repo.rawCli("init", "--dry-run");
+  assert.equal(preview.status, 1, preview.stdout + preview.stderr);
+  assert.match(preview.stdout, /现状/, "冲突时也要先输出调查现状");
+  assert.match(preview.stdout, /git 钩子目录/);
+  assert.match(preview.stdout, /冲突\s+\.harness\/rules\/core\.md/);
+  assert.match(preview.stdout, /预览未写入任何文件/);
+  assert.deepEqual(snapshot(repo), before);
+});

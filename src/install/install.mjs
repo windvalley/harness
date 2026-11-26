@@ -603,7 +603,8 @@ export function runProjectInstall({ cwd, command, dryRun = false, force = false,
       const managed = planManagedRules({ root, previousRoot, force });
       const problem = managedConflictError(managed);
       if (problem) {
-        if (dryRun) return { result: { ...plan, conflicts: managed.conflicts } };
+        // 冲突也是预览结果：照常给出调查现状与冲突清单，退出码由调用方决定。
+        if (dryRun) return { result: { ...plan, ...inspect?.({ root }), conflicts: managed.conflicts } };
         throw problem;
       }
       for (const { path, content } of managed.actions) changes.set(join(root, path), content, { allowLink: force });
