@@ -1187,7 +1187,11 @@ function cmdInstall(argv) {
       print("已按最佳努力回滚中断的项目安装，本机共享资源未改动。");
       for (const item of outcome.left) print(`  未恢复 ${item}`);
       print(`  归档: ${outcome.archive}`);
-      print(`  其中含恢复记录与 ${outcome.backupCount} 份私有备份；先核对未恢复项再重新运行 harness install。`);
+      if (outcome.left.length > 0) {
+        print(`  其中含恢复记录与 ${outcome.backupCount} 份私有备份；先核对未恢复项，再重新运行 harness install。`);
+      } else {
+        print(`  其中含恢复记录与 ${outcome.backupCount} 份私有备份；全部项已恢复，可以直接重新运行 harness install。`);
+      }
       return 0;
     }
     print("已回滚中断的项目安装，本机共享资源未改动。");
