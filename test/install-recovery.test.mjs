@@ -165,7 +165,7 @@ test("指定版本预览不写入，恢复不与其他安装参数同时使用",
   for (const flags of [["--version", version], ["--local"], ["--take-over"], ["--dry-run"]]) {
     const result = repo.rawCli("install", "--recover", ...flags);
     assert.equal(result.status, 2, result.stdout + result.stderr);
-    assert.match(result.stderr, /--recover 必须单独使用/);
+    assert.match(result.stderr, /--recover 只能与 --adopt 或 --abandon 一起使用/);
   }
   assert.equal(existsSync(repo.env.HARNESS_STORE), false);
   assert.equal(existsSync(join(repo.root, ".git/harness-install")), false);
@@ -417,4 +417,97 @@ test("备份阶段被强杀时先留下恢复记录，恢复会清理孤儿备�
   assert.equal(recovered.status, 0, recovered.stdout + recovered.stderr);
   assert.deepEqual(snapshot(repo), before);
   assert.deepEqual(readdirSync(stateDir), ["lock"], "孤儿备份应被清理");
+});
+
+test("中断后又有新提交时默认拒绝，--adopt 只回退未变化的项并归档原件", () => {
+  const repo = setup();
+  const hookFile = join(repo.root, ".git/hooks/pre-commit");
+  write(repo.root, ".git/hooks/pre-commit", "#!/bin/sh\necho original\n");
+  chmodSync(hookFile, 0o640);
+  const before = snapshot(repo);
+  const killed = runFault(repo, `if (to.endsWith("/.claude/settings.json")) { rename(from, to); process.kill(process.pid, "SIGKILL"); }`, "init");
+  assert.notEqual(killed.status, 0, killed.stdout + killed.stderr);
+
+  write(repo.root, "later.txt", "中断之后的新改动\n");
+  git(repo.root, "add", "-A", { ...repo.env, HARNESS_MAIN_BYPASS: "1" });
+  git(repo.root, "commit", "-q", "--no-verify", "-m", "chore: 中断后继续提交\n\n- 保留现场\n", { ...repo.env, HARNESS_MAIN_BYPASS: "1" });
+
+  const denied = repo.rawCli("install", "--recover");
+  assert.equal(denied.status, 1, denied.stdout + denied.stderr);
+  assert.match(denied.stderr, /回到原 Worktree 和检出/);
+  assert.match(denied.stderr, /--adopt/);
+
+  const adopted = repo.rawCli("install", "--recover", "--adopt");
+  assert.equal(adopted.status, 0, adopted.stdout + adopted.stderr);
+  assert.match(adopted.stdout, /已按最佳努力回滚/);
+  const archive = adopted.stdout.match(/归档: (\S+)/)?.[1];
+  assert.ok(archive && existsSync(archive), adopted.stdout);
+  assert.ok(existsSync(join(archive, "state.json")), "记录应归档而不是删除");
+  assert.equal(existsSync(join(repo.root, ".git/harness-install/state.json")), false);
+  assert.match(readFileSync(hookFile, "utf8"), /^#!\/bin\/sh\necho original\n$/, "钩子应回退到安装前");
+  assert.ok(existsSync(join(repo.root, "later.txt")), "中断后的人工改动保留");
+
+  const reinstalled = repo.rawCli("init");
+  assert.equal(reinstalled.status, 0, reinstalled.stdout + reinstalled.stderr);
+  assert.deepEqual(snapshot(repo).config, before.config);
+});
+
+test("原 Worktree 被删除后可在主 Worktree 用 --adopt 解除封锁", () => {
+  const repo = setup();
+  const linked = join(repo.root, "..", "linked-adopt");
+  git(repo.root, "worktree", "add", "-q", "-b", "fix/linked", linked);
+  const killed = runFault({ ...repo, root: linked, env: repo.env }, `if (to.endsWith("/.claude/settings.json")) { rename(from, to); process.kill(process.pid, "SIGKILL"); }`, "install");
+  assert.notEqual(killed.status, 0, killed.stdout + killed.stderr);
+  const stateDir = join(repo.root, ".git/harness-install");
+  assert.ok(existsSync(join(stateDir, "state.json")));
+  git(repo.root, "worktree", "remove", "--force", linked);
+
+  const denied = repo.rawCli("install", "--recover");
+  assert.equal(denied.status, 1, denied.stdout + denied.stderr);
+  const adopted = repo.rawCli("install", "--recover", "--adopt");
+  assert.equal(adopted.status, 0, adopted.stdout + adopted.stderr);
+  assert.match(adopted.stdout, /已按最佳努力回滚/);
+  const archive = adopted.stdout.match(/归档: (\S+)/)?.[1];
+  assert.ok(archive && existsSync(join(archive, "state.json")), adopted.stdout);
+  assert.equal(existsSync(join(stateDir, "state.json")), false);
+  assert.equal(repo.rawCli("install", "--recover").stdout.trim(), "没有待恢复的项目安装。");
+});
+
+test("--abandon 只归档记录与备份，不动项目文件", () => {
+  const repo = setup();
+  const killed = runFault(repo, `if (to.endsWith("/.claude/settings.json")) { rename(from, to); process.kill(process.pid, "SIGKILL"); }`, "init");
+  assert.notEqual(killed.status, 0, killed.stdout + killed.stderr);
+  const stateDir = join(repo.root, ".git/harness-install");
+  const snapshotFiles = () => readdirSync(repo.root).sort();
+  const before = snapshotFiles();
+  const abandoned = repo.rawCli("install", "--recover", "--abandon");
+  assert.equal(abandoned.status, 0, abandoned.stdout + abandoned.stderr);
+  assert.match(abandoned.stdout, /项目文件未改动/);
+  const archive = abandoned.stdout.match(/归档: (\S+)/)?.[1];
+  assert.ok(archive && existsSync(join(archive, "state.json")));
+  assert.deepEqual(snapshotFiles(), before, "项目文件不应被改动");
+  assert.equal(existsSync(join(stateDir, "state.json")), false);
+  assert.equal(repo.rawCli("install").status, 0, "归档后安装恢复可用");
+});
+
+test("恢复记录损坏时可用 --abandon 归档解除封锁", () => {
+  const repo = setup();
+  const killed = runFault(repo, `if (to.endsWith("/.claude/settings.json")) { rename(from, to); process.kill(process.pid, "SIGKILL"); }`, "init");
+  assert.notEqual(killed.status, 0, killed.stdout + killed.stderr);
+  writeFileSync(join(repo.root, ".git/harness-install/state.json"), "{ 损坏的记录");
+  const denied = repo.rawCli("install");
+  assert.equal(denied.status, 1, denied.stdout + denied.stderr);
+  const abandoned = repo.rawCli("install", "--recover", "--abandon");
+  assert.equal(abandoned.status, 0, abandoned.stdout + abandoned.stderr);
+  assert.equal(repo.rawCli("install").status, 0, "归档后安装恢复可用");
+});
+
+test("--adopt 与 --abandon 互斥且只能与 --recover 连用", () => {
+  const repo = setup();
+  for (const args of [["install", "--recover", "--adopt", "--abandon"], ["install", "--adopt"], ["install", "--abandon"], ["init", "--adopt"]]) {
+    const result = repo.rawCli(...args);
+    assert.equal(result.status, 2, `${args.join(" ")}: ${result.stdout}${result.stderr}`);
+    assert.match(result.stderr, /--adopt|--abandon/);
+  }
+  assert.equal(existsSync(join(repo.root, ".git/harness-install")), false);
 });

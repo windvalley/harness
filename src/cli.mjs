@@ -91,7 +91,7 @@ const USAGE = `harness <命令> [参数]    任一命令加 --help 查看该命�
   init     [--dry-run] [--take-over] [--force]       接入或升级当前项目：先调查现状，--dry-run 只预览
   install  [--take-over] [--local] [--dry-run]      重新生成入口与钩子；--local 只刷新本机部分；--dry-run 只预览
   install  --version <v> [--dry-run]                只装指定版本，不改项目文件或刷新钩子
-  install  --recover                               在原 Worktree 和检出回滚一次中断的项目安装
+  install  --recover [--adopt|--abandon]           回滚一次中断的项目安装；--adopt 尽力回滚，--abandon 只归档不动项目
   upgrade  [--dry-run] [--force]                     升级项目到当前版本；--dry-run 只预览，--force 明确覆盖冲突的托管规则与模板
   uninstall [--purge] [--dry-run]                    解除接入；--purge 连 .harness/ 一起删
   reviewer <list|set|remove|prefer|test>              本机评审者：列出、新增或修改、删除、是否优先不同模型、实测一个；见 harness reviewer
@@ -1154,6 +1154,8 @@ function cmdInstall(argv) {
       version: { type: "string" },
       "dry-run": { type: "boolean", default: false },
       recover: { type: "boolean", default: false },
+      adopt: { type: "boolean", default: false },
+      abandon: { type: "boolean", default: false },
     },
   });
   const cwd = process.cwd();
@@ -1161,11 +1163,37 @@ function cmdInstall(argv) {
   const takeOver = values["take-over"];
   if (values.recover) {
     if (values.local || values.version !== undefined || takeOver || dryRun) {
-      process.stderr.write("install --recover 必须单独使用\n");
+      process.stderr.write("install --recover 只能与 --adopt 或 --abandon 一起使用\n");
       return 2;
     }
-    print(recoverProjectInstall({ cwd }) ? "已回滚中断的项目安装，本机共享资源未改动。" : "没有待恢复的项目安装。");
+    if (values.adopt && values.abandon) {
+      process.stderr.write("--adopt 与 --abandon 不能同时使用：前者尽力回滚，后者完全不改项目文件\n");
+      return 2;
+    }
+    const outcome = recoverProjectInstall({ cwd, adopt: values.adopt, abandon: values.abandon });
+    if (!outcome.recovered && !outcome.abandoned) {
+      print("没有待恢复的项目安装。");
+      return 0;
+    }
+    if (outcome.abandoned) {
+      print("已放弃恢复：项目文件未改动。");
+      print(`  归档: ${outcome.archive}`);
+      print(`  其中含恢复记录与 ${outcome.backupCount} 份私有备份；需要人工核对时从归档里取用原件，确认后再重新运行 harness install。`);
+      return 0;
+    }
+    if (outcome.adopted) {
+      print("已按最佳努力回滚中断的项目安装，本机共享资源未改动。");
+      for (const item of outcome.left) print(`  未恢复 ${item}`);
+      print(`  归档: ${outcome.archive}`);
+      print(`  其中含恢复记录与 ${outcome.backupCount} 份私有备份；先核对未恢复项再重新运行 harness install。`);
+      return 0;
+    }
+    print("已回滚中断的项目安装，本机共享资源未改动。");
     return 0;
+  }
+  if (values.adopt || values.abandon) {
+    process.stderr.write("--adopt 与 --abandon 只能与 --recover 一起使用\n");
+    return 2;
   }
   if (values.version !== undefined) {
     if (values.local || takeOver) {

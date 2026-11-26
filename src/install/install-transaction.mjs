@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import {
-  accessSync, closeSync, constants, fchmodSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readlinkSync,
-  renameSync, rmdirSync, symlinkSync, unlinkSync, writeFileSync,
+  accessSync, closeSync, constants, existsSync, fchmodSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync,
+  readlinkSync, renameSync, rmdirSync, statSync, symlinkSync, unlinkSync, writeFileSync,
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -320,7 +320,10 @@ export function installCheckout(root) {
 function checkCheckout(root, state) {
   const current = installCheckout(root);
   if (current.root !== state.root || current.branch !== state.branch || current.head !== state.head) {
-    throw new Error(`当前检出与安装记录不一致，请回到原 Worktree 和检出: ${state.root} (${state.branch || state.head})`);
+    throw new Error(
+      `当前检出与安装记录不一致，请回到原 Worktree 和检出: ${state.root} (${state.branch || state.head})。` +
+        "回不去时用 harness install --recover --adopt 尽力回滚，或 --recover --abandon 只归档记录与备份",
+    );
   }
 }
 
@@ -450,8 +453,13 @@ function clearOrphanBackups(location) {
   }
 }
 
-function rollback(context, location, state) {
-  checkCheckout(context.root, state);
+/**
+ * 逐项恢复。strict 用于默认恢复：目标既不是安装前也不是本次写入后的状态时保留现状并让整次恢复失败；
+ * adopt 用于显式放弃：保留现状、记入未恢复清单，其余项照常恢复。
+ */
+function rollback(context, location, state, { strict = true } = {}) {
+  // 默认恢复要求回到原检出；显式放弃时不要求，否则原 Worktree 已删除就永远解不开。
+  if (strict) checkCheckout(context.root, state);
   state.phase = "回滚";
   save(location, state);
   const left = [];
@@ -466,7 +474,13 @@ function rollback(context, location, state) {
       const tmp = scratch(entry, state, i);
       if (entry.kind === "path" && entry.after?.type !== "dir") unlinkPresent(tmp);
       if (!isDeepStrictEqual(current, entry.before)) {
-        if (!isDeepStrictEqual(current, entry.after)) throw new Error("状态已变更，保留现状");
+        if (!isDeepStrictEqual(current, entry.after)) {
+          if (strict) throw new Error("状态已变更，保留现状");
+          left.push(`${entry.file}: ${existsSync(context.root) ? "中断后又被改动" : "原 Worktree 已不存在"}，保留现状`);
+          state.entries[i] = null;
+          save(location, state);
+          continue;
+        }
         change(context, location, state, i, entry, entry.after, original(location, state, i));
         expect(context, entry, entry.before);
       }
@@ -476,7 +490,13 @@ function rollback(context, location, state) {
       left.push(`${entry.file}: ${error.message}`);
     }
   }
-  if (left.length > 0) throw new Error(`恢复未完成，保留未恢复的项与安装记录 ${location.file}：\n  ${left.join("\n  ")}\n${commandHint}`);
+  if (left.length > 0 && strict) {
+    throw new Error(`恢复未完成，保留未恢复的项与安装记录 ${location.file}：\n  ${left.join("\n  ")}\n${commandHint}`);
+  }
+  return { left };
+}
+
+function finishRecovery(location) {
   unlinkSync(location.file);
   clearOrphanBackups(location);
 }
@@ -520,6 +540,7 @@ export function applyProjectChanges(context, location, command, entries, validat
   } catch (error) {
     try {
       rollback(context, location, state);
+      finishRecovery(location);
     } catch (recoveryError) {
       throw new Error(`${error.message}\n${recoveryError.message}\n${commandHint}`);
     }
@@ -527,14 +548,45 @@ export function applyProjectChanges(context, location, command, entries, validat
   }
 }
 
-export function recoverProjectInstall({ cwd }) {
+export function recoverProjectInstall({ cwd, adopt = false, abandon = false }) {
   const root = repoRoot(cwd);
   const location = installLocation(commonDir(root));
-  if (!journal(location)) return false;
+  if (abandon) {
+    // 记录可能已经损坏，不能先解析：只要有记录或备份就允许归档。
+    if (!statIfPresent(location.file)) return { recovered: false };
+    return withProjectInstallLock(location, () => ({ abandoned: true, ...archiveWithoutRecovery(location) }));
+  }
+  if (!journal(location)) return { recovered: false };
   return withProjectInstallLock(location, () => {
     const state = journal(location);
-    if (!state) return false;
-    rollback({ root, common: location.common }, location, state);
-    return true;
+    if (!state) return { recovered: false };
+    const context = { root, common: location.common };
+    const result = rollback(context, location, state, { strict: !adopt });
+    if (!adopt) {
+      finishRecovery(location);
+      return { recovered: true };
+    }
+    // --adopt：无法恢复的项连同原件一起归档，安装随即可用，输出归档路径与未恢复清单。
+    return { recovered: true, adopted: true, left: result.left, ...archiveWithoutRecovery(location) };
   });
+}
+
+/** 放弃恢复：项目文件一律不动，只把记录与私有备份移进归档目录，交给人在那里取用。 */
+function archiveWithoutRecovery(location) {
+  const archive = archiveLocation(location);
+  if (statIfPresent(location.file)) renameSync(location.file, join(archive, "state.json"));
+  const backups = readdirSync(location.dir).filter((name) => /^originals-[0-9a-f]{24}$/.test(name));
+  for (const name of backups) renameSync(join(location.dir, name), join(archive, name));
+  return { archive, backupCount: backups.length };
+}
+
+function archiveLocation(location) {
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const base = `${location.dir}.${stamp}`;
+  let dir = base;
+  for (let i = 2; existsSync(dir); i++) dir = `${base}-${i}`;
+  mkdirSync(dir, { mode: 0o700 });
+  const stat = statSync(dir);
+  if (!asPrivate(stat)) throw new Error(`归档目录权限不是仅本人可访问: ${dir}`);
+  return dir;
 }
