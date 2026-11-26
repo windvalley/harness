@@ -237,7 +237,7 @@ export function validateProjectInstall({ root, hooksDir }, location, entries) {
 function invalidJournal(location, detail) {
   return new Error(
     `安装恢复记录格式无效: ${location.file}${detail ? `（${detail}）` : ""}。` +
-      `请核对记录与同目录的私有备份；无法自动恢复时，可把 ${location.dir} 移开后重新安装`,
+      "先核对记录与同目录的私有备份；确认不需要回滚时，运行 harness install --recover --abandon 把记录与备份归档后重新安装",
   );
 }
 
@@ -486,7 +486,9 @@ function rollback(context, location, state, { strict = true } = {}) {
       if (!isDeepStrictEqual(current, entry.before)) {
         if (!isDeepStrictEqual(current, entry.after)) {
           if (strict) throw new Error("状态已变更，保留现状");
-          left.push(`${entry.file}: ${existsSync(context.root) ? "中断后又被改动" : "原 Worktree 已不存在"}，保留现状`);
+          // 目标所在目录已经不在（原 Worktree 被删），和“文件被改过”是两回事，提示要分开。
+          const reachable = existsSync(dirname(entry.file));
+          left.push(`${entry.file}: ${reachable ? "中断后又被改动" : "原 Worktree 已不存在"}，保留现状`);
           state.entries[i] = null;
           save(location, state);
           continue;

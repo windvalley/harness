@@ -398,10 +398,13 @@ test("分支引用非法的恢复记录不会被当成可恢复记录", () => {
   writeFileSync(stateFile, JSON.stringify(state));
   const doctor = repo.rawCli("doctor");
   assert.match(doctor.stdout, /记录格式无效/);
-  assert.match(doctor.stdout, /移开/);
+  assert.match(doctor.stdout, /--recover --abandon/, "损坏记录要指向官方归档通道");
   const denied = repo.rawCli("install");
   assert.equal(denied.status, 1, denied.stdout + denied.stderr);
   assert.match(denied.stderr, /记录格式无效/);
+  const abandoned = repo.rawCli("install", "--recover", "--abandon");
+  assert.equal(abandoned.status, 0, abandoned.stdout + abandoned.stderr);
+  assert.equal(repo.rawCli("install").status, 0, "归档后安装恢复可用");
 });
 
 test("备份阶段被强杀时先留下恢复记录，恢复会清理孤儿备份", () => {
@@ -641,4 +644,22 @@ test("doctor 报告安装锁的持有者与无法识别的残留文件", () => {
   unlinkSync(join(lockDir, "stale-name"));
   const clean = repo.rawCli("doctor");
   assert.match(clean.stdout, /install:lock: 没有安装锁占用/);
+});
+
+test("原 Worktree 已删除时，--adopt 的未恢复项说明是工作区不见了", () => {
+  const repo = setup();
+  const linked = join(repo.root, "..", "linked-gone");
+  git(repo.root, "worktree", "add", "-q", "-b", "fix/linked-gone", linked);
+  // 目标文件先存在，安装才会留下原件；否则回滚时“文件本来就没有”会被当作已恢复。
+  write(repo.root, ".claude/settings.json", '{"before":true}\n');
+  write(linked, ".claude/settings.json", '{"before":true}\n');
+  git(linked, "add", "-A");
+  git(linked, "commit", "-q", "--no-verify", "-m", "chore: 预置客户端配置\n\n- 模拟已有配置", { ...repo.env, HARNESS_MAIN_BYPASS: "1" });
+  const killed = runFault({ root: linked, env: repo.env }, `if (to.endsWith("/.claude/settings.json")) { rename(from, to); process.kill(process.pid, "SIGKILL"); }`, "install");
+  assert.notEqual(killed.status, 0, killed.stdout + killed.stderr);
+  git(repo.root, "worktree", "remove", "--force", linked);
+  const adopted = repo.rawCli("install", "--recover", "--adopt");
+  assert.equal(adopted.status, 0, adopted.stdout + adopted.stderr);
+  assert.match(adopted.stdout, /原 Worktree 已不存在/, "工作区被删与文件被改要分开说明");
+  assert.doesNotMatch(adopted.stdout, /中断后又被改动/);
 });
