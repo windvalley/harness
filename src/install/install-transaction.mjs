@@ -5,7 +5,7 @@ import {
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { commonDir, git, hooksPlacement, repoRoot } from "../lib/git.mjs";
+import { commonDir, git, hooksPlacement, repoRoot, run } from "../lib/git.mjs";
 import { withInstallLock } from "./install-lock.mjs";
 import { checkParent, inspectDirectory, parentDirectories, requireDirectory, statIfPresent } from "./install-paths.mjs";
 
@@ -192,6 +192,11 @@ function validPathState(state) {
 const absolute = (path) => typeof path === "string" && !path.includes("\0") && resolve(path) === path;
 const asPrivate = (stat) => stat && (stat.mode & 0o077) === 0 && (!process.geteuid || stat.uid === process.geteuid());
 
+// 分支引用是否成立交给 Git 判定：自己写的记录必须能被自己读回，不能比 Git 更严。
+export function validBranchRef(value) {
+  return value === "" || run("git", ["check-ref-format", value]).status === 0;
+}
+
 function pathEntryAllowed(root, location, hooksDir, entry) {
   const { file, before, after } = entry;
   if (inside(location.dir, file) || file === location.common || file === root || file === join(location.common, "config")) return false;
@@ -207,6 +212,13 @@ export function validateProjectInstall({ root, hooksDir }, location, entries) {
   inspectDirectory(location.lock);
 }
 
+function invalidJournal(location, detail) {
+  return new Error(
+    `安装恢复记录格式无效: ${location.file}${detail ? `（${detail}）` : ""}。` +
+      `请核对记录与同目录的私有备份；无法自动恢复时，可把 ${location.dir} 移开后重新安装`,
+  );
+}
+
 function journal(location) {
   const { dir, file } = location;
   const stat = statIfPresent(dir);
@@ -215,11 +227,16 @@ function journal(location) {
   if (stat && !asPrivate(stat)) throw new Error(`安装状态目录权限不是仅本人可访问: ${dir}`);
   if (!item) return null;
   if (!asPrivate(item) || !item.isFile()) throw new Error(`安装恢复记录不是私有普通文件: ${file}`);
-  const state = parseInstallJson(readRegularText(file), file);
+  let state;
+  try {
+    state = parseInstallJson(readRegularText(file), file);
+  } catch (error) {
+    throw invalidJournal(location, error.message);
+  }
   const seen = new Set();
   if (state.version !== 1 || !["init", "upgrade", "install", "install --local"].includes(state.command) ||
       !["应用", "回滚"].includes(state.phase) || !absolute(state.root) || !absolute(state.hooksDir) ||
-      typeof state.branch !== "string" || (state.branch !== "" && !/^refs\/heads\/[^\s\0]+$/.test(state.branch)) ||
+      typeof state.branch !== "string" || !validBranchRef(state.branch) ||
       typeof state.head !== "string" || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})?$/.test(state.head) ||
       (!state.head && !state.branch) || typeof state.id !== "string" || !/^[0-9a-f]{24}$/.test(state.id) ||
       !Array.isArray(state.entries) || !Number.isInteger(state.started) || state.started < 0 || state.started > state.entries.length ||
@@ -234,7 +251,7 @@ function journal(location) {
           entry.before?.type !== "dir" && entry.after?.type !== "link" &&
           (entry.after?.type !== "dir" || entry.before === null) && pathEntryAllowed(state.root, location, state.hooksDir, entry);
       })) {
-    throw new Error(`安装恢复记录格式无效: ${file}`);
+    throw invalidJournal(location);
   }
   return state;
 }
@@ -268,9 +285,12 @@ export function installCheckout(root) {
   if (![0, 1].includes(branch.status) || (head.status !== 0 && (head.status !== 1 || branch.status !== 0))) {
     throw new Error(`无法确定安装所在的检出: ${root}`);
   }
+  const ref = branch.stdout.trim();
+  // 写入端先按同一规则校验，不写出自己读不回的恢复记录。
+  if (!validBranchRef(ref)) throw new Error(`分支引用无效，无法记录本次安装: ${ref}`);
   return {
     root,
-    branch: branch.stdout.trim(),
+    branch: ref,
     head: head.stdout.trim(),
   };
 }
@@ -392,6 +412,7 @@ function original(location, state, i) {
 }
 
 function clearOrphanBackups(location) {
+  unlinkPresent(join(location.dir, ".state.tmp"));
   for (const item of readdirSync(location.dir, { withFileTypes: true })) {
     if (!item.isDirectory() || !/^originals-[0-9a-f]{24}$/.test(item.name)) continue;
     const dir = join(location.dir, item.name);
@@ -448,10 +469,16 @@ export function applyProjectChanges(context, location, command, entries, validat
     entries: entries.map(({ kind, file, before, after }) => ({ kind, file, before: fingerprint(before), after: fingerprint(after) })), started: 0,
   };
   try {
-    backUp(location, state.id, entries);
+    // 先落记录再备份：备份阶段被强杀也要留下可恢复的记录，孤儿备份才有人收。
     save(location, state);
+    backUp(location, state.id, entries);
   } catch (error) {
-    if (!statIfPresent(location.file)) clearOrphanBackups(location);
+    unlinkPresent(location.file);
+    try {
+      clearOrphanBackups(location);
+    } catch {
+      // 清理失败不覆盖原始错误；下一次安装会再清一次。
+    }
     throw error;
   }
   try {

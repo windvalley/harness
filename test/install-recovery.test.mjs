@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { afterEach, test } from "node:test";
 import { isDeepStrictEqual } from "node:util";
@@ -368,4 +368,53 @@ test("恢复只清理本次安装留下的 Git 配置锁，不删除外部锁", 
     assert.equal(existsSync(lock), false);
     assert.deepEqual(snapshot(repo), before);
   }
+});
+
+test("分支名含 Unicode 空白时，中断记录仍可读取并完成恢复", () => {
+  const repo = setup();
+  const branch = "fix/a\u00a0b";
+  git(repo.root, "checkout", "-q", "-b", branch);
+  const before = snapshot(repo);
+  const killed = runFault(repo, `if (to.endsWith("/.claude/settings.json")) { rename(from, to); process.kill(process.pid, "SIGKILL"); }`, "init");
+  assert.notEqual(killed.status, 0, killed.stdout + killed.stderr);
+  const stateFile = join(repo.root, ".git/harness-install/state.json");
+  assert.equal(JSON.parse(readFileSync(stateFile, "utf8")).branch, `refs/heads/${branch}`);
+  const doctor = repo.rawCli("doctor");
+  assert.match(doctor.stdout, /install:recovery/);
+  assert.doesNotMatch(doctor.stdout, /记录格式无效/);
+  const recovered = repo.rawCli("install", "--recover");
+  assert.equal(recovered.status, 0, recovered.stdout + recovered.stderr);
+  assert.deepEqual(snapshot(repo), before);
+});
+
+test("分支引用非法的恢复记录不会被当成可恢复记录", () => {
+  const repo = setup();
+  const killed = runFault(repo, `if (to.endsWith("/.claude/settings.json")) { rename(from, to); process.kill(process.pid, "SIGKILL"); }`, "init");
+  assert.notEqual(killed.status, 0, killed.stdout + killed.stderr);
+  const stateFile = join(repo.root, ".git/harness-install/state.json");
+  const state = JSON.parse(readFileSync(stateFile, "utf8"));
+  state.branch = "refs/heads/a b";
+  writeFileSync(stateFile, JSON.stringify(state));
+  const doctor = repo.rawCli("doctor");
+  assert.match(doctor.stdout, /记录格式无效/);
+  assert.match(doctor.stdout, /移开/);
+  const denied = repo.rawCli("install");
+  assert.equal(denied.status, 1, denied.stdout + denied.stderr);
+  assert.match(denied.stderr, /记录格式无效/);
+});
+
+test("备份阶段被强杀时先留下恢复记录，恢复会清理孤儿备份", () => {
+  const repo = setup();
+  const before = snapshot(repo);
+  const killed = runFault(repo, `if (/originals-[0-9a-f]{24}\\/\\d+$/.test(to)) { rename(from, to); process.kill(process.pid, "SIGKILL"); }`, "init");
+  assert.notEqual(killed.status, 0, killed.stdout + killed.stderr);
+  const stateDir = join(repo.root, ".git/harness-install");
+  const stateFile = join(stateDir, "state.json");
+  assert.ok(existsSync(stateFile), "备份前应先写恢复记录");
+  assert.equal(JSON.parse(readFileSync(stateFile, "utf8")).started, 0);
+  assert.ok(readdirSync(stateDir).some((name) => name.startsWith("originals-")), "被强杀时留下了私有备份");
+  const recovered = repo.rawCli("install", "--recover");
+  assert.equal(recovered.status, 0, recovered.stdout + recovered.stderr);
+  assert.deepEqual(snapshot(repo), before);
+  assert.deepEqual(readdirSync(stateDir), ["lock"], "孤儿备份应被清理");
 });
