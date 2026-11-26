@@ -596,6 +596,10 @@ export function runProjectInstall({ cwd, command, dryRun = false, force = false,
     // 显式接管（--force 或 --take-over）时允许把文件级软链替换成普通文件，不跟随链接写入。
     const changes = createProjectChanges(root, location.common, { takeOverLinks: !local && (takeOver || force) });
     const pin = readVersionPin(changes.read(join(root, ".harness", "VERSION")), changes.read(shimPath(root)));
+    // 版本锁定是门禁文件：写坏了要报出来让人修，不能静默改写成一个“看起来正确”的值。
+    if (pin.file !== null && !isVersion(pin.file)) {
+      throw new Error(`.harness/VERSION 里的版本号无效: ${JSON.stringify(pin.file)}，改成 x.y.z 形式或删掉这一行后重试`);
+    }
     const version = local ? pin.version ?? packageVersion() : packageVersion();
     const plan = { root, version, pinned: isVersion(pin.version) ? pin.version : null, dryRun, files: [], shared: [], conflicts: [] };
     if (!local) {

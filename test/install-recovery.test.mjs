@@ -595,3 +595,18 @@ test("init 预览遇到托管冲突时仍输出调查现状", () => {
   assert.match(preview.stdout, /预览未写入任何文件/);
   assert.deepEqual(snapshot(repo), before);
 });
+
+test("无效的 .harness/VERSION 直接报错，不被静默改写", () => {
+  const repo = setup();
+  const file = join(repo.root, ".harness/VERSION");
+  write(repo.root, ".harness/VERSION", "garbage\n");
+  for (const args of [["init"], ["upgrade"], ["install"], ["install", "--dry-run"], ["upgrade", "--dry-run"]]) {
+    const result = repo.rawCli(...args);
+    assert.equal(result.status, 1, `${args.join(" ")}: ${result.stdout}${result.stderr}`);
+    assert.match(result.stderr, /\.harness\/VERSION 里的版本号无效/, args.join(" "));
+    assert.equal(readFileSync(file, "utf8"), "garbage\n", `${args.join(" ")} 不应改写版本锁定`);
+  }
+  // 修好之后照常可用。
+  write(repo.root, ".harness/VERSION", `${repo.rawCli("version").stdout.trim()}\n`);
+  assert.equal(repo.rawCli("install").status, 0);
+});
