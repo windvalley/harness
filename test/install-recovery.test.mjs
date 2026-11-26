@@ -1,6 +1,7 @@
 import { strict as assert } from "node:assert";
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { spawn } from "node:child_process";
 import { afterEach, test } from "node:test";
 import { isDeepStrictEqual } from "node:util";
 import { CONFIG, git, makeRepo, PACKAGE_ROOT, sh, write } from "./helpers.mjs";
@@ -510,4 +511,74 @@ test("--adopt 与 --abandon 互斥且只能与 --recover 连用", () => {
     assert.match(result.stderr, /--adopt|--abandon/);
   }
   assert.equal(existsSync(join(repo.root, ".git/harness-install")), false);
+});
+
+
+/** 起一个把项目写入拖慢的安装进程，用于制造“进行中”状态。 */
+function startSlowInstall(repo) {
+  const hook = join(dirname(repo.root), "slow-install.mjs");
+  write(dirname(hook), "slow-install.mjs", `
+import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
+const rename = fs.renameSync;
+fs.renameSync = (from, to) => {
+  if (to.includes("/repo/") && !to.includes("/.git/harness-install/") && !to.includes("/hooks/")) {
+    const wait = new Int32Array(new SharedArrayBuffer(4));
+    Atomics.wait(wait, 0, 0, 150);
+  }
+  return rename(from, to);
+};
+syncBuiltinESMExports();
+`);
+  return spawn(process.execPath, ["--import", hook, CLI, "init"], { cwd: repo.root, env: { ...process.env, ...repo.env }, stdio: ["ignore", "ignore", "pipe"] });
+}
+
+async function waitForState(file) {
+  for (let i = 0; i < 500; i++) {
+    if (existsSync(file)) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.fail(`没有等到 ${file}`);
+}
+
+test("进行中的安装不会被第二个安装误报为中断记录", async () => {
+  const repo = setup();
+  const stateFile = join(repo.root, ".git/harness-install/state.json");
+  const child = startSlowInstall(repo);
+  const exited = new Promise((resolve) => child.on("close", resolve));
+  try {
+    await waitForState(stateFile);
+    const doctor = repo.rawCli("doctor");
+    assert.match(doctor.stdout, /install:in-progress/);
+    assert.doesNotMatch(doctor.stdout, /install --recover/, "进行中的安装不应提示恢复");
+    const preview = repo.rawCli("install", "--dry-run");
+    assert.equal(preview.status, 1, preview.stdout + preview.stderr);
+    assert.match(preview.stderr, /正在进行/);
+    const second = repo.rawCli("install");
+    assert.equal(second.status, 0, second.stdout + second.stderr);
+    assert.doesNotMatch(second.stderr, /留有安装恢复记录/, "拿锁后记录已清，不应再报中断");
+  } finally {
+    child.stderr.destroy();
+    if (child.exitCode === null) child.kill("SIGKILL");
+    await exited;
+  }
+});
+
+test("存在待恢复记录时拒绝卸载，--dry-run 只给警告", () => {
+  const repo = setup();
+  const before = snapshot(repo);
+  const killed = runFault(repo, `if (to.endsWith("/.claude/settings.json")) { rename(from, to); process.kill(process.pid, "SIGKILL"); }`, "init");
+  assert.notEqual(killed.status, 0, killed.stdout + killed.stderr);
+  const partial = snapshot(repo);
+  const denied = repo.rawCli("uninstall");
+  assert.equal(denied.status, 1, denied.stdout + denied.stderr);
+  assert.match(denied.stderr, /install --recover/);
+  assert.deepEqual(snapshot(repo), partial, "拒绝时不应改动任何文件");
+  const preview = repo.rawCli("uninstall", "--dry-run");
+  assert.equal(preview.status, 0, preview.stdout + preview.stderr);
+  assert.match(preview.stdout, /注意: .*install --recover/);
+  const recovered = repo.rawCli("install", "--recover");
+  assert.equal(recovered.status, 0, recovered.stdout + recovered.stderr);
+  const removed = repo.rawCli("uninstall");
+  assert.equal(removed.status, 0, removed.stdout + removed.stderr);
 });

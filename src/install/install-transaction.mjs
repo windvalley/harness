@@ -6,7 +6,7 @@ import {
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { commonDir, git, hooksPlacement, repoRoot, run } from "../lib/git.mjs";
-import { withInstallLock } from "./install-lock.mjs";
+import { liveLockHolders, withInstallLock } from "./install-lock.mjs";
 import { checkParent, inspectDirectory, parentDirectories, requireDirectory, statIfPresent } from "./install-paths.mjs";
 
 const HOOKS_KEY = "core.hooksPath";
@@ -278,11 +278,25 @@ function journal(location) {
   return state;
 }
 
-export function pendingInstall(location) {
+/**
+ * 待恢复记录的当前状态：active 表示还有安装进程持有锁，正在写入；stale 表示进程已不在，可以恢复。
+ * 锁目录里的持有者文件在安装全程存在，崩溃后残留，正是判断“进行中还是已中断”的现成依据。
+ */
+export function pendingInstallState(location) {
   const state = journal(location);
   if (!state) return null;
   const checkout = [state.branch.replace(/^refs\/heads\//, ""), state.head || "未提交"].filter(Boolean).join(" @ ");
-  return `${state.command}（${state.phase}阶段，Worktree ${state.root}，检出 ${checkout}）留有安装恢复记录 ${location.file}。${commandHint}`;
+  const summary = `${state.command}（${state.phase}阶段，Worktree ${state.root}，检出 ${checkout}）留有安装恢复记录 ${location.file}`;
+  const holders = liveLockHolders(location.lock);
+  if (holders.length > 0) {
+    return { status: "active", holders, detail: `${summary}；另一个安装正在进行（pid ${holders.map((item) => item.pid).join("、")}），完成后再继续` };
+  }
+  return { status: "stale", holders: [], detail: `${summary}。${commandHint}` };
+}
+
+export function pendingInstall(location) {
+  const found = pendingInstallState(location);
+  return found ? found.detail : null;
 }
 
 export function withProjectInstallLock(location, action) {

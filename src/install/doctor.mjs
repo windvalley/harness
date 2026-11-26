@@ -15,7 +15,7 @@ import { packageVersion, MARK_START } from "./managed.mjs";
 import { leftoverWorktrees } from "../worktree/clean.mjs";
 import { findOpen, platformRepo, platformStatus } from "../delivery/platform.mjs";
 import { describeRegistration, dshRegistrations } from "./dsh.mjs";
-import { installLocation, pendingInstall } from "./install-transaction.mjs";
+import { installLocation, pendingInstallState } from "./install-transaction.mjs";
 import {
   currentHooksConfig,
   dshPluginDir,
@@ -208,12 +208,15 @@ export function doctor({ cwd = process.cwd(), checkRemote = false } = {}) {
   const version = packageVersion();
   let recovery;
   try {
-    recovery = pendingInstall(installLocation(commonDir(root)));
+    recovery = pendingInstallState(installLocation(commonDir(root)));
   } catch (error) {
-    recovery = `无法读取安装恢复记录，请先核对记录和权限，不要删除备份: ${error.message}`;
+    recovery = { status: "invalid", detail: `无法读取安装恢复记录，请先核对记录和权限，不要删除备份: ${error.message}` };
   }
-  // 中断后项目可能尚未写完，先给出可执行的恢复提示，不把半安装状态当成独立故障。
-  if (recovery) return { root, version, store: null, checks: [{ id: "install:recovery", ok: false, detail: recovery }], ok: false };
+  // 另一个安装正在写入时不是故障，只是暂时不能判断项目状态；中断后则先给可执行的恢复提示。
+  if (recovery?.status === "active") {
+    return { root, version, store: null, checks: [{ id: "install:in-progress", ok: false, verified: false, detail: recovery.detail }], ok: false };
+  }
+  if (recovery) return { root, version, store: null, checks: [{ id: "install:recovery", ok: false, detail: recovery.detail }], ok: false };
   let locked = version;
   try {
     const pin = projectVersionPin(root);

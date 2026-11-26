@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { commonDir, git, repoRoot } from "../lib/git.mjs";
 import { gitHooksDir, HOOK_NAMES, hooksPathState, isHarnessClientHook, stripHookBlock, worktreeHooksConfig } from "./install.mjs";
 import { removeManagedBlock } from "./managed.mjs";
+import { installLocation, pendingInstallState } from "./install-transaction.mjs";
 
 const HOOK_MARK = "# harness:hook";
 const CLIENT_FILES = [".claude/settings.json", ".codex/hooks.json"];
@@ -154,6 +155,12 @@ function applyOne(target, root) {
  */
 export function uninstall({ cwd = process.cwd(), purge = false, dryRun = false } = {}) {
   const root = repoRoot(cwd);
+  // 待恢复记录指向的是安装前的原件：先删生成物会让恢复永远无法完成，先恢复再卸载。
+  const pending = pendingInstallState(installLocation(commonDir(root)));
+  const blocked = pending?.status === "stale" ? `存在待恢复的安装，先运行 harness install --recover 完成回滚，再卸载；记录损坏或不需要回滚时用 harness install --recover --abandon` :
+    pending?.status === "active" ? `另一个安装正在进行（${pending.holders.map((item) => `pid ${item.pid}`).join("、")}），完成后再卸载` :
+    pending?.status === "invalid" ? `${pending.detail}。核对后可用 harness install --recover --abandon 归档` : null;
+  if (blocked && !dryRun) throw new Error(blocked);
   const targets = plan({ root });
   if (!dryRun) for (const target of targets) applyOne(target, root);
 
@@ -169,5 +176,5 @@ export function uninstall({ cwd = process.cwd(), purge = false, dryRun = false }
   }
   kept.push("已安装的版本目录（全局共享，卸载本仓不影响其他项目）");
 
-  return { root, removed, kept, dryRun };
+  return { root, removed, kept, dryRun, warning: blocked };
 }

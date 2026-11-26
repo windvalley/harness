@@ -11,7 +11,7 @@ import { withInstallLock } from "./install-lock.mjs";
 import { inspectDirectory, statIfPresent } from "./install-paths.mjs";
 import {
   applyProjectChanges, createProjectChanges, HOOK_NAMES, installCheckout, installLocation, parseInstallJson,
-  pendingInstall, readRegularText, replaceInstallFile, validateProjectInstall, withProjectInstallLock,
+  pendingInstallState, readRegularText, replaceInstallFile, validateProjectInstall, withProjectInstallLock,
 } from "./install-transaction.mjs";
 
 export { installVersion, listVersions, pruneVersions, publishVersion, storeEntry, storeRoot, verifyVersion, versionDir } from "./version-store.mjs";
@@ -583,9 +583,15 @@ export function runProjectInstall({ cwd, command, dryRun = false, force = false,
   const root = repoRoot(cwd);
   const location = installLocation(commonDir(root));
   const local = command === "install --local";
-  const planInstall = () => {
-    const pending = pendingInstall(location);
-    if (pending) throw new Error(pending);
+  // locked 为真表示已经持有项目锁：此时还看到记录，说明没有别的安装进程在写，记录必定是上一次中断留下的。
+  const planInstall = (locked = false) => {
+    const pending = pendingInstallState(location);
+    if (pending && (locked || pending.status === "stale")) throw new Error(pending.detail);
+    // 另一个安装正在进行：预览不写文件也不等锁，直接说明；正式安装先等锁，拿到锁后再重新判断。
+    if (pending) {
+      if (dryRun) throw new Error(pending.detail);
+      return { pendingActive: true };
+    }
     const checkout = installCheckout(root);
     // 显式接管（--force 或 --take-over）时允许把文件级软链替换成普通文件，不跟随链接写入。
     const changes = createProjectChanges(root, location.common, { takeOverLinks: !local && (takeOver || force) });
@@ -639,10 +645,13 @@ export function runProjectInstall({ cwd, command, dryRun = false, force = false,
   };
   const preview = planInstall();
   if (dryRun) return preview.result;
+  // 正式安装一律先拿项目锁：另一个安装正在进行时在这里等待，等不到按锁超时提示。
+  // 拿到锁后重新计划；此时仍看到恢复记录，说明它是上一次中断留下的，可以放心恢复。
+  return withProjectInstallLock(location, runLocked);
 
-  return withProjectInstallLock(location, () => {
+  function runLocked() {
     // 等锁期间其他安装或人工编辑可能改变输入，以锁内的新计划为准。
-    const { result, context, entries, install, hooksConfig, dsh } = planInstall();
+    const { result, context, entries, install, hooksConfig, dsh } = planInstall(true);
     const { version } = result;
     install.published = installVersion({ version });
     install.fromTag = install.published.fromTag;
@@ -659,7 +668,7 @@ export function runProjectInstall({ cwd, command, dryRun = false, force = false,
       }
     });
     return { ...result, install };
-  });
+  }
 }
 
 export function installAll(options) {

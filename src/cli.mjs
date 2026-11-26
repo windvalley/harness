@@ -1329,7 +1329,14 @@ export async function main(argv) {
           args: rest,
           options: { purge: { type: "boolean", default: false }, "dry-run": { type: "boolean", default: false } },
         });
-        const outcome = uninstall({ cwd: process.cwd(), purge: values.purge, dryRun: values["dry-run"] });
+        let outcome;
+        try {
+          outcome = uninstall({ cwd: process.cwd(), purge: values.purge, dryRun: values["dry-run"] });
+        } catch (error) {
+          process.stderr.write(`${error.message}\n`);
+          return 1;
+        }
+        if (outcome.warning) print(`注意: ${outcome.warning}`);
         print(`${outcome.dryRun ? "将移除" : "已移除"}（${outcome.root}）:`);
         for (const item of outcome.removed) print(`  ${item}`);
         if (outcome.kept.length > 0) {
