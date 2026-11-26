@@ -587,7 +587,8 @@ export function runProjectInstall({ cwd, command, dryRun = false, force = false,
     const pending = pendingInstall(location);
     if (pending) throw new Error(pending);
     const checkout = installCheckout(root);
-    const changes = createProjectChanges(root, location.common);
+    // 显式接管（--force 或 --take-over）时允许把文件级软链替换成普通文件，不跟随链接写入。
+    const changes = createProjectChanges(root, location.common, { takeOverLinks: !local && (takeOver || force) });
     const pin = readVersionPin(changes.read(join(root, ".harness", "VERSION")), changes.read(shimPath(root)));
     const version = local ? pin.version ?? packageVersion() : packageVersion();
     const plan = { root, version, pinned: isVersion(pin.version) ? pin.version : null, dryRun, files: [], shared: [], conflicts: [] };

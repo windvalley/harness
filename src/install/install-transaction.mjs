@@ -38,10 +38,26 @@ function pathState(file) {
 const fileState = (content, mode) => ({ type: "file", mode, data: Buffer.from(content).toString("base64") });
 const textOf = (state) => Buffer.from(state.data, "base64").toString("utf8");
 
+function notRegularError(file, state) {
+  return new Error(
+    state?.type === "link"
+      ? `${file} 是符号链接，不跟随链接写入目标文件；确认要把它替换成普通文件时，用 --force 或 --take-over 重新运行`
+      : `${file} 不是普通文件`,
+  );
+}
+
 export function readRegularText(file) {
   const state = pathState(file);
-  if (state && state.type !== "file") throw new Error(`${file} 不是普通文件`);
+  if (state && state.type !== "file") throw notRegularError(file, state);
   return state ? textOf(state) : null;
+}
+
+/** 读取链接指向的普通文件内容；只在显式接管时用于生成计划，写入仍替换链接本身。 */
+function readLinkTarget(file) {
+  const target = resolve(dirname(file), readlinkSync(file));
+  const stat = statIfPresent(target);
+  if (!stat || !stat.isFile()) throw new Error(`${file} 是符号链接，但目标不是普通文件，请先处理这个链接`);
+  return readRegularText(target);
 }
 
 export function parseInstallJson(text, file) {
@@ -65,7 +81,11 @@ function configValue(root, file) {
   return values[0];
 }
 
-export function createProjectChanges(root, common) {
+/**
+ * takeOverLinks 表示调用方带上了显式接管参数（--force 或 --take-over）：
+ * 文件级软链允许替换链接本身，不跟随写入目标文件；目录级软链始终拒绝。
+ */
+export function createProjectChanges(root, common, { takeOverLinks = false } = {}) {
   const changes = new Map();
   const baseFor = (file) => inside(common, file) ? common : inside(root, file) ? root : null;
   const inspectParents = (file, create) => {
@@ -83,18 +103,20 @@ export function createProjectChanges(root, common) {
     const planned = changes.get(file);
     if (planned) {
       if (!planned.after) return null;
-      if (planned.after.type !== "file") throw new Error(`${file} 不是普通文件`);
+      if (planned.after.type !== "file") throw notRegularError(file, planned.after);
       return textOf(planned.after);
     }
-    return readRegularText(file);
+    const before = pathState(file);
+    // 类型检查先于内容校验：不带接管参数时，软链在读阶段就报出来，不让用户先修内容再撞链接。
+    if (before?.type === "link") return takeOverLinks ? readLinkTarget(file) : readRegularText(file);
+    if (before && before.type !== "file") throw notRegularError(file, before);
+    return before ? textOf(before) : null;
   };
-  const set = (file, content, { mode, allowLink = false, directory = false } = {}) => {
+  const set = (file, content, { mode, allowLink = takeOverLinks, directory = false } = {}) => {
     inspectParents(file, false);
     const before = pathState(file);
     if (directory && before?.type === "dir") return false;
-    if (before && before.type !== "file" && !(allowLink && before.type === "link")) {
-      throw new Error(`${file} ${before.type === "link" ? "是符号链接" : "不是预期的文件类型"}`);
-    }
+    if (before && before.type !== "file" && !(allowLink && before.type === "link")) throw notRegularError(file, before);
     if (directory && before) throw new Error(`${file} 不是目录`);
     const after = directory ? { type: "dir", mode: DIRECTORY_MODE }
       : content === null ? null : fileState(content, mode ?? (before?.type === "file" ? before.mode : FILE_MODE));
