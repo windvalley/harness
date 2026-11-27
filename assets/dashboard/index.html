@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>本机观测 | harness</title>
+  <link rel="stylesheet" href="/dashboard.css">
+  <script src="/dashboard.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#content">跳到主要内容</a>
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark" aria-hidden="true">H</span><span>harness</span><span class="product">本机观测</span></div>
+    <div class="controls">
+      <label for="days">时间范围</label>
+      <select id="days">
+        <option value="7">最近 7 天</option>
+        <option value="30" selected>最近 30 天</option>
+        <option value="90">最近 90 天</option>
+      </select>
+      <button id="refresh" type="button">刷新</button>
+    </div>
+  </header>
+  <nav class="navigation" aria-label="观测视图">
+    <ul>
+      <li><a href="#overview" data-view="overview">总览</a></li>
+      <li><a href="#projects" data-view="projects">项目比较</a></li>
+      <li><a href="#trends" data-view="trends">趋势</a></li>
+      <li><a href="#insights" data-view="insights">问题与改进</a></li>
+    </ul>
+  </nav>
+  <main id="content">
+    <div class="page-heading">
+      <div>
+        <p class="eyebrow">本地只读分析</p>
+        <h1 id="view-title" tabindex="-1">harness 使用概览</h1>
+      </div>
+      <p id="generated" class="muted"></p>
+    </div>
+    <p class="scope-note">仅汇总已登记项目的关键流程事件，不代表全部工具调用。账本尽力写入且未签名，数据缺失不等于零。</p>
+    <progress id="loading" max="1" value="0" hidden></progress>
+    <div id="error" class="error" role="alert" hidden></div>
+    <div id="status" class="visually-hidden" role="status" aria-live="polite"></div>
+
+    <section id="overview" class="view" aria-labelledby="overview-heading">
+      <h2 id="overview-heading">总览</h2>
+      <div id="summary-cards" class="card-grid"></div>
+      <div class="two-column">
+        <section class="panel" aria-labelledby="coverage-heading">
+          <h3 id="coverage-heading">数据覆盖</h3>
+          <div id="coverage"></div>
+        </section>
+        <section class="panel" aria-labelledby="attention-heading">
+          <h3 id="attention-heading">需要关注</h3>
+          <div id="attention"></div>
+        </section>
+      </div>
+    </section>
+
+    <section id="projects" class="view" aria-labelledby="projects-heading" hidden>
+      <h2 id="projects-heading">项目比较</h2>
+      <p class="muted">比较用于发现配置和流程差异，不用于项目优劣排名。比率的分子与分母见项目详情。</p>
+      <div id="project-table"></div>
+    </section>
+
+    <section id="trends" class="view" aria-labelledby="trends-heading" hidden>
+      <h2 id="trends-heading">整体趋势</h2>
+      <p class="muted">周按 UTC 周一分组。没有样本的区间保留为空，不补成零比率。</p>
+      <div id="trend-content"></div>
+    </section>
+
+    <section id="insights" class="view" aria-labelledby="insights-heading" hidden>
+      <h2 id="insights-heading">问题与改进</h2>
+      <p class="muted">建议只由本机记录推导。命令仅供查看，不会在页面中执行。</p>
+      <div id="insight-list"></div>
+    </section>
+
+    <section id="project-detail" class="view" aria-labelledby="detail-heading" hidden>
+      <p><a href="#projects">← 返回项目比较</a></p>
+      <div id="detail-content"></div>
+    </section>
+  </main>
+  <footer>数据仅在本机处理。Dashboard 不参与门禁判定，不提供合并、确认、验证或配置修改操作。</footer>
+  <noscript><p class="error">此页面需要 JavaScript 读取本机只读快照。也可以使用 harness metrics --all --json。</p></noscript>
+</body>
+</html>

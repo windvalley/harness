@@ -49,6 +49,8 @@ import { conformance, formatConformance } from "./conformance.mjs";
 import { cleanWorktrees, formatCleanPlan, formatCleanResult, planCleanup } from "./worktree/clean.mjs";
 import { packageVersion } from "./install/managed.mjs";
 import { agentAfterConsent, agentContinues, humanExecutes, noNextAction } from "./lib/next-step.mjs";
+import { buildSnapshot } from "./observability/snapshot.mjs";
+import { listProjects, rebindProject, registerProject } from "./observability/projects.mjs";
 
 const ADAPTERS = { claude, codex, dsh, antigravity, generic };
 
@@ -81,11 +83,15 @@ const USAGE = `harness <命令> [参数]    任一命令加 --help 查看该命�
                                                     含 .env 这类本机文件时需单独同意并加 --with-local-files
 
 体检与度量
-  doctor  [--check-remote]                            安装、接入与待恢复事务自检；指定时只读查询远程仓库的 PR/MR
+  doctor  [--check-remote] [--json]                  安装、接入与待恢复事务自检；指定时只读查询远程仓库的 PR/MR
   conformance                                        检查 L3 判据
-  metrics  [--days <n>]                              按周度量
+  metrics  [--all] [--days <n>] [--json]             按周度量；--all 汇总已登记项目，可选 7、30、90 天
+           [--capture-health]                        显式记录一次当前配置与健康快照，供历史趋势使用
   golden   [--worktree]                              重放黄金任务；--worktree 按工作区配置而不是主分支
   rules                                              列出解析后的拦截规则
+  dashboard [--days <n>] [--port <端口>] [--no-open] 按需启动本机只读可视化界面
+           [--capture-health]                        启动时显式记录一次当前配置与健康快照
+  projects <list|add|rebind>                          管理本机观测项目；list --json、add <路径>、rebind <项目ID> <路径>
 
 接入与维护
   init     [--dry-run] [--take-over] [--force]       接入或升级当前项目：先调查现状，--dry-run 只预览
@@ -625,6 +631,40 @@ function cmdApprove(argv) {
   print(`已记录 ${values.branch} 的实施授权（依据：${outcome.record.note}；验收清单 ${outcome.summary.acceptancePath}，方案文件 ${outcome.summary.planFiles.length} 个）${stagesText}。`);
   for (const hint of outcome.stages?.hints ?? []) process.stderr.write(`注意：${hint}\n`);
   return 0;
+}
+
+function cmdProjects(argv) {
+  const [action, ...rest] = argv;
+  if (action === "list") {
+    const { values } = parseArgs({ args: rest, options: { json: { type: "boolean", default: false } } });
+    const projects = listProjects();
+    if (values.json) print(JSON.stringify({ schemaVersion: 1, projects }, null, 2));
+    else if (projects.length === 0) print("还没有登记项目。运行 harness projects add <路径> 登记已有仓库。");
+    else for (const project of projects) print(`${project.displayName}  ${project.status}  ${project.mainWorktree}  ${project.projectId}`);
+    return 0;
+  }
+  if (action === "add") {
+    const [path, ...extra] = rest;
+    if (!path || extra.length > 0) {
+      process.stderr.write("用法: harness projects add <路径>\n");
+      return 2;
+    }
+    const result = registerProject(path, { version: packageVersion() });
+    print(`${result.added ? "已登记" : "已存在，已刷新"} ${result.project.displayName}（${result.project.projectId}）`);
+    return 0;
+  }
+  if (action === "rebind") {
+    const [projectId, path, ...extra] = rest;
+    if (!projectId || !path || extra.length > 0) {
+      process.stderr.write("用法: harness projects rebind <项目ID> <新路径>\n");
+      return 2;
+    }
+    const project = rebindProject(projectId, path);
+    print(`已重新绑定 ${project.displayName}（${project.projectId}）到 ${project.commonDir}`);
+    return 0;
+  }
+  process.stderr.write("用法: harness projects list [--json]\n       harness projects add <路径>\n       harness projects rebind <项目ID> <新路径>\n");
+  return 2;
 }
 
 async function cmdWorktree(argv) {
@@ -1405,9 +1445,9 @@ export async function main(argv) {
       case "upgrade":
         return cmdUpgrade(rest);
       case "doctor": {
-        const { values } = parseArgs({ args: rest, options: { "check-remote": { type: "boolean" } } });
+        const { values } = parseArgs({ args: rest, options: { "check-remote": { type: "boolean" }, json: { type: "boolean", default: false } } });
         const report = doctor({ checkRemote: values["check-remote"] });
-        print(formatDoctor(report));
+        print(values.json ? JSON.stringify(report, null, 2) : formatDoctor(report));
         return report.ok ? 0 : 1;
       }
       case "conformance": {
@@ -1425,10 +1465,34 @@ export async function main(argv) {
         return 0;
       }
       case "metrics": {
-        const { values } = parseArgs({ args: rest, options: { days: { type: "string" } } });
+        const { values } = parseArgs({ args: rest, options: { days: { type: "string" }, all: { type: "boolean", default: false }, json: { type: "boolean", default: false }, "capture-health": { type: "boolean", default: false } } });
+        const days = values.days ? Number(values.days) : 30;
+        if (values["capture-health"] && !values.all) {
+          process.stderr.write("--capture-health 只能与 metrics --all 一起使用\n");
+          return 2;
+        }
+        if (values.all) {
+          const snapshot = buildSnapshot({ days, captureHealth: values["capture-health"] });
+          print(values.json ? JSON.stringify(snapshot, null, 2) : formatMetrics(snapshot.metrics));
+          return 0;
+        }
         const root = repoRoot(process.cwd());
-        print(formatMetrics(computeMetrics(readLedger(root), { sinceDays: values.days ? Number(values.days) : undefined })));
+        const result = computeMetrics(readLedger(root), { sinceDays: values.days ? days : undefined });
+        print(values.json ? JSON.stringify(result, null, 2) : formatMetrics(result));
         return 0;
+      }
+      case "projects":
+        return cmdProjects(rest);
+      case "dashboard": {
+        const { values } = parseArgs({ args: rest, options: { days: { type: "string" }, port: { type: "string" }, "no-open": { type: "boolean", default: false }, "capture-health": { type: "boolean", default: false } } });
+        const days = values.days === undefined ? 30 : Number(values.days);
+        const port = values.port === undefined ? 0 : Number(values.port);
+        if (!Number.isInteger(port) || port < 0 || port > 65535) {
+          process.stderr.write("--port 必须是 0 到 65535 的整数，0 表示随机端口\n");
+          return 2;
+        }
+        const { runDashboard } = await import("./dashboard/command.mjs");
+        return runDashboard({ days, port, open: !values["no-open"], captureHealth: values["capture-health"], print, report: (text) => process.stderr.write(`${text}\n`) });
       }
       case "golden": {
         const { values } = parseArgs({ args: rest, options: { worktree: { type: "boolean", default: false } } });

@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { markProjectBestEffort } from "../observability/projects.mjs";
 import { homedir } from "node:os";
 import { commonDir, git, repoRoot } from "../lib/git.mjs";
 import { gitHooksDir, HOOK_NAMES, hooksPathState, isHarnessClientHook, stripHookBlock, worktreeHooksConfig } from "./install.mjs";
@@ -162,7 +163,10 @@ export function uninstall({ cwd = process.cwd(), purge = false, dryRun = false }
     pending?.status === "invalid" ? `${pending.detail}。核对后可用 harness install --recover --abandon 归档` : null;
   if (blocked && !dryRun) throw new Error(blocked);
   const targets = plan({ root });
-  if (!dryRun) for (const target of targets) applyOne(target, root);
+  if (!dryRun) {
+    for (const target of targets) applyOne(target, root);
+    markProjectBestEffort(root, "uninstalled");
+  }
 
   const removed = targets.map((target) => target.rel);
   const kept = [];

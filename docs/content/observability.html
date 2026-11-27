@@ -1,0 +1,49 @@
+<h2 id="observability">本机观测</h2>
+    <p>本机观测把已登记项目的验证、评审、交付和策略事件汇总成只读快照，帮助你发现接入缺口、反复阻塞和配置差异。它不替代门禁，也不把 CLI 的写操作搬到浏览器。</p>
+
+    <h3 id="observability-start">登记并打开 Dashboard</h3>
+    <div class="code"><span class="label">已有项目先显式登记</span><pre><code>cd &lt;项目&gt;
+harness projects add .
+harness projects list</code></pre></div>
+    <p><code>init</code>、<code>install</code> 和 <code>upgrade</code> 成功后也会尽力登记项目。重复添加同一仓库不会产生重复项，同一 Git common dir 下的多个 Worktree 只显示一个项目。</p>
+    <p>harness 不默认扫描整个用户目录。只有已登记项目进入统计范围，未登记不等于未使用。</p>
+    <div class="code"><span class="label">按需启动，Ctrl-C 关闭</span><pre><code>harness dashboard
+harness dashboard --days 30 --no-open</code></pre></div>
+    <p>启动命令输出带随机访问令牌的完整地址。服务只监听 <code>127.0.0.1</code>，默认随机端口并打开浏览器，不会注册常驻服务。</p>
+    <p>页面提供总览、项目比较、趋势、项目详情和问题与改进。每条建议附证据、样本范围和不确定性，建议命令只供查看，不会执行。</p>
+
+    <h3 id="observability-data">数据口径</h3>
+    <ul>
+      <li>统计的是关键流程事件，不是全部工具调用或会话时长。</li>
+      <li><code>merge</code>、<code>submit.ready</code>、<code>sync</code> 分开统计，PR/MR 就绪不等于平台已合入。</li>
+      <li>策略拒绝没有全部允许调用的分母，只展示次数和分布，不计算完整拦截率。</li>
+      <li>验证首过率按项目与 tree 的第一次正式验证计算，窗口内重跑不会重新进入分母。</li>
+      <li>跨项目比率按总分子除以总分母计算，不对各项目百分比取平均。</li>
+      <li>分母为零显示“暂无样本”，无账本、无活动、读取失败和未登记是不同状态。</li>
+    </ul>
+    <p>快照同时展示事件时间范围、旧事件数量、坏行、未知事件、重复 ID 和读取失败项目。单个项目数据损坏不会阻断其他项目。</p>
+
+    <h3 id="observability-json">CLI 与 JSON</h3>
+    <div class="code"><span class="label">命令行读取同一份数据</span><pre><code>harness metrics --all --days 30 --json
+harness doctor --json
+harness projects list --json</code></pre></div>
+    <p>跨项目窗口可选 7、30、90 天。不带 <code>--all</code> 的 <code>metrics</code> 保持当前项目的原有输出，也支持 <code>--json</code>。</p>
+    <p>仓库移动后使用 <code>harness projects rebind &lt;项目ID&gt; &lt;新路径&gt;</code> 显式关联历史，不按目录名或远程地址自动合并。</p>
+
+    <h3 id="observability-health">健康历史与任务漏斗</h3>
+    <p>普通刷新只读取当前健康状态，不写项目。需要分析配置演进时，显式采样一次：</p>
+    <div class="code"><span class="label">明确写入用户级健康快照</span><pre><code>harness metrics --all --capture-health
+harness dashboard --capture-health</code></pre></div>
+    <p>采样保存在用户级观测目录，不改项目账本或证据。Dashboard 启动时指定该选项只采样一次，不会随页面刷新重复写入。没有采样前不展示虚构的健康历史。</p>
+    <p>任务漏斗只关联具有稳定 <code>taskId</code> 的验证、评审和交付事件。无法可靠关联的旧事件单独计数，远程同步还要通过提交祖先关系核对，不能证明时显示未关联。</p>
+
+    <h3 id="observability-security">本机与隐私边界</h3>
+    <ul>
+      <li>API 需要每次启动生成的随机令牌，并校验 <code>Host</code>、<code>Origin</code> 和跨站请求。</li>
+      <li>静态资源使用固定映射，不能通过路径参数读取项目或用户文件。</li>
+      <li>默认不返回原始命令、报告全文、提示词、会话内容或证据密钥。</li>
+      <li>打开页面不会运行测试、评审、模型请求或远程平台查询。</li>
+      <li>读取账本不会创建项目数据目录或密钥。缓存和健康采样只写用户级观测目录。</li>
+      <li>账本尽力写入且未签名，是观测数据，不是完整、不可抵赖的审计日志。</li>
+    </ul>
+    <p>完整命令、指标定义、缓存行为和故障降级见<a href="https://github.com/windvalley/harness/blob/main/docs/reference.md#本机跨项目观测与-dashboard">参考手册</a>。</p>

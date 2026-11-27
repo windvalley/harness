@@ -9,6 +9,7 @@ import { installVersion, isVersion, planVersionInstall, readVersionPin, storeRoo
 import { planGitignore, SHIM_REL, verifyShimIgnore } from "./install-ignore.mjs";
 import { withInstallLock } from "./install-lock.mjs";
 import { inspectDirectory, statIfPresent } from "./install-paths.mjs";
+import { registerProjectBestEffort } from "../observability/projects.mjs";
 import {
   applyProjectChanges, createProjectChanges, HOOK_NAMES, installCheckout, installLocation, parseInstallJson,
   pendingInstallState, readRegularText, replaceInstallFile, validateProjectInstall, withProjectInstallLock,
@@ -672,6 +673,7 @@ export function runProjectInstall({ cwd, command, dryRun = false, force = false,
         install.shimTracked = git(root, ["ls-files", "--error-unmatch", SHIM_REL]).status === 0;
       }
     });
+    registerProjectBestEffort(root, { version });
     return { ...result, install };
   }
 }

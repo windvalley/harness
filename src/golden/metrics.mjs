@@ -16,6 +16,7 @@ function emptyBucket() {
     targetedVerifyRuns: 0,
     verifyReused: 0,
     verifyDurationMs: 0,
+    verifyDurations: [],
     reviews: 0,
     exploratoryReviews: 0,
     reviewPreflightBlocked: 0,
@@ -30,17 +31,22 @@ function emptyBucket() {
     goldenRuns: 0,
     goldenLastPassRate: null,
     reviewCostUsd: 0,
+    reviewCostSamples: 0,
+    reviewCostMissing: 0,
     verifyTrees: 0,
     verifyFirstPass: 0,
   };
 }
 
-export function computeMetrics(events, { sinceDays } = {}) {
-  const cutoff = sinceDays ? Date.now() - sinceDays * 86_400_000 : 0;
+export function computeMetrics(events, { sinceDays, now = Date.now() } = {}) {
+  const cutoff = sinceDays ? now - sinceDays * 86_400_000 : 0;
   const scoped = events.filter((event) => new Date(event.at).getTime() >= cutoff);
   const weeks = new Map();
   const total = emptyBucket();
-  const seenTrees = new Set();
+  const firstVerifyByTree = new Map();
+  for (const event of events) {
+    if (event.event === "verify" && event.tree && !firstVerifyByTree.has(event.tree)) firstVerifyByTree.set(event.tree, event);
+  }
 
   for (const event of scoped) {
     const week = weekKey(event.at);
@@ -61,10 +67,12 @@ export function computeMetrics(events, { sinceDays } = {}) {
           bucket.verifyRuns += 1;
           bucket.verifyReused += event.reused ?? 0;
           bucket.verifyDurationMs += event.durationMs ?? 0;
+          if (Number.isFinite(event.durationMs)) bucket.verifyDurations.push(event.durationMs);
           break;
         case "verify.targeted":
           bucket.targetedVerifyRuns += 1;
           bucket.verifyDurationMs += event.durationMs ?? 0;
+          if (Number.isFinite(event.durationMs)) bucket.verifyDurations.push(event.durationMs);
           break;
         case "review":
           if (event.outcome === "exploratory") bucket.exploratoryReviews += 1;
@@ -73,6 +81,8 @@ export function computeMetrics(events, { sinceDays } = {}) {
             if (event.verdict === "reject") bucket.reviewRejected += 1;
           }
           bucket.reviewCostUsd += event.costUsd ?? 0;
+          if (Number.isFinite(event.costUsd)) bucket.reviewCostSamples += 1;
+          else bucket.reviewCostMissing += 1;
           break;
         case "review.preflight":
           bucket.reviewPreflightBlocked += 1;
@@ -106,8 +116,7 @@ export function computeMetrics(events, { sinceDays } = {}) {
           break;
       }
     }
-    if (event.event === "verify" && event.tree && !seenTrees.has(event.tree)) {
-      seenTrees.add(event.tree);
+    if (event.event === "verify" && event.tree && firstVerifyByTree.get(event.tree) === event) {
       for (const bucket of buckets) {
         bucket.verifyTrees += 1;
         if (event.status === "passed") bucket.verifyFirstPass += 1;
@@ -116,12 +125,20 @@ export function computeMetrics(events, { sinceDays } = {}) {
   }
 
   const rate = (num, den) => (den === 0 ? null : Number((num / den).toFixed(3)));
-  const finish = (bucket) => ({
-    ...bucket,
-    reviewCostUsd: Number(bucket.reviewCostUsd.toFixed(4)),
-    verifyFirstPassRate: rate(bucket.verifyFirstPass, bucket.verifyTrees),
-    reviewRejectRate: rate(bucket.reviewRejected, bucket.reviews),
-  });
+  const finish = (bucket) => {
+    const { verifyDurations, ...metrics } = bucket;
+    const ordered = [...verifyDurations].sort((a, b) => a - b);
+    const middle = Math.floor(ordered.length / 2);
+    const median = ordered.length === 0 ? null : ordered.length % 2 === 0 ? (ordered[middle - 1] + ordered[middle]) / 2 : ordered[middle];
+    return {
+      ...metrics,
+      verifyDurationMedianMs: median,
+      verifyDurationAverageMs: ordered.length === 0 ? null : bucket.verifyDurationMs / ordered.length,
+      reviewCostUsd: Number(bucket.reviewCostUsd.toFixed(4)),
+      verifyFirstPassRate: rate(bucket.verifyFirstPass, bucket.verifyTrees),
+      reviewRejectRate: rate(bucket.reviewRejected, bucket.reviews),
+    };
+  };
   return {
     total: finish(total),
     weeks: [...weeks.entries()]

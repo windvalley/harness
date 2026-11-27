@@ -315,7 +315,7 @@ function finishSubmit({ root, progress, mainRef, gates, checkLocal, log }) {
         tips = readRemote();
       }
       const record = saveSubmit(root, progress, "ready", { url: request.url, requestId: request.id, requestHead: request.head });
-      appendLedger(root, { event: "submit.ready", branch, head, url: request.url, pushed, riskObserved: gates.risk.observed });
+      appendLedger(root, { event: "submit.ready", branch, taskId: `${branch}@${gates.review?.baseCommit ?? gates.baseCommit}`, head, url: request.url, pushed, riskObserved: gates.risk.observed });
       return { record, pushed };
     } catch (error) {
       const failure = submitFailure(error);

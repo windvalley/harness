@@ -24,6 +24,7 @@ const pages = [
   { slug: "principles", file: "principles.html", source: "principles.html", title: "核心原理", description: "了解实时拦截、收尾检查与 git 钩子怎么判定，以及一个任务从授权、验证、评审到合入的全过程。" },
   { slug: "limits", file: "limits.html", source: "limits.html", title: "信任模型与限制", description: "明确本机门禁的保护边界、使用前提和已知限制。" },
   { slug: "customize", file: "customize.html", source: "customize.html", title: "按项目定制", description: "按项目实际情况调整配置、验证检查和拦截规则。" },
+  { slug: "observability", file: "observability.html", source: "observability.html", title: "本机观测", description: "汇总已登记项目，通过只读快照和本机 Dashboard 查看使用差异、趋势与改进线索。" },
   { slug: "team", file: "team.html", source: "team.html", title: "团队与多机", description: "在新机器接入项目，完成升级、同步与多会话协作。" },
   { slug: "cheatsheet", file: "cheatsheet.html", source: "cheatsheet.html", title: "命令速查", description: "查阅验证、评审、交付、同步与维护命令。" },
 ];
@@ -31,7 +32,7 @@ const pages = [
 const groups = [
   { title: "开始使用", slugs: ["index", "quickstart", "daily", "blocked"] },
   { title: "核心概念", slugs: ["architecture", "principles", "limits"] },
-  { title: "配置与维护", slugs: ["customize", "team"] },
+  { title: "配置与维护", slugs: ["customize", "observability", "team"] },
   { title: "参考", slugs: ["cheatsheet"], reference: true },
 ];
 

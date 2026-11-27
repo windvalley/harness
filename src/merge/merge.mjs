@@ -781,7 +781,7 @@ export async function mergeTask({ cwd, branch, dryRun = false, log = console.err
     writeObligations({ root, branch, tip: branchCommit, items: gates.postMergeChecks });
     advanceMain({ project, mainRoot, mainRef, mainCommit, newHead, resultTree, bootstrap, branch, log });
 
-    appendLedger(root, { event: "merge", branch, fastForward, head: newHead, tree: resultTree, base: mainCommit, bootstrap, riskObserved: gates.risk.observed });
+    appendLedger(root, { event: "merge", branch, taskId: `${branch}@${gates.review?.baseCommit ?? gates.baseCommit}`, fastForward, head: newHead, tree: resultTree, base: mainCommit, bootstrap, riskObserved: gates.risk.observed });
     log(`[merge] ${mainRef} 已更新到 ${newHead.slice(0, 12)}`);
 
     const { refresh, notes, postMerge } = afterMainUpdate({
