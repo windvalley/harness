@@ -4,7 +4,7 @@ import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "no
 import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
 import { pathToFileURL } from "node:url";
-import { APPROVE, CONFIG, PACKAGE_ROOT, commit, fakeReviewer, git, makeRepo, sh } from "./helpers.mjs";
+import { APPROVE, CONFIG, PACKAGE_ROOT, commit, fakeReviewer, git, legacyStagesGrant, makeRepo, sh } from "./helpers.mjs";
 
 let repos = [];
 afterEach(() => {
@@ -17,13 +17,15 @@ const FILE = "docs/changes/alpha/stages.json";
 const PLAN = "docs/changes/alpha/plan.md";
 const QUOTE = "可以，按方案实施全部阶段";
 const STAGE_TEXT = { s1: "- 阶段一验收\n", s2: "- 阶段二验收\n", s3: "- 阶段三验收\n" };
-const STAGES = {
-  stages: [
-    { id: "s1", title: "基础", branch: "feat/alpha-1", acceptance: "docs/changes/alpha/s1.md" },
-    { id: "s2", title: "响应", branch: "feat/alpha-2", acceptance: "docs/changes/alpha/s2.md" },
-    { id: "s3", title: "降噪", branch: "feat/alpha-3", acceptance: "docs/changes/alpha/s3.md" },
-  ],
-};
+const CONTRACT_TEXT = "## 目标与主要方案\n\n- 分三个阶段交付\n\n## 验收底线\n\n- 保持现有行为\n";
+const stageList = () => [
+  { id: "s1", title: "基础", branch: "feat/alpha-1", acceptance: "docs/changes/alpha/s1.md" },
+  { id: "s2", title: "响应", branch: "feat/alpha-2", acceptance: "docs/changes/alpha/s2.md" },
+  { id: "s3", title: "降噪", branch: "feat/alpha-3", acceptance: "docs/changes/alpha/s3.md" },
+];
+const STAGES = { stages: stageList().map((item) => ({ ...item, contract: "docs/changes/alpha/contract.md" })) };
+/** 旧式阶段文件：没有 contract 字段。 */
+const LEGACY_STAGES = { stages: stageList() };
 const C1 = "feat/alpha-1";
 const D2 = "feat/alpha-2";
 const D3 = "feat/alpha-3";
@@ -46,6 +48,7 @@ function carrierFiles(overrides = {}) {
   return {
     [PLAN]: "# 实施方案\n",
     [FILE]: json(STAGES),
+    "docs/changes/alpha/contract.md": CONTRACT_TEXT,
     "docs/changes/alpha/s1.md": STAGE_TEXT.s1,
     "docs/changes/alpha/s2.md": STAGE_TEXT.s2,
     "docs/changes/alpha/s3.md": STAGE_TEXT.s3,
@@ -57,7 +60,7 @@ function carrierFiles(overrides = {}) {
 
 /** 后续阶段分支：照搬阶段清单作为本分支清单，加上超过阈值的代码。 */
 function stageFiles(branch, text, name) {
-  return { [acc(branch)]: text, [`src/${name}.js`]: code(10, name) };
+  return { [acc(branch)]: text, "docs/changes/alpha/contract.md": CONTRACT_TEXT, [`src/${name}.js`]: code(10, name) };
 }
 
 const approveStages = (repo, branch, ...extra) => repo.cli("approve", "--branch", branch, "--yes", "--note", QUOTE, "--stages", FILE, ...extra);
@@ -86,16 +89,16 @@ function ledger(repo) {
 
 const status = (repo, branch) => repo.cli("status", "--branch", branch).stdout;
 const approvedLine = /\[ok\] plan: 已有实施授权/;
-const stageConfirmation = (stages) => sha(JSON.stringify({
+const stageConfirmation = (stages, against = STAGES.stages) => sha(JSON.stringify({
   stagesHash: sha(json({ stages })),
   stage: "s1",
-  topLevelContract: null,
-  stages: stages.map((item) => ({
+  topLevelContract: { path: "docs/changes/alpha/contract.md", hash: sha(CONTRACT_TEXT) },
+  stages: stages.map((item, index) => ({
     id: item.id,
     acceptance: item.acceptance,
     acceptanceHash: sha(STAGE_TEXT[item.id]),
-    contract: null,
-    contractHash: null,
+    contract: item.contract ?? null,
+    contractHash: item.contract ? sha(against[index].contractText ?? CONTRACT_TEXT) : null,
   })),
 }));
 
@@ -130,6 +133,16 @@ function stop(repo, session = SESSION) {
   return text ? JSON.parse(text) : null;
 }
 
+/** 旧式方案级授权（阶段不带契约）并合入第一阶段，用于验证旧语义仍绑定阶段清单。 */
+function legacyCarrier() {
+  const repo = setup();
+  repo.branch(C1, carrierFiles({ [FILE]: json(LEGACY_STAGES) }));
+  const granted = legacyStagesGrant(repo, C1, FILE);
+  assert.equal(granted.status, 0, granted.stderr);
+  landed(repo, C1);
+  return repo;
+}
+
 /** 第一阶段授权并合入，返回仓库，供后续阶段的用例使用。 */
 function carrierLanded() {
   const repo = setup();
@@ -141,9 +154,20 @@ function carrierLanded() {
 }
 
 describe("多阶段方案授权", () => {
+  test("首次方案级授权要求每个阶段有核心契约，拒绝时点名阶段且不写记录", () => {
+    const repo = setup();
+    const partial = { stages: [STAGES.stages[0], ...LEGACY_STAGES.stages.slice(1)] };
+    repo.branch(C1, carrierFiles({ [FILE]: json(partial) }));
+    const refused = approveStages(repo, C1);
+    assert.notEqual(refused.status, 0);
+    assert.match(refused.stderr, /阶段 s2、s3 没有核心授权契约/);
+    assert.equal(grantFiles(repo).length, 0, "拒绝时不写方案级授权");
+    assert.equal(ledger(repo).filter((event) => event.event === "plan.approve").length, 0);
+  });
+
   test("没有阶段文件时，普通授权与 status 不出现阶段逻辑", () => {
     const repo = setup();
-    repo.branch("feat/plain", { [acc("feat/plain")]: "- 普通任务\n", "src/plain.js": code(10) });
+    repo.branch("feat/plain", { [acc("feat/plain")]: "- 普通任务\n", "docs/changes/plain/contract.md": CONTRACT_TEXT, "src/plain.js": code(10) });
     assert.equal(repo.cli("approve", "--branch", "feat/plain", "--yes", "--note", QUOTE).status, 0);
     const text = status(repo, "feat/plain");
     assert.match(text, approvedLine);
@@ -277,10 +301,10 @@ describe("多阶段方案授权", () => {
     assert.notEqual(tooEarly.status, 0);
     assert.match(tooEarly.stderr, /前序阶段 s2 还没有合入主分支/);
 
+    // 阶段有核心契约时，本分支把阶段清单细化后仍可继承授权。
     repo.branch("feat/alpha-2b", stageFiles("feat/alpha-2b", "- 改过的阶段二\n", "delta"));
     const changed = derive(repo, "feat/alpha-2b", "s2");
-    assert.notEqual(changed.status, 0);
-    assert.match(changed.stderr, /验收清单 \.harness\/acceptance\/feat-alpha-2b\.md 与阶段 s2 授权时的清单 docs\/changes\/alpha\/s2\.md 不一致/);
+    assert.equal(changed.status, 0, changed.stderr);
 
     const renamed = "fix/alpha-two";
     repo.branch(renamed, stageFiles(renamed, STAGE_TEXT.s2, "epsilon"));
@@ -315,7 +339,7 @@ describe("多阶段方案授权", () => {
     assert.equal(third.status, 0, third.stderr);
   });
 
-  test("携带分支授权后改了阶段文件或任一阶段清单，status、merge、评审与收尾检查一致判为未授权", () => {
+  test("携带分支授权后改了阶段文件要重新授权；阶段清单在契约范围内可继续细化", () => {
     const repo = setup();
     repo.branch(C1, carrierFiles());
     assert.equal(approveStages(repo, C1).status, 0);
@@ -351,13 +375,28 @@ describe("多阶段方案授权", () => {
     assert.equal(preserved.stagesHash, sha(json(STAGES)), "未确认新契约前不能覆盖旧方案授权");
     assert.equal(approveStages(repo, C1, "--confirm-contract", stageConfirmation(edited.stages)).status, 0);
     assert.match(status(repo, C1), approvedLine);
+    // 阶段清单属于验收细节，契约没变就不再打断；阶段文件本身仍是交付范围的承诺。
     git(repo.root, "checkout", "-q", C1);
     writeFileSync(join(repo.root, "docs/changes/alpha/s3.md"), "- 阶段三验收（改）\n");
     git(repo.root, "commit", "-q", "-am", "docs(alpha): 调整阶段三\n\n- 修改阶段三清单");
     git(repo.root, "checkout", "-q", "main");
+    assert.match(status(repo, C1), approvedLine);
+    assert.equal(reviewSource(repo, C1), "approved", "改的是其他阶段的清单，本分支清单、行为说明与方案都没变");
+
+    git(repo.root, "checkout", "-q", C1);
+    writeFileSync(join(repo.root, acc(C1)), "- 阶段一验收（细化）\n");
+    git(repo.root, "commit", "-q", "-am", "docs(alpha): 细化阶段一\n\n- 修改本分支清单");
+    git(repo.root, "checkout", "-q", "main");
+    assert.match(status(repo, C1), approvedLine);
+    assert.equal(reviewSource(repo, C1), "revised", "本分支清单在授权后有修订，评审要看到");
+
+    git(repo.root, "checkout", "-q", C1);
+    writeFileSync(join(repo.root, "docs/changes/alpha/contract.md"), "## 目标与主要方案\n\n- 改成别的交付顺序\n");
+    git(repo.root, "commit", "-q", "-am", "docs(alpha): 改核心契约\n\n- 需要重新确认");
+    git(repo.root, "checkout", "-q", "main");
     text = status(repo, C1);
     assert.match(text, /待实施授权/);
-    assert.match(text, /方案材料在授权后改过/);
+    assert.match(text, /核心授权契约在授权后改过/);
   });
 
   test("只交换阶段顺序时指出顺序变化，不当成排版变化", () => {
@@ -400,7 +439,7 @@ describe("多阶段方案授权", () => {
   });
 
   test("派生分支的清单改动、来源记录缺失或被改动时判为未授权，改回后恢复", () => {
-    const repo = carrierLanded();
+    const repo = legacyCarrier();
     repo.branch(D2, stageFiles(D2, STAGE_TEXT.s2, "beta"));
     assert.equal(derive(repo, D2, "s2").status, 0);
     assert.match(status(repo, D2), approvedLine);
@@ -432,12 +471,12 @@ describe("多阶段方案授权", () => {
   });
 
   test("重新授权只改一个阶段：改动阶段的派生授权失效，未改阶段的保持有效；改回原内容后恢复；旧携带分支失效；不依赖授权时间", () => {
-    const repo = carrierLanded();
+    const repo = legacyCarrier();
     repo.branch(D2, stageFiles(D2, STAGE_TEXT.s2, "beta"));
     assert.equal(derive(repo, D2, "s2").status, 0);
 
     const revise = (branch, files, stage, note) => {
-      repo.branch(branch, { [PLAN]: `# 实施方案（${branch}）\n`, ...files, [acc(branch)]: `- ${branch}\n` });
+      repo.branch(branch, { [PLAN]: `# 实施方案（${branch}）\n`, "docs/changes/alpha/contract.md": CONTRACT_TEXT, ...files, [acc(branch)]: `- ${branch}\n` });
       const result = repo.cli("approve", "--branch", branch, "--yes", "--note", note, "--stages", FILE, "--stage", stage);
       assert.equal(result.status, 0, result.stderr);
     };
@@ -471,7 +510,7 @@ describe("多阶段方案的收尾检查", () => {
     assert.equal(owed?.decision, "block");
     assert.match(owed.reason, /feat\/alpha-1：方案 docs\/changes\/alpha\/stages\.json 还有后续阶段 s2（响应）没有开始/);
     assert.match(owed.reason, /从 main 创建分支 feat\/alpha-2/);
-    assert.match(owed.reason, /把 docs\/changes\/alpha\/s2\.md 复制为该分支的验收清单 \.harness\/acceptance\/feat-alpha-2\.md 并提交/);
+    assert.match(owed.reason, /把 docs\/changes\/alpha\/s2\.md 复制为该分支的验收清单 \.harness\/acceptance\/feat-alpha-2\.md 并复制核心授权契约 docs\/changes\/alpha\/contract\.md，提交后/);
     assert.match(owed.reason, /harness approve --branch feat\/alpha-2 --yes --from-stages docs\/changes\/alpha\/stages\.json --stage s2/);
     assert.match(status(repo, C1), /\[-\] stages: 方案 docs\/changes\/alpha\/stages\.json：本分支是阶段 s1，已合入 1\/3 个阶段，下一阶段 s2（响应）/);
 

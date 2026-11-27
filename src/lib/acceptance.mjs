@@ -158,3 +158,49 @@ export function describeEvidenceChange(beforeText, afterText) {
   if (changed.length) parts.push(`调整必需证据阶段 ${changed.join("、")}`);
   return parts.join("；") || null;
 }
+
+/** 一段文字里每个二级章节的内容行原文（去掉注释、空行与标题），供修订摘要逐条列出。 */
+function sectionLines(text) {
+  const out = new Map();
+  for (const [name, lines] of sections(text)) {
+    const content = lines.map((line) => line.trim()).filter((line) => line !== "" && !CONTENT_HEADING.test(line));
+    if (content.length > 0) out.set(name, content);
+  }
+  return out;
+}
+
+/**
+ * 授权版到当前版按章节列出删除与新增的条目原文；同一行在章节内移动位置不算变化。
+ * skip 里的章节不参与比较（例如实施方案里 Agent 自己写的修订记录）。
+ */
+export function sectionLineChanges(beforeText, afterText, { skip = [] } = {}) {
+  const before = sectionLines(beforeText);
+  const after = sectionLines(afterText);
+  const names = [...new Set([...before.keys(), ...after.keys()])].filter((name) => !skip.includes(name));
+  const changes = [];
+  for (const name of names) {
+    const remaining = new Map();
+    for (const line of before.get(name) ?? []) remaining.set(line, (remaining.get(line) ?? 0) + 1);
+    const added = [];
+    for (const line of after.get(name) ?? []) {
+      const count = remaining.get(line) ?? 0;
+      if (count > 0) remaining.set(line, count - 1);
+      else added.push(line);
+    }
+    const removed = (before.get(name) ?? []).filter((line) => {
+      const count = remaining.get(line) ?? 0;
+      if (count === 0) return false;
+      remaining.set(line, count - 1);
+      return true;
+    });
+    if (added.length > 0 || removed.length > 0) changes.push({ section: name, removed, added });
+  }
+  return changes;
+}
+
+/** 某个二级章节的正文（去掉注释），没有该章节时返回 null。 */
+export function sectionText(text, name) {
+  const lines = sections(text).get(name);
+  if (!lines) return null;
+  return lines.join("\n").trim();
+}

@@ -62,6 +62,11 @@ export function prepareGrant({ project, root, branch, at, file, stage }) {
   if (text === null) throw new Error(`阶段文件 ${file} 还没有提交到分支 ${branch}，先把方案提交到任务分支再记录授权`);
   const stages = parseStages(text, file);
   const current = stage ?? stages[0].id;
+  // 首次记录方案级授权时每个阶段都要有核心契约；已有授权的方案重新授权时保持原语义。
+  const lacking = stages.filter((item) => !item.contract).map((item) => item.id);
+  if (lacking.length > 0 && !readGrant(root, file).ok) {
+    throw new Error(`阶段 ${lacking.join("、")} 没有核心授权契约：在阶段文件里给这些阶段加 contract 字段，按 .harness/templates/contract.md 写好并提交后再记录授权`);
+  }
   if (!stages.some((item) => item.id === current)) throw new Error(`阶段文件 ${file} 里没有阶段 ${current}`);
   const hashed = stages.map((item) => {
     const content = showBlob(root, at, item.acceptance);

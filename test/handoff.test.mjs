@@ -74,6 +74,7 @@ describe("status --handoff", () => {
       [ACCEPTANCE]: "# 登录验收\n\n- 登录失败时保持原会话。\n- 诊断示例不得包含 API_KEY=acceptance-secret。\n",
       "docs/changes/login/spec.md": "# 行为说明\n\n登录失败时保持原会话。\n",
       "docs/changes/login/plan.md": "# 实施方案\n\n先补失败路径测试。\n",
+      "docs/changes/login/contract.md": "## 目标与主要方案\n\n- 登录失败时保持原会话\n",
       "src/login.js": "export const login = true;\nexport const session = true;\n",
     });
     const mainHead = git(repo.root, "rev-parse", "main");
@@ -104,6 +105,7 @@ describe("status --handoff", () => {
     assert.match(result.stdout, /docs\/changes\/login\/spec\.md/);
     assert.match(result.stdout, /docs\/changes\/login\/plan\.md/);
     assert.match(result.stdout, /可以按方案实施/);
+    assert.match(result.stdout, /授权后修订摘要（基线：授权时提交 [0-9a-f]{12}）：\n  - 授权后没有修订/);
     assert.match(result.stdout, /登录失败时保持原会话/);
     assert.match(result.stdout, /验证通过/);
     assert.match(result.stdout, /评审通过/);

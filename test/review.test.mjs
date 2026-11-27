@@ -6,6 +6,7 @@ import { APPROVE, commit, CONFIG, fakeCodex, fakeReviewer, git, makeRepo, sh } f
 import {
   blockingFindings,
   buildPrompt,
+  reviewerArgs,
   changeStats,
   commitNotes,
   extractJson,
@@ -64,6 +65,28 @@ describe("评审", () => {
     assert.match(fromBranch, /未经人工确认/);
     const none = buildPrompt({ acceptance: null, evidence: "e", diff: "d", branch: "b" });
     assert.match(none, /未提供验收清单/);
+  });
+
+  test("授权后有修订时，提示附核心契约与修订条目，说明判定要求，来源标明修订过", () => {
+    const prompt = buildPrompt({
+      acceptance: {
+        source: "revised",
+        text: "- 甲\n- 丙",
+        contract: "## 验收底线\n\n- 保留现有会话",
+        revisions: ["授权后修订摘要（基线：授权时提交 aaaaaaaaaaaa）：", "- 验收清单 x.md", "  - 「应该发生」", "    删除: - 乙", "    新增: - 丙"],
+      },
+      evidence: "e",
+      diff: "d",
+      branch: "b",
+    });
+    assert.match(prompt, /用户同意实施后由实现方在核心契约范围内修订过/);
+    assert.match(prompt, /## 核心授权契约（用户确认的底线）\n\n## 验收底线\n\n- 保留现有会话/);
+    assert.match(prompt, /## 授权后修订（由 harness 按授权时提交机械生成，理由由实现方填写）\n\n授权后修订摘要[\s\S]*删除: - 乙/);
+    assert.ok(prompt.indexOf("## 授权后修订") < prompt.indexOf("## 验证证据摘要"), "修订材料紧跟在验收清单之后");
+    const plain = buildPrompt({ acceptance: { source: "approved", text: "- 甲" }, evidence: "e", diff: "d", branch: "b" });
+    assert.doesNotMatch(plain, /核心授权契约|授权后修订/, "没有修订材料时不加这两节");
+    const args = reviewerArgs({ model: "m" }).join("\n");
+    assert.match(args, /修订与契约冲突，或删除、放宽了授权版条目却没有写明理由时，需求符合度评为 partial/, "评审说明要写清判定要求");
   });
 
   test("提示按清单、证据、提交说明、文件统计、diff 的顺序排列，提交说明标明是实现方自述", () => {

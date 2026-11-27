@@ -222,6 +222,111 @@ export function writeReview(repo, commitOid, verdict, extra = {}) {
   return sh(repo.root, process.execPath, ["--input-type=module", "-e", script, repo.root, commitOid, payload], repo.env);
 }
 
+/**
+ * 直接写一条授权时没有核心契约的旧记录，用于验证旧语义仍绑定整份验收清单。
+ * 记录与账本都用临时仓库自己的数据目录与密钥，与 CLI 子进程看到的一致。
+ */
+export function legacyPlanRecord(repo, branch, { note = "可以，开始实施", omitDigest = false } = {}) {
+  const key = branch.replace(/[^0-9A-Za-z._-]+/g, "-");
+  const acceptancePath = `.harness/acceptance/${key}.md`;
+  const script = `
+    import { createHash } from "node:crypto";
+    import { execFileSync } from "node:child_process";
+    import { acceptanceDigest } from ${JSON.stringify(join(PACKAGE_ROOT, "src/lib/acceptance.mjs"))};
+    import { redact } from ${JSON.stringify(join(PACKAGE_ROOT, "src/lib/redact.mjs"))};
+    import { appendLedger, writeRecord } from ${JSON.stringify(join(PACKAGE_ROOT, "src/lib/store.mjs"))};
+    const [root, branch, key, acceptancePath, raw, omitDigest] = process.argv.slice(1);
+    const note = redact(raw);
+    const text = execFileSync("git", ["-C", root, "show", branch + ":" + acceptancePath], { encoding: "utf8" });
+    const branchCommit = execFileSync("git", ["-C", root, "rev-parse", branch], { encoding: "utf8" }).trim();
+    const acceptanceHash = createHash("sha256").update(text).digest("hex");
+    writeRecord(root, "plan", key, {
+      branch,
+      branchCommit,
+      acceptanceHash,
+      ...(omitDigest ? {} : { acceptanceLines: acceptanceDigest(text) }),
+      acceptancePath,
+      planFiles: [acceptancePath],
+      by: "tester",
+      note,
+      approvedAt: new Date().toISOString(),
+    });
+    appendLedger(root, { event: "plan.approve", branch, taskId: branch + "@legacy", approvalKind: "initial", commit: branchCommit, note, acceptanceHash: acceptanceHash.slice(0, 16) });
+  `;
+  return sh(repo.root, process.execPath, ["--input-type=module", "-e", script, repo.root, branch, key, acceptancePath, note, omitDigest ? "1" : ""], repo.env);
+}
+
+/**
+ * 直接写一条“阶段都不带核心契约”的旧式方案级授权，用于验证旧语义仍把阶段清单绑进授权。
+ * 阶段文件与清单都从任务分支上取，与 CLI 子进程看到的一致。
+ */
+export function legacyStagesGrant(repo, branch, file, { note = "可以，按方案实施全部阶段" } = {}) {
+  const script = `
+    import { createHash } from "node:crypto";
+    import { execFileSync } from "node:child_process";
+    import { acceptanceDigest } from ${JSON.stringify(join(PACKAGE_ROOT, "src/lib/acceptance.mjs"))};
+    import { parseStages, writeGrant } from ${JSON.stringify(join(PACKAGE_ROOT, "src/plan/stages.mjs"))};
+    import { appendLedger, writeRecord } from ${JSON.stringify(join(PACKAGE_ROOT, "src/lib/store.mjs"))};
+    const [root, branch, file, note] = process.argv.slice(1);
+    const show = (path) => execFileSync("git", ["-C", root, "show", branch + ":" + path], { encoding: "utf8" });
+    const text = show(file);
+    const stages = parseStages(text, file).map((item) => {
+      const content = show(item.acceptance);
+      return {
+        id: item.id,
+        title: item.title,
+        branch: item.branch,
+        acceptance: item.acceptance,
+        acceptanceHash: createHash("sha256").update(content).digest("hex"),
+        acceptanceLines: acceptanceDigest(content),
+      };
+    });
+    writeGrant(root, {
+      file,
+      stagesHash: createHash("sha256").update(text).digest("hex"),
+      stages,
+      carrier: { branch, stage: stages[0].id },
+      note,
+      by: "tester",
+      approvedAt: new Date().toISOString(),
+    });
+    // 旧记录不带契约，仍按整份验收清单绑定，所以要记下携带分支自己那份清单的指纹。
+    const ownPath = ".harness/acceptance/" + branch.replace(/[^0-9A-Za-z._-]+/g, "-") + ".md";
+    const ownText = show(ownPath);
+    writeRecord(root, "plan", branch.replace(/[^0-9A-Za-z._-]+/g, "-"), {
+      branch,
+      branchCommit: execFileSync("git", ["-C", root, "rev-parse", branch], { encoding: "utf8" }).trim(),
+      acceptanceHash: createHash("sha256").update(ownText).digest("hex"),
+      acceptanceLines: acceptanceDigest(ownText),
+      acceptancePath: ownPath,
+      planFiles: [ownPath],
+      by: "tester",
+      note,
+      approvedAt: new Date().toISOString(),
+      stages: { file, stage: stages[0].id, role: "carrier" },
+    });
+    appendLedger(root, { event: "plan.approve", branch, taskId: branch + "@legacy", approvalKind: "initial", note, stages: file, stage: stages[0].id, role: "carrier" });
+  `;
+  return sh(repo.root, process.execPath, ["--input-type=module", "-e", script, repo.root, branch, file, note], repo.env);
+}
+
+/** 改写一条授权记录的字段并用临时仓库自己的密钥重新签名，模拟记录里的提交已被清理等情况。 */
+export function patchPlanRecord(repo, branch, fields) {
+  const key = branch.replace(/[^0-9A-Za-z._-]+/g, "-");
+  const script = `
+    import { readFileSync } from "node:fs";
+    import { join } from "node:path";
+    import { dataDir, writeRecord } from ${JSON.stringify(join(PACKAGE_ROOT, "src/lib/store.mjs"))};
+    const [root, key, patch] = process.argv.slice(1);
+    const file = join(dataDir(root), "plan", key + ".json");
+    const record = JSON.parse(readFileSync(file, "utf8"));
+    delete record.signature;
+    delete record.keyId;
+    writeRecord(root, "plan", key, { ...record, ...JSON.parse(patch) });
+  `;
+  return sh(repo.root, process.execPath, ["--input-type=module", "-e", script, repo.root, key, JSON.stringify(fields)], repo.env);
+}
+
 export function fakeReviewer(repo, structured) {
   const bin = join(repo.root, "..", "fake-claude.mjs");
   writeFileSync(

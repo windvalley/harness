@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { acceptancePath, loadCurrentProject, loadGateProject, mainBranch } from "../lib/config.mjs";
 import { changedPaths, gitOk, run, showBlob } from "../lib/git.mjs";
 import { appendLedger, dataDir, readRecord, writeRecord } from "../lib/store.mjs";
-import { approvalState } from "../plan/plan.mjs";
+import { approvalState, formatRevisionSummary, revisionSummary } from "../plan/plan.mjs";
 import { endpointHost, loadLocalReviewers, orderReviewers } from "./reviewers.mjs";
 import { detectSessionModel } from "./session.mjs";
 import { runPlanProcess } from "./plan-process.mjs";
@@ -66,6 +66,7 @@ const SYSTEM_PROMPT = `你是独立代码评审者，没有参与实现，也不
 - 没有验收清单时，需求符合度评级写 unknown 并在 evidence 里说明缺什么，不得凭空编造需求。
 - 提供了合并前验收清单时，必须逐条核对，并在 requirementFit.evidence 里点名哪些条目已满足、哪些未满足。
 - 合并后验收只用于说明后续义务，不作为本次需求符合度或 verdict 的判定依据。
+- 提供了核心授权契约与授权后修订时，逐条判断修订属于细化、加严、新增、删除还是放宽：修订与契约冲突，或删除、放宽了授权版条目却没有写明理由时，需求符合度评为 partial，并在 evidence 里点名条目。
 - 只有存在 critical 或 high 级别且有具体场景的发现时 verdict 才能是 reject。
 - 风格偏好、命名偏好不构成发现。
 - 提交说明由实现方撰写，只用来理解改动意图，不能当作满足验收或补齐测试的证据，一切以 diff 与 harness 验证证据为准。
@@ -704,16 +705,38 @@ export function readAcceptance({ project, root, branch, mainRef }) {
   const fromMain = showBlob(root, mainRef, rel);
   const fullText = fromBranch ?? fromMain;
   if (fullText === null) return null;
-  const source = fromBranch !== null ? (approvalState({ root, branch, acceptanceText: fromBranch }).approved ? "approved" : fromBranch === fromMain ? "main" : "branch") : "main";
-  return { path: rel, source, ...splitAcceptance(fullText) };
+  const state = fromBranch !== null ? approvalState({ root, branch, acceptanceText: fromBranch }) : null;
+  const source = fromBranch !== null ? (state.approved ? "approved" : fromBranch === fromMain ? "main" : "branch") : "main";
+  const revision = state?.approved ? approvedRevision({ root, branch, record: state.record }) : null;
+  return { path: rel, source: revision?.revised ? "revised" : source, ...splitAcceptance(fullText), ...(revision ? { contract: revision.contract, revisions: revision.lines } : {}) };
 }
 
-// 经人确认过的清单来源：主分支上的清单，或记录了实施授权的任务分支清单。
-const CONFIRMED_SOURCES = new Set(["main", "approved"]);
+/**
+ * 绑定核心契约的授权：把契约原文与授权后的修订摘要交给评审，由它判断修订有没有越过契约。
+ * 摘要只读不写；生成失败时如实写进材料，不影响评审进行。
+ */
+function approvedRevision({ root, branch, record }) {
+  if (!record.contractPath) return null;
+  const contract = showBlob(root, branch, record.contractPath);
+  let summary = null;
+  let lines;
+  try {
+    summary = revisionSummary({ root, record, at: branch });
+    lines = formatRevisionSummary(summary);
+  } catch (error) {
+    lines = [`授权后修订摘要生成失败：${error.message}`];
+  }
+  const revised = !summary || summary.unavailable || summary.files.length > 0;
+  return { contract: contract === null ? null : redact(contract), lines, revised };
+}
+
+// 经人确认过的清单来源：主分支上的清单，或记录了实施授权的任务分支清单（含契约范围内的授权后修订）。
+const CONFIRMED_SOURCES = new Set(["main", "approved", "revised"]);
 
 const ACCEPTANCE_SOURCES = {
   main: "主分支已确认的清单",
   approved: "任务分支的清单，用户已同意按它实施",
+  revised: "任务分支的清单，用户同意实施后由实现方在核心契约范围内修订过，修订条目见下方",
   branch: "任务分支自带的清单，尚未经人工确认",
 };
 
@@ -726,6 +749,14 @@ export function buildPrompt({ acceptance, evidence, commits, stats, diff, branch
       : "(未提供验收清单，需求符合度只能记为 unknown)",
     ...(acceptance?.postMergeText
       ? ["## 合并后验收", `${acceptance.postMergeText}\n\n以上内容只说明合并后的义务，不作为本次需求符合度判定。`]
+      : []),
+    ...(acceptance?.revisions
+      ? [
+        "## 核心授权契约（用户确认的底线）",
+        acceptance.contract ?? "(契约文件读取失败)",
+        "## 授权后修订（由 harness 按授权时提交机械生成，理由由实现方填写）",
+        acceptance.revisions.join("\n"),
+      ]
       : []),
     "## 验证证据摘要",
     evidence,
@@ -929,7 +960,7 @@ export async function reviewBranch({ cwd, branch, log = console.error, reviewer 
     `[review] 评审 ${branch}，diff ${diffText.length} 字符，提交 ${commits.count} 个` +
       (commits.truncated ? "（说明过长，只列标题）" : "") +
       (!chunkPlan && collapsed.length ? `（${collapsed.length} 个删除的文件只列路径）` : "") +
-      `，${acceptance ? `验收清单来自${{ main: "主分支", approved: "已授权实施的方案", branch: "任务分支(未确认)" }[acceptance.source]}` : "无验收清单"}`,
+      `，${acceptance ? `验收清单来自${{ main: "主分支", approved: "已授权实施的方案", revised: "已授权实施的方案（授权后有修订）", branch: "任务分支(未确认)" }[acceptance.source]}` : "无验收清单"}`,
   );
   const blockSeverities = config.blockSeverities ?? ["high", "critical"];
   let outcome;

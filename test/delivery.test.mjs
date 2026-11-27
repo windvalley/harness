@@ -2077,4 +2077,32 @@ describe("PR/MR 描述里的授权原话", () => {
     assert.match(body, /- 实施授权: 可以，开始实施/);
     assert.doesNotMatch(body, /sk-old-plaintext-123456/, "描述会发到平台，不能带出凭据");
   });
+
+  test("授权后修订摘要原样写进 PR/MR 描述，没有修订时不加这一节", () => {
+    const base = {
+      branch: "task/a",
+      branchCommit: "a".repeat(40),
+      baseCommit: "b".repeat(40),
+      baseRef: "main",
+      resultTree: "c".repeat(40),
+      gateTouched: [],
+      evidence: { status: "passed", checks: [] },
+      review: null,
+      approval: "可以，开始实施",
+      risk: null,
+    };
+    const revisions = [
+      "授权后修订摘要（基线：授权时提交 aaaaaaaaaaaa）：",
+      "- 验收清单 .harness/acceptance/task-a.md",
+      "  - 「应该发生」",
+      "    新增: - 失败时可以重试",
+      "- 修订理由（实施方案「授权后修订」）:",
+      "  - 补充失败恢复；理由：实测发现",
+    ];
+    const body = sectionBody({ ...base, revisions });
+    assert.match(body, /- 实施授权: 可以，开始实施\n- 授权后修订摘要（基线：授权时提交 aaaaaaaaaaaa）：\n  - 验收清单/);
+    assert.match(body, /      新增: - 失败时可以重试/);
+    assert.match(body, /    - 补充失败恢复；理由：实测发现/);
+    assert.doesNotMatch(sectionBody(base), /授权后修订摘要/);
+  });
 });

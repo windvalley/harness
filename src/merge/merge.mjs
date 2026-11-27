@@ -40,7 +40,7 @@ import { entryTouched, followUps } from "../install/followups.mjs";
 import { ensureHooksPath } from "../install/install.mjs";
 import { REVIEW_KIND, reviewerSummary } from "../review/review.mjs";
 import { chunkedRecordProblem } from "../review/chunks.mjs";
-import { approvalState, assessRisk, planEnforced, reapprovalGuidance } from "../plan/plan.mjs";
+import { approvalState, assessRisk, formatRevisionSummary, planEnforced, reapprovalGuidance, revisionSummary } from "../plan/plan.mjs";
 import { assertRequiredEvidence, requiredEvidenceDefinitions } from "../verify/required.mjs";
 import { MERGE_TOKEN_ENV, mainUpdateToken } from "../githook.mjs";
 import { divergedGuidance, fetchRemoteMain, pushMain } from "../delivery/remote.mjs";
@@ -352,6 +352,7 @@ export async function checkGates({ project, root, branch, log = console.error, l
   // 方案：写了实施方案、改了库表或改动超过阈值的任务，必须有用户的实施授权记录，且授权后验收清单没有再改。
   // 实时拦截只能约束走了方案流程的任务，这里兜住没写方案就直接做了大改动的情况。
   let approval = null;
+  let revisions = [];
   if (needsPlan) {
     if (!planState.approved) {
       throw new MergeError(
@@ -367,6 +368,13 @@ export async function checkGates({ project, root, branch, log = console.error, l
     }
     approval = redact(planState.record.note);
     log(`[${label}] 已有实施授权(依据: ${redact(planState.record.note)})`);
+    // 授权后自主修订的内容由这里汇总给用户，摘要出错不影响授权判定与交付。
+    try {
+      revisions = formatRevisionSummary(revisionSummary({ root, record: planState.record, at: branchCommit }));
+    } catch (error) {
+      revisions = [`授权后修订摘要生成失败：${error.message}`];
+    }
+    for (const line of revisions) log(`[${label}] ${line}`);
   }
   const unresolved = unresolvedStop(root, branch, branchCommit);
   if (unresolved) log(`[${label}] 注意: 有会话在 ${unresolved.at} 没有上报阻塞就结束了（当时${unresolved.missing}），汇报时说明`);
@@ -517,6 +525,7 @@ export async function checkGates({ project, root, branch, log = console.error, l
     postMergeChecks: evidenceRecord?.postMerge ?? [],
     review: reviewRecord,
     approval,
+    revisions,
     risk: { tier: risk.tier, confirmReasons: risk.confirmReasons, observed: risk.observed },
   };
 }

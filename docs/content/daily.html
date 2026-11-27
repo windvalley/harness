@@ -41,8 +41,8 @@ git worktree add -b fix/payment ../project-payment main</code></pre></div>
     <h3 id="one-task">一次任务</h3>
     <p>两类任务都由 Agent 整理验收标准，并先查证仓库、已有契约和可用资料。
     大需求在交方案前核对测试依赖、评审者和适用的远程访问，并说明已知的人工环节。
-    获得实施授权后，Agent 在既定验收和权限范围内自行调整实现、验证、评审并交付。
-    确需改变验收、业务承诺或权限时，只暂停依赖该决定的部分。
+    获得实施授权后，Agent 在核心契约 <code>contract.md</code> 范围内自行修订验收清单与方案、实现、验证、评审并交付，交付汇报附上 harness 生成的授权后修订摘要。
+    确需改变目标、放宽验收底线或扩大权限时，先改核心契约由你重新确认，只暂停依赖该决定的部分。
     遇到临时平台故障，Agent 按提交状态接续。
     门禁改动需由你核对实际合并结果。
     完成后 Agent 汇报效果入口、验收证据和交付状态。</p>
@@ -72,18 +72,18 @@ git worktree add -b fix/payment ../project-payment main</code></pre></div>
     <p>执行命令与合并条件见<a href="https://github.com/windvalley/harness/blob/main/docs/reference.md#一次任务">一次任务参考</a>。</p>
 
     <h3 id="multi-stage">大需求：多个分支连续交付</h3>
-    <p>一个分支交付不完的需求可以拆成阶段，逐个分支按顺序交付。阶段写在方案目录的阶段文件里，默认路径模式是 <code>docs/changes/*/stages.json</code>，可由 <code>intent.plan.stages</code> 覆盖；每个阶段用 <code>id</code>、<code>title</code>、建议分支名 <code>branch</code> 和该阶段的验收清单 <code>acceptance</code> 描述。记录方案级授权前，阶段文件和全部阶段的清单都要先提交到任务分支。</p>
+    <p>一个分支交付不完的需求可以拆成阶段，逐个分支按顺序交付。阶段写在方案目录的阶段文件里，默认路径模式是 <code>docs/changes/*/stages.json</code>，可由 <code>intent.plan.stages</code> 覆盖；每个阶段用 <code>id</code>、<code>title</code>、建议分支名 <code>branch</code>、该阶段的验收清单 <code>acceptance</code> 和核心契约 <code>contract</code> 描述。记录方案级授权前，阶段文件、全部阶段的清单与契约都要先提交到任务分支；缺契约的阶段会被点名拒绝。</p>
     <div class="code"><pre><code>{
   "stages": [
-    { "id": "api", "title": "登录接口", "branch": "feature/login-api", "acceptance": "docs/changes/login/api.md" },
-    { "id": "ui", "title": "登录页面", "branch": "feature/login-ui", "acceptance": "docs/changes/login/ui.md" }
+    { "id": "api", "title": "登录接口", "branch": "feature/login-api", "acceptance": "docs/changes/login/api.md", "contract": "docs/changes/login/contract.md" },
+    { "id": "ui", "title": "登录页面", "branch": "feature/login-ui", "acceptance": "docs/changes/login/ui.md", "contract": "docs/changes/login/contract.md" }
   ]
 }</code></pre></div>
-    <p>你只需要授权一次。明确同意覆盖全部阶段后，Agent 在第一个阶段的分支上运行 <code>harness approve --branch &lt;分支&gt; --yes --note "&lt;你的原话&gt;" --stages &lt;阶段文件&gt;</code>，把方案级授权绑定到阶段文件与全部阶段清单的内容。携带授权的分支缺省对应第一个阶段，可用 <code>--stage</code> 指定；阶段按 <code>id</code> 关联分支，之后才合入的命名规则让建议分支名失效时，改用合规名称并照抄清单即可，不需要你重新授权。</p>
-    <p>一个阶段合并后，收尾检查会提示下一阶段，并给出建议分支名、要复制的清单和 <code>harness approve --branch &lt;新分支&gt; --yes --from-stages &lt;阶段文件&gt; --stage &lt;阶段&gt;</code>；这条命令不接受 <code>--note</code>，原话照搬方案级授权。Agent 据此建分支、复制清单并继续实施，不需要你逐个阶段表态。<code>harness status</code> 对阶段分支多一行 <code>stages</code>，显示已合入几个阶段、总数与下一阶段；全部阶段合入后这一行显示已全部合入，收尾检查也不再提示。</p>
+    <p>你只需要授权一次。明确同意覆盖全部阶段后，Agent 在第一个阶段的分支上运行 <code>harness approve --branch &lt;分支&gt; --yes --note "&lt;你的原话&gt;" --stages &lt;阶段文件&gt;</code>，把方案级授权绑定到阶段文件与全部阶段的核心契约。携带授权的分支缺省对应第一个阶段，可用 <code>--stage</code> 指定；阶段按 <code>id</code> 关联分支，之后才合入的命名规则让建议分支名失效时，改用合规名称并照抄清单与契约即可，不需要你重新授权。</p>
+    <p>一个阶段合并后，收尾检查会提示下一阶段，并给出建议分支名、要复制的清单与契约和 <code>harness approve --branch &lt;新分支&gt; --yes --from-stages &lt;阶段文件&gt; --stage &lt;阶段&gt;</code>；这条命令不接受 <code>--note</code>，原话照搬方案级授权。Agent 据此建分支、复制清单与契约并继续实施，不需要你逐个阶段表态。<code>harness status</code> 对阶段分支多一行 <code>stages</code>，显示已合入几个阶段、总数与下一阶段；全部阶段合入后这一行显示已全部合入，收尾检查也不再提示。</p>
     <p>以下情况会停下来等你处理：</p>
     <ul>
-      <li>阶段文件或某个阶段的清单在授权后改过，相关授权失效，需要你重新同意；其他阶段清单的修订不影响已经派生的分支。</li>
+      <li>阶段文件或某个阶段的核心契约在授权后改过，相关授权失效，需要你重新确认；阶段清单在契约范围内的细化不会打断，其他阶段的修订也不影响已经派生的分支。</li>
       <li>前序阶段还没合入主分支时，不能为后续阶段派生授权。</li>
       <li>远程交付下阶段是否合入以本地主分支为准，平台合并后要先运行 <code>harness sync</code>。</li>
       <li>收尾检查只提示下一步，不建分支、不授权、不合并；它只能降低提前停下的概率，同一状态连续拦满 <code>stop.idleBlocks</code>（缺省 3 次）仍会放行，发送“继续”即可恢复。</li>

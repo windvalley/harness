@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { userInfo } from "node:os";
 import { join } from "node:path";
 import { acceptancePath, loadGateProject, mainBranch, trustedMainRef } from "../lib/config.mjs";
-import { acceptanceDigest, describeAcceptanceChange, describeEvidenceChange, hasSectionedDigest } from "../lib/acceptance.mjs";
+import { acceptanceDigest, describeAcceptanceChange, describeEvidenceChange, hasSectionedDigest, sectionLineChanges, sectionText } from "../lib/acceptance.mjs";
 import { matchAny } from "../lib/glob.mjs";
 import { changedPaths, git, mergeBase, refExists, resolveCommit, showBlob } from "../lib/git.mjs";
 import { redact } from "../lib/redact.mjs";
@@ -166,6 +166,20 @@ export function codeLines(root, base, head, exclude) {
   return total;
 }
 
+/**
+ * 本分支方案目录里已在分支提交中存在的核心契约（例如随前序阶段先合入主分支）。
+ * 只看本分支改过的方案目录，不借用主分支上其他任务的契约；有多份或没有时返回 null。
+ */
+function contractAtTip({ root, commit, dirs }) {
+  const found = [...new Set(dirs)].map((dir) => `${dir}contract.md`).filter((path) => showBlob(root, commit, path) !== null);
+  return found.length === 1 ? found[0] : null;
+}
+
+/** 核心契约与实施方案同目录，按方案标记的目录推出契约路径；项目改了 markers 也跟着改。 */
+function contractPatterns(settings) {
+  return settings.markers.map((pattern) => pattern.replace(/plan\.md$/, "contract.md"));
+}
+
 /** 合并时判断这次改动是否需要实施授权，返回原因列表，空列表表示属于直接实施的范围。 */
 function planRequirement({ root, project, base, head }) {
   const settings = planSettings(project.config);
@@ -302,13 +316,16 @@ export function planSummary({ cwd, branch }) {
   const rel = acceptancePath(project, branch);
   const acceptance = showBlob(root, branchCommit, rel);
   const need = assessRisk({ root, project, base, head: branchCommit });
-  const dirs = need.markers.map((path) => path.slice(0, path.lastIndexOf("/") + 1));
   const paths = changedPaths(root, base, branchCommit);
+  // 核心契约与实施方案同目录；只有契约、还没写实施方案的任务也要能找到它。
+  const dirs = [...need.markers, ...paths.filter((path) => matchAny(path, contractPatterns(need.settings)))]
+    .map((path) => path.slice(0, path.lastIndexOf("/") + 1));
   const planFiles = paths.filter((path) => path === rel || dirs.some((dir) => path.startsWith(dir)));
   const otherFiles = paths.filter((path) => !planFiles.includes(path));
   const contracts = planFiles.filter((path) => path.endsWith("/contract.md"));
   if (contracts.length > 1) throw new Error(`核心授权契约只能有一个，当前找到: ${contracts.join("、")}`);
-  const contractPath = contracts[0] ?? null;
+  // 契约可以先合入主分支，这类分支上它不出现在改动里，按分支提交再找一次。
+  const contractPath = contracts[0] ?? contractAtTip({ root, commit: branchCommit, dirs });
   const contract = contractPath ? showBlob(root, branchCommit, contractPath) : null;
   return {
     root,
@@ -366,6 +383,9 @@ export function planApprovalPreflight({ cwd, branch, stages = null, stage = null
   const hadApproval = Boolean(previousApproval);
   const addedContract = Boolean(authorizedContractPath && !previousApproval?.contractPath);
   const requiresHumanConfirmation = hadApproval && (!summary.approval.approved || addedContract);
+  // 授权只绑定核心契约，验收清单与方案可在契约范围内持续修订；没有契约的新授权会把整份清单锁死，不再接受。
+  // 已有记录的任务（含旧记录）不受影响，按原语义重新确认。
+  const missingContract = !hadApproval && !authorizedContractPath;
   const confirmationCommand = `harness approve --branch ${branch} --yes --note "<用户针对本次差异的新确认>" --confirm-contract ${confirmationHash}${stages ? ` --stages ${stages}${stage ? ` --stage ${stage}` : ""}` : ""}`;
   return {
     summary,
@@ -378,8 +398,11 @@ export function planApprovalPreflight({ cwd, branch, stages = null, stage = null
     hadApproval,
     requiresHumanConfirmation,
     confirmationCommand,
+    missingContract,
   };
 }
+
+export const MISSING_CONTRACT = "方案目录里没有核心授权契约 contract.md：按 .harness/templates/contract.md 写清用户目标与交付结果、验收底线、必需证据和授权范围，提交到任务分支后再记录授权";
 
 export function reapprovalGuidance({ root, branch }) {
   const previous = approvalRecord(root, branch);
@@ -419,7 +442,9 @@ export function approvePlan({ cwd, branch, note = "", stages = null, fromStages 
     hadApproval,
     requiresHumanConfirmation,
     confirmationCommand,
+    missingContract,
   } = preflight;
+  if (missingContract) throw new Error(MISSING_CONTRACT);
   const by = userInfo().username;
   const approvedAt = new Date().toISOString();
   if (requiresHumanConfirmation && confirmContract !== confirmationHash) {
@@ -590,4 +615,99 @@ export function formatPlanSummary(summary) {
   lines.push(`验收清单 ${summary.acceptancePath}:`);
   lines.push(summary.acceptance === null ? "  (分支上还没有提交，无法记录授权)" : summary.acceptance.trimEnd());
   return lines.join("\n");
+}
+
+export const REVISION_SECTION = "授权后修订";
+const EMPTY_REVISION_NOTES = /^-?\s*(暂无|无)[。.]?$/;
+
+/**
+ * 授权后对验收清单与方案的修订，以授权记录里的授权时提交为基线机械算出。
+ * 只对绑定核心契约的授权生成：旧记录绑定整份清单，授权有效就说明清单没变。
+ * 基线提交取不到时如实返回 unavailable，不报“没有修订”；文本经 redact，不带出凭据。
+ */
+export function revisionSummary({ root, record, at }) {
+  if (!record?.contractPath || !record.branchCommit) return null;
+  const head = at ?? record.branch;
+  const dir = record.contractPath.slice(0, record.contractPath.lastIndexOf("/") + 1);
+  const files = [
+    { kind: "acceptance", label: "验收清单", path: record.acceptancePath ?? `.harness/acceptance/${recordKey(record.branch)}.md` },
+    { kind: "spec", label: "行为说明", path: `${dir}spec.md` },
+    { kind: "plan", label: "实施方案", path: `${dir}plan.md` },
+  ];
+  if (git(root, ["cat-file", "-e", `${record.branchCommit}^{commit}`]).status !== 0) {
+    return { unavailable: true, baseCommit: record.branchCommit, files: [], notes: null };
+  }
+  const out = [];
+  let notes = null;
+  for (const file of files) {
+    const before = showBlob(root, record.branchCommit, file.path);
+    const after = showBlob(root, head, file.path);
+    if (before === null && after === null) continue;
+    if (file.kind === "plan") {
+      const raw = after === null ? null : sectionText(after, REVISION_SECTION);
+      notes = raw && !raw.split("\n").every((line) => EMPTY_REVISION_NOTES.test(line.trim()) || line.trim() === "") ? redact(raw) : null;
+      // 执行进度天天在变，逐条列出会淹没实质修订：实施方案只报章节与增删条数，理由看修订章节。
+      const changes = sectionLineChanges(before ?? "", after ?? "", { skip: [REVISION_SECTION] });
+      if (changes.length > 0 || before === null || after === null) {
+        out.push({ ...file, created: before === null, deleted: after === null, sections: changes.map((item) => ({ section: item.section, added: item.added.length, removed: item.removed.length })) });
+      }
+      continue;
+    }
+    const changes = sectionLineChanges(before ?? "", after ?? "");
+    if (changes.length > 0 || before === null || after === null) {
+      out.push({
+        ...file,
+        created: before === null,
+        deleted: after === null,
+        sections: changes.map((item) => ({ section: item.section, removed: item.removed.map(redact), added: item.added.map(redact) })),
+      });
+    }
+  }
+  return { unavailable: false, baseCommit: record.branchCommit, files: out, notes };
+}
+
+const countOf = (value) => (Array.isArray(value) ? value.length : value);
+
+/** status 用的一行计数。 */
+export function formatRevisionCount(summary) {
+  if (!summary) return null;
+  if (summary.unavailable) return `无法还原授权时的版本（提交 ${summary.baseCommit.slice(0, 12)}），修订摘要不可用`;
+  if (summary.files.length === 0) return "授权后没有修订";
+  const parts = summary.files.map((file) => {
+    if (file.deleted) return `${file.label}已删除`;
+    const added = file.sections.reduce((sum, item) => sum + countOf(item.added), 0);
+    const removed = file.sections.reduce((sum, item) => sum + countOf(item.removed), 0);
+    return `${file.label}${file.created ? "（授权后新建）" : ""} +${added} -${removed}`;
+  });
+  return `授权后修订：${parts.join("，")}${summary.notes ? "；已写修订理由" : "；没有写修订理由"}`;
+}
+
+/** 交接视图、合并输出与 PR/MR 描述用的完整摘要，按行返回。 */
+export function formatRevisionSummary(summary) {
+  if (!summary) return [];
+  const lines = [`授权后修订摘要（基线：授权时提交 ${summary.baseCommit.slice(0, 12)}）：`];
+  if (summary.unavailable) {
+    lines.push(`- 无法还原授权时的版本（提交 ${summary.baseCommit}），不能列出修订；授权判定不受影响`);
+    return lines;
+  }
+  if (summary.files.length === 0) {
+    lines.push("- 授权后没有修订");
+    return lines;
+  }
+  for (const file of summary.files) {
+    const state = file.deleted ? "（已删除）" : file.created ? "（授权后新建）" : "";
+    lines.push(`- ${file.label} ${file.path}${state}`);
+    for (const item of file.sections) {
+      if (file.kind === "plan") {
+        lines.push(`  - 「${item.section}」新增 ${item.added} 行、删除 ${item.removed} 行`);
+        continue;
+      }
+      lines.push(`  - 「${item.section}」`);
+      for (const line of item.removed) lines.push(`    删除: ${line}`);
+      for (const line of item.added) lines.push(`    新增: ${line}`);
+    }
+  }
+  lines.push(summary.notes ? `- 修订理由（实施方案「${REVISION_SECTION}」）:` : `- 修订理由：实施方案没有填写「${REVISION_SECTION}」章节`);
+  if (summary.notes) for (const line of summary.notes.split("\n")) if (line.trim()) lines.push(`  ${line.trim()}`);
+  return lines;
 }

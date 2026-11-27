@@ -20,6 +20,9 @@ function ledgerEvents(repo) {
   return existsSync(file) ? readFileSync(file, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line)) : [];
 }
 const acceptanceOf = (branch) => `.harness/acceptance/${branch.replace(/\//g, "-")}.md`;
+/** 记录授权需要核心契约；内容与这些风险用例无关。 */
+const contractOf = (branch) => `docs/changes/${branch.replace(/[^0-9A-Za-z._-]+/g, "-")}/contract.md`;
+const CONTRACT_TEXT = "## 目标与主要方案\n\n- 按方案交付\n\n## 验收底线\n\n- 保持现有行为\n";
 
 function setup({ risk = RISK, policy = POLICY, config = {} } = {}) {
   const base = { ...CONFIG, intent: { ...CONFIG.intent, plan: { maxLines: 5 } }, ...config };
@@ -91,7 +94,7 @@ describe("风险分级", () => {
   test("依赖清单变化要实施授权，锁文件不受代码行数排除影响", () => {
     const repo = setup();
     const branch = "feat/deps";
-    repo.branch(branch, { "package-lock.json": "{}\n", [acceptanceOf(branch)]: "- 升级依赖\n" });
+    repo.branch(branch, { "package-lock.json": "{}\n", [acceptanceOf(branch)]: "- 升级依赖\n", [contractOf(branch)]: CONTRACT_TEXT });
     const refused = landed(repo, branch);
     assert.notEqual(refused.status, 0);
     assert.match(refused.stderr, /plan_unapproved/);
@@ -105,7 +108,7 @@ describe("风险分级", () => {
   test("T1 与 T2 取并集：确认不能替代授权，授权也不能替代确认", () => {
     const repo = setup();
     const branch = "feat/both";
-    repo.branch(branch, { "src/big.js": code(10), [WORKFLOW]: "name: ci\n", [acceptanceOf(branch)]: "- 大改动\n" });
+    repo.branch(branch, { "src/big.js": code(10), [WORKFLOW]: "name: ci\n", [acceptanceOf(branch)]: "- 大改动\n", [contractOf(branch)]: CONTRACT_TEXT });
     const first = landed(repo, branch);
     assert.match(first.stderr, /plan_unapproved/);
 
@@ -125,7 +128,7 @@ describe("风险分级", () => {
   test("只有授权没有确认时，验证评审通过后仍报 risk_unconfirmed", () => {
     const repo = setup();
     const branch = "feat/both3";
-    repo.branch(branch, { "src/big.js": code(10), [WORKFLOW]: "name: ci\n", [acceptanceOf(branch)]: "- 大改动\n" });
+    repo.branch(branch, { "src/big.js": code(10), [WORKFLOW]: "name: ci\n", [acceptanceOf(branch)]: "- 大改动\n", [contractOf(branch)]: CONTRACT_TEXT });
     landed(repo, branch);
     assert.equal(repo.cli("approve", "--branch", branch, "--yes", "--note", QUOTE).status, 0);
     const refused = repo.cli("merge", "--branch", branch);
@@ -137,7 +140,7 @@ describe("风险分级", () => {
   test("同时缺授权和确认时一次说全，先授权后确认各自满足才放行", () => {
     const repo = setup();
     const branch = "feat/both2";
-    repo.branch(branch, { "src/big.js": code(10), [WORKFLOW]: "name: ci\n", [acceptanceOf(branch)]: "- 大改动\n" });
+    repo.branch(branch, { "src/big.js": code(10), [WORKFLOW]: "name: ci\n", [acceptanceOf(branch)]: "- 大改动\n", [contractOf(branch)]: CONTRACT_TEXT });
     const refused = landed(repo, branch);
     assert.notEqual(refused.status, 0);
     assert.match(refused.stderr, /plan_unapproved/);
@@ -231,7 +234,7 @@ describe("风险分级", () => {
   test("观察模式不影响原有的授权要求，也不影响没命中的改动", () => {
     const repo = setup({ risk: { ...RISK, mode: "observe" } });
     const branch = "feat/obs-big";
-    repo.branch(branch, { "src/big.js": code(10), [acceptanceOf(branch)]: "- 大改动\n" });
+    repo.branch(branch, { "src/big.js": code(10), [acceptanceOf(branch)]: "- 大改动\n", [contractOf(branch)]: CONTRACT_TEXT });
     const refused = landed(repo, branch);
     assert.match(refused.stderr, /plan_unapproved/, "代码行数等原有信号仍然拦");
 

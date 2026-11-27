@@ -1,10 +1,9 @@
 import { strict as assert } from "node:assert";
 import { createHash } from "node:crypto";
-import { readFileSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
-import { APPROVE, CONFIG, commit, fakeReviewer, git, makeRepo, sh, write } from "./helpers.mjs";
-import { writeRecord } from "../src/lib/store.mjs";
+import { APPROVE, CONFIG, commit, fakeReviewer, git, legacyPlanRecord, makeRepo, patchPlanRecord, sh, write } from "./helpers.mjs";
 
 let repos = [];
 afterEach(() => {
@@ -16,6 +15,8 @@ const POLICY = { version: 1, presets: ["secrets", "git-safety", "gate-self", "pl
 const BRANCH = "feat/login";
 const ACCEPTANCE = ".harness/acceptance/feat-login.md";
 const PLAN = "docs/changes/login/plan.md";
+const CONTRACT = "docs/changes/login/contract.md";
+const CONTRACT_TEXT = "## 目标与主要方案\n\n- 登录成功后进入首页\n\n## 验收底线\n\n- 保留现有会话\n";
 const QUOTE = "可以，开始实施";
 const code = (lines) => `${Array.from({ length: lines }, (_, i) => `export const v${i} = ${i};`).join("\n")}\n`;
 const sha = (text) => createHash("sha256").update(text).digest("hex");
@@ -53,7 +54,7 @@ describe("先方案后实施", () => {
   test("已授权任务更换实现路径和更新计划后按原验收直接交付", () => {
     const repo = setup();
     const linked = linkedTask(repo);
-    commit(linked, "docs(login): 方案\n\n- 写明验收与实施路径", { [PLAN]: "# 方案\n\n用组件 A。\n", [ACCEPTANCE]: "- 登录成功后进入首页\n" });
+    commit(linked, "docs(login): 方案\n\n- 写明验收与实施路径", { [PLAN]: "# 方案\n\n用组件 A。\n", [CONTRACT]: CONTRACT_TEXT, [ACCEPTANCE]: "- 登录成功后进入首页\n" });
     assert.equal(repo.cli("approve", "--branch", BRANCH, "--yes", "--note", QUOTE).status, 0);
     commit(linked, "feat(login): 完成登录\n\n- 复用组件 B\n- 按同一验收交付", { [PLAN]: "# 方案\n\n实测后改用组件 B。\n", "src/app.js": code(10) });
     const result = landed(repo, BRANCH);
@@ -127,7 +128,7 @@ describe("先方案后实施", () => {
       "src/big.js": code(10),
       [ACCEPTANCE]: '## 应该发生\n\n- 甲\n\n<!-- harness:evidence id="browser" phase="pre-merge" -->\n',
     });
-    assert.equal(repo.cli("approve", "--branch", BRANCH, "--yes", "--note", QUOTE).status, 0);
+    assert.equal(legacyPlanRecord(repo, BRANCH, { note: QUOTE }).status, 0);
     git(repo.root, "checkout", "-q", BRANCH);
     commit(repo.root, "docs(login): 调整必需证据\n\n- 更换检查并后置", {
       [ACCEPTANCE]: '## 应该发生\n\n- 甲\n\n<!-- harness:evidence id="smoke" phase="post-merge" -->\n',
@@ -142,21 +143,25 @@ describe("先方案后实施", () => {
   test("旧任务新增核心契约也须由人确认，不能静默改变授权来源", () => {
     const repo = setup();
     const contract = "docs/changes/login/contract.md";
-    repo.branch(BRANCH, { [PLAN]: "# 实施方案\n", [ACCEPTANCE]: "- 保持原行为\n" });
+    repo.branch(BRANCH, { [PLAN]: "# 实施方案\n", [CONTRACT]: "# 核心契约\n\n- 保持原行为\n", [ACCEPTANCE]: "- 保持原行为\n" });
     assert.equal(repo.cli("approve", "--branch", BRANCH, "--yes", "--note", QUOTE).status, 0);
+    assert.equal(legacyPlanRecord(repo, BRANCH).status, 0, "改写成本次授权前就已存在的旧记录");
     git(repo.root, "checkout", "-q", BRANCH);
-    commit(repo.root, "docs(login): 引入核心契约\n\n- 明确唯一授权来源", { [contract]: "# 核心契约\n\n- 保持原行为\n" });
+    // 旧记录授权时没有绑定契约；之后契约发生变化，同样要人针对新内容确认。
+    const revised = "# 核心契约\n\n- 保持原行为\n- 明确唯一授权来源\n";
+    commit(repo.root, "docs(login): 修改核心契约\n\n- 明确唯一授权来源", { [contract]: revised });
     git(repo.root, "checkout", "-q", "main");
     assert.notEqual(repo.cli("approve", "--branch", BRANCH, "--yes", "--note", "确认契约").status, 0);
-    assert.equal(repo.cli("approve", "--branch", BRANCH, "--yes", "--note", "确认契约", "--confirm-contract", sha("# 核心契约\n\n- 保持原行为\n")).status, 0);
+    assert.equal(repo.cli("approve", "--branch", BRANCH, "--yes", "--note", "确认契约", "--confirm-contract", sha(revised)).status, 0);
   });
 
-  test("写了实施方案后，记录授权前只能写方案文件；记录后放行，清单再改又要重新记录", () => {
+  test("写了实施方案后，记录授权前只能写方案文件；记录后放行，契约范围内继续修改", () => {
     const repo = setup();
     const linked = linkedTask(repo);
     assert.equal(writeHook(repo, linked, "src/app.js").status, 0, "还没写方案时按直接实施处理");
 
     write(linked, PLAN, "# 实施方案\n");
+    write(linked, CONTRACT, CONTRACT_TEXT);
     write(linked, ACCEPTANCE, "- 登录成功后进入首页\n");
     const denied = writeHook(repo, linked, "src/app.js");
     assert.equal(denied.status, 2);
@@ -184,7 +189,9 @@ describe("先方案后实施", () => {
     assert.equal(writeHook(repo, linked, "src/app.js").status, 0, "记录授权后可以写测试与实现");
 
     write(linked, ACCEPTANCE, "- 登录成功后进入首页\n- 新加一条\n");
-    assert.equal(writeHook(repo, linked, "src/app.js").status, 2, "授权后清单又改了");
+    assert.equal(writeHook(repo, linked, "src/app.js").status, 0, "契约没变，验收细化不再要求重新授权");
+    write(linked, CONTRACT, "## 目标与主要方案\n\n- 改成列表展示入口\n");
+    assert.equal(writeHook(repo, linked, "src/app.js").status, 2, "契约变了，写实现要先由人确认");
   });
 
   test("用户同意后由 Agent 记录授权，不需要用户执行命令，但必须照录原话", () => {
@@ -202,6 +209,85 @@ describe("先方案后实施", () => {
     assert.match(repo.cli("status", "--branch", BRANCH).stdout, /待实施授权/);
   });
 
+  test("首次授权缺少核心契约时拒绝，不写记录与账本；主分支上其他任务的契约不能借用", () => {
+    const repo = setup();
+    commit(repo.root, "docs(other): 已合入的其他任务契约\n\n- 属于别的任务", { "docs/changes/other/contract.md": CONTRACT_TEXT });
+    repo.branch(BRANCH, { [PLAN]: "# 实施方案\n", [ACCEPTANCE]: "- 登录成功后进入首页\n" });
+
+    const preview = repo.cli("approve", "--branch", BRANCH);
+    assert.equal(preview.status, 0, preview.stderr);
+    assert.match(preview.stdout, /还不能记录授权：方案目录里没有核心授权契约 contract\.md/);
+    assert.match(preview.stdout, /\.harness\/templates\/contract\.md/);
+    assert.doesNotMatch(preview.stdout, /由 Agent 执行：harness approve/, "缺契约时不能提示直接记录授权");
+
+    const refused = repo.cli("approve", "--branch", BRANCH, "--yes", "--note", QUOTE);
+    assert.notEqual(refused.status, 0);
+    assert.match(refused.stderr, /没有核心授权契约 contract\.md/);
+    assert.equal(existsSync(join(repo.env.HARNESS_DATA_DIR, "plan", "feat-login.json")), false, "拒绝时不写授权记录");
+    const ledgerFile = join(repo.env.HARNESS_DATA_DIR, "ledger.jsonl");
+    const approvals = existsSync(ledgerFile) ? readFileSync(ledgerFile, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line)).filter((event) => event.event === "plan.approve") : [];
+    assert.equal(approvals.length, 0, "拒绝时不追加账本");
+
+    git(repo.root, "checkout", "-q", BRANCH);
+    commit(repo.root, "docs(login): 补核心契约\n\n- 按模板写清边界", { [CONTRACT]: CONTRACT_TEXT });
+    git(repo.root, "checkout", "-q", "main");
+    assert.equal(repo.cli("approve", "--branch", BRANCH, "--yes", "--note", QUOTE).status, 0, "补上契约后可以记录");
+  });
+
+  test("契约任务授权后修订清单、行为说明与实施方案仍有效，status 与 merge 给出机械修订摘要", () => {
+    const repo = setup();
+    const linked = linkedTask(repo);
+    const SPEC = "docs/changes/login/spec.md";
+    commit(linked, "docs(login): 方案\n\n- 写明验收与实施路径", {
+      [PLAN]: "# 实施方案\n\n## 实现顺序\n\n- 用组件 A\n\n## 授权后修订\n\n- 暂无。\n",
+      [SPEC]: "# 行为说明\n\n## 这次不做\n\n- 不做记住我\n",
+      [CONTRACT]: CONTRACT_TEXT,
+      [ACCEPTANCE]: "## 应该发生\n\n- 登录成功后进入首页\n- 失败时提示重试\n",
+    });
+    assert.equal(repo.cli("approve", "--branch", BRANCH, "--yes", "--note", QUOTE).status, 0);
+    assert.match(repo.cli("status", "--branch", BRANCH).stdout, /plan:revisions: 授权后没有修订/);
+
+    commit(linked, "docs(login): 实施中细化方案\n\n- 拆分验收条目\n- 改用组件 B", {
+      [ACCEPTANCE]: "## 应该发生\n\n- 登录成功后进入首页\n- 密码错误时提示重试，token=sk-live-abcdef123456 不出现在页面\n\n## 绝对不能发生\n\n- 失败后清空已有会话\n",
+      [SPEC]: "# 行为说明\n\n## 这次不做\n\n- 不做记住我\n- 不做第三方登录\n",
+      [PLAN]: "# 实施方案\n\n## 实现顺序\n\n- 实测后改用组件 B\n- 补失败路径测试\n\n## 授权后修订\n\n- 验收：拆分失败提示，加严；理由：原条目无法判定；证据：src/app.test.js\n",
+      "src/app.js": code(10),
+    });
+    const status = repo.cli("status", "--branch", BRANCH).stdout;
+    assert.match(status, /\[ok\] plan: 已有实施授权/, "契约没变，修订不使授权失效");
+    assert.match(status, /plan:revisions: 授权后修订：验收清单 \+2 -1，行为说明 \+1 -0，实施方案 \+2 -1；已写修订理由/);
+    assert.doesNotMatch(status, /sk-live-abcdef123456/);
+    assert.equal(writeHook(repo, linked, "src/app.js").status, 0, "写入门禁同样放行");
+
+    const merged = landed(repo, BRANCH);
+    assert.equal(merged.status, 0, merged.stderr);
+    const log = merged.stderr;
+    assert.match(log, /授权后修订摘要（基线：授权时提交 [0-9a-f]{12}）/);
+    assert.match(log, /验收清单 \.harness\/acceptance\/feat-login\.md/);
+    assert.match(log, /删除: - 失败时提示重试/);
+    assert.match(log, /新增: - 密码错误时提示重试/);
+    assert.match(log, /「绝对不能发生」\n.*新增: - 失败后清空已有会话/);
+    assert.match(log, /新增: - 不做第三方登录/);
+    assert.match(log, /「实现顺序」新增 2 行、删除 1 行/);
+    assert.match(log, /修订理由（实施方案「授权后修订」）:\n.*验收：拆分失败提示，加严/);
+    assert.doesNotMatch(log, /sk-live-abcdef123456/, "摘要不能带出凭据原文");
+  });
+
+  test("授权时提交无法还原时如实说明，不报没有修订，也不阻断合并", () => {
+    const repo = setup();
+    repo.branch(BRANCH, { [PLAN]: "# 实施方案\n", [CONTRACT]: CONTRACT_TEXT, [ACCEPTANCE]: "- 甲\n", "src/big.js": code(10) });
+    assert.equal(repo.cli("approve", "--branch", BRANCH, "--yes", "--note", QUOTE).status, 0);
+    assert.equal(patchPlanRecord(repo, BRANCH, { branchCommit: "0".repeat(40) }).status, 0);
+
+    const status = repo.cli("status", "--branch", BRANCH).stdout;
+    assert.match(status, /\[ok\] plan: 已有实施授权/);
+    assert.match(status, /无法还原授权时的版本（提交 000000000000），修订摘要不可用/);
+    assert.doesNotMatch(status, /授权后没有修订/);
+    const merged = landed(repo, BRANCH);
+    assert.equal(merged.status, 0, merged.stderr);
+    assert.match(merged.stderr, /无法还原授权时的版本/);
+  });
+
   test("小改动直接合并，不需要授权记录", () => {
     const repo = setup();
     repo.branch("fix/small", { "src/a.js": code(3) });
@@ -213,7 +299,7 @@ describe("先方案后实施", () => {
 
   test("超过阈值或改了库表、没有授权记录时拒绝合并，记录后放行并显示依据", () => {
     const repo = setup();
-    repo.branch(BRANCH, { "src/big.js": code(10), "src/big.test.js": code(50), [ACCEPTANCE]: "- 大改动\n" });
+    repo.branch(BRANCH, { "src/big.js": code(10), "src/big.test.js": code(50), [CONTRACT]: CONTRACT_TEXT, [ACCEPTANCE]: "- 大改动\n" });
     const refused = landed(repo, BRANCH);
     assert.notEqual(refused.status, 0);
     assert.match(refused.stderr, /plan_unapproved/);
@@ -239,7 +325,7 @@ describe("先方案后实施", () => {
   test("授权后改验收清单时，失效原因说明改了哪个章节、增删几条", () => {
     const repo = setup();
     repo.branch(BRANCH, { "src/big.js": code(10), [ACCEPTANCE]: "## 应该发生\n\n- 甲\n- 乙\n" });
-    assert.equal(repo.cli("approve", "--branch", BRANCH, "--yes", "--note", QUOTE).status, 0);
+    assert.equal(legacyPlanRecord(repo, BRANCH, { note: QUOTE }).status, 0, "旧记录仍绑定整份验收清单");
 
     git(repo.root, "checkout", "-q", BRANCH);
     commit(repo.root, "docs(login): 调整验收\n\n- 改掉一条验收\n- 补一条新验收", { [ACCEPTANCE]: "## 应该发生\n\n- 甲\n- 丙\n" });
@@ -256,7 +342,7 @@ describe("先方案后实施", () => {
   test("只有排版变化时说清楚没有条目增删", () => {
     const repo = setup();
     repo.branch(BRANCH, { "src/big.js": code(10), [ACCEPTANCE]: "## 应该发生\n\n- 甲\n" });
-    assert.equal(repo.cli("approve", "--branch", BRANCH, "--yes", "--note", QUOTE).status, 0);
+    assert.equal(legacyPlanRecord(repo, BRANCH, { note: QUOTE }).status, 0);
 
     git(repo.root, "checkout", "-q", BRANCH);
     commit(repo.root, "docs(login): 调整排版\n\n- 只加空行\n- 不改条目", { [ACCEPTANCE]: "## 应该发生\n\n\n- 甲\n" });
@@ -268,7 +354,7 @@ describe("先方案后实施", () => {
   test("授权后把条目移进「绝对不能发生」时说明两个章节", () => {
     const repo = setup();
     repo.branch(BRANCH, { "src/big.js": code(10), [ACCEPTANCE]: "## 应该发生\n\n- 甲\n- 会话自动续期\n" });
-    assert.equal(repo.cli("approve", "--branch", BRANCH, "--yes", "--note", QUOTE).status, 0);
+    assert.equal(legacyPlanRecord(repo, BRANCH, { note: QUOTE }).status, 0);
 
     git(repo.root, "checkout", "-q", BRANCH);
     commit(repo.root, "docs(login): 反转一条验收\n\n- 从应该发生移到绝对不能发生\n- 需求已经变化", {
@@ -284,7 +370,7 @@ describe("先方案后实施", () => {
   test("删除验收清单后说明清单缺失，不退化成通用授权提示", () => {
     const repo = setup();
     repo.branch(BRANCH, { "src/big.js": code(10), [ACCEPTANCE]: "## 应该发生\n\n- 甲\n" });
-    assert.equal(repo.cli("approve", "--branch", BRANCH, "--yes", "--note", QUOTE).status, 0);
+    assert.equal(legacyPlanRecord(repo, BRANCH, { note: QUOTE }).status, 0);
 
     git(repo.root, "checkout", "-q", BRANCH);
     git(repo.root, "rm", "-q", ACCEPTANCE);
@@ -304,16 +390,8 @@ describe("先方案后实施", () => {
   test("旧授权记录没有章节摘要时，按授权时的提交还原清单再比对", () => {
     const repo = setup();
     repo.branch(BRANCH, { "src/big.js": code(10), [ACCEPTANCE]: "## 应该发生\n\n- 甲\n- 乙\n" });
-    assert.equal(repo.cli("approve", "--branch", BRANCH, "--yes", "--note", QUOTE).status, 0);
-
-    // 把记录改写成 0.23 的格式（重新签名，模拟旧版本写下的记录）：没有 acceptanceLines，也没有 acceptancePath。
-    const file = join(repo.env.HARNESS_DATA_DIR, "plan", "feat-login.json");
-    const record = JSON.parse(readFileSync(file, "utf8"));
-    delete record.acceptanceLines;
-    delete record.acceptancePath;
-    delete record.keyId;
-    delete record.signature;
-    writeRecord(repo.root, "plan", "feat-login", record);
+    // 旧版本写下的记录没有章节摘要，也没有核心契约。
+    assert.equal(legacyPlanRecord(repo, BRANCH, { note: QUOTE, omitDigest: true }).status, 0);
 
     git(repo.root, "checkout", "-q", BRANCH);
     commit(repo.root, "docs(login): 改一条验收\n\n- 改掉乙\n- 换成丙", { [ACCEPTANCE]: "## 应该发生\n\n- 甲\n- 丙\n" });
@@ -343,7 +421,7 @@ describe("先方案后实施", () => {
   test("账本记下授权的原话与清单指纹，记录被覆盖后仍可核对", () => {
     const repo = setup();
     repo.branch(BRANCH, { "src/big.js": code(10), [ACCEPTANCE]: "## 应该发生\n\n- 甲\n" });
-    assert.equal(repo.cli("approve", "--branch", BRANCH, "--yes", "--note", QUOTE).status, 0);
+    assert.equal(legacyPlanRecord(repo, BRANCH, { note: QUOTE }).status, 0);
 
     git(repo.root, "checkout", "-q", BRANCH);
     commit(repo.root, "docs(login): 改验收\n\n- 追加一条验收\n- 说明改动原因", { [ACCEPTANCE]: "## 应该发生\n\n- 甲\n- 乙\n" });
@@ -369,7 +447,7 @@ describe("先方案后实施", () => {
 
   test("授权原话里的凭据在写入记录与账本前就被遮掉", () => {
     const repo = setup();
-    repo.branch(BRANCH, { "src/big.js": code(10), [ACCEPTANCE]: "## 应该发生\n\n- 甲\n" });
+    repo.branch(BRANCH, { "src/big.js": code(10), [CONTRACT]: CONTRACT_TEXT, [ACCEPTANCE]: "## 应该发生\n\n- 甲\n" });
     const said = "确认：API_KEY=sk-live-abcdef123456 和 --token ghp-deadbeef 都可以跑";
     assert.equal(repo.cli("approve", "--branch", BRANCH, "--yes", "--note", said).status, 0);
 
@@ -388,7 +466,7 @@ describe("先方案后实施", () => {
     const repo = setup();
     repo.branch(BRANCH, { "src/big.js": code(10), [ACCEPTANCE]: "## 应该发生\n\n- 甲\n" });
     const first = "先按这个跑，token=sk-first-abcdef123456";
-    assert.equal(repo.cli("approve", "--branch", BRANCH, "--yes", "--note", first).status, 0);
+    assert.equal(legacyPlanRecord(repo, BRANCH, { note: first }).status, 0);
 
     git(repo.root, "checkout", "-q", BRANCH);
     commit(repo.root, "docs(login): 补一条验收\n\n- 追加一条\n- 说明原因", { [ACCEPTANCE]: "## 应该发生\n\n- 甲\n- 乙\n" });

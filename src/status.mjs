@@ -13,7 +13,7 @@ import { REVIEW_KIND, reviewerSummary } from "./review/review.mjs";
 import { CONFIRM_KIND } from "./confirm/confirm.mjs";
 import { mergePushTarget, planMergeResult, reuseDecision, reviewStaleFiles } from "./merge/merge.mjs";
 import { mainWorktreeReadiness } from "./merge/main-worktree.mjs";
-import { approvalRecord, approvalState, assessRisk, planEnforced, reapprovalGuidance } from "./plan/plan.mjs";
+import { approvalRecord, approvalState, assessRisk, formatRevisionCount, planEnforced, reapprovalGuidance, revisionSummary } from "./plan/plan.mjs";
 import { formatProgress, stageProgress } from "./plan/stages.mjs";
 import { latestSubmit, sameSubmitTarget } from "./delivery/record.mjs";
 import { deliveryForSubmit, submitContinuation } from "./delivery/submit.mjs";
@@ -300,7 +300,16 @@ export function branchStatus({ cwd, branch }) {
       add("plan", "ok", `属于直接实施的范围（代码改动 ${risk.lines} 行），不需要实施授权`);
     } else {
       const state = approvalState({ root, branch, acceptanceText: showBlob(root, branchCommit, acceptancePath(project, branch)), at: branchCommit });
-      if (state.approved) add("plan", "ok", `已有实施授权（${risk.reasons.join("；")}；依据：${redact(state.record.note)}）`);
+      if (state.approved) {
+        add("plan", "ok", `已有实施授权（${risk.reasons.join("；")}；依据：${redact(state.record.note)}）`);
+        let count = null;
+        try {
+          count = formatRevisionCount(revisionSummary({ root, record: state.record, at: branchCommit }));
+        } catch (error) {
+          count = `授权后修订摘要生成失败：${error.message}`;
+        }
+        if (count) add("plan:revisions", "info", count);
+      }
       else {
         const guidance = reapprovalGuidance({ root, branch }) ?? `${agentAfterConsent("同意实施", `harness approve --branch ${branch} --yes --note "<用户原话>"`)}，用户无需执行命令`;
         add("plan", "fail", `${risk.reasons.join("；")}，${state.reason}：${guidance}`);

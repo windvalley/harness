@@ -227,7 +227,7 @@
           <rect class="d-box allow" x="790" y="100" width="100" height="56" rx="8"/>
           <text class="d-t" x="840" y="133" text-anchor="middle">main</text>
 
-          <text class="d-tag" x="62" y="180" text-anchor="middle">绑定验收清单</text>
+          <text class="d-tag" x="62" y="180" text-anchor="middle">绑定核心契约</text>
           <text class="d-tag" x="332" y="180" text-anchor="middle">绑定分支提交</text>
           <text class="d-tag" x="455" y="180" text-anchor="middle">绑定分支提交</text>
           <text class="d-tag" x="580" y="180" text-anchor="middle">绑定合并结果 tree</text>
@@ -368,14 +368,15 @@
     <p>规则写在 <code>.harness/rules/core.md</code>，要点同时写进 <code>AGENTS.md</code> 的托管块，Agent 开始任务前先判断分级：</p>
     <div class="cards">
       <div class="card"><h4>直接实施</h4><p>小优化、小迭代或缺陷修复：不改库表与迁移，不改对外接口契约与数据兼容性，代码改动少于 500 行（测试、文档、锁文件不计）。先写简短验收清单，不需要另写 spec/plan 或等待方案授权。</p></div>
-      <div class="card"><h4>先方案后实施</h4><p>其余任务和拿不准的任务：先探索仓库与已有契约，有依据的技术取舍记录依据后继续，只对无法自行获得的关键信息逐个提问，再写出验收清单、spec 与 plan，提交后停下等你授权。配置了评审者时，交出方案前先运行 <code>harness review-plan</code> 让另一个模型审一轮，意见与处理记进 spec；它只给建议，不是门禁。</p></div>
+      <div class="card"><h4>先方案后实施</h4><p>其余任务和拿不准的任务：先探索仓库与已有契约，有依据的技术取舍记录依据后继续，只对无法自行获得的关键信息逐个提问，再写出验收清单、spec、核心契约 contract 与 plan，提交后停下等你授权。配置了评审者时，交出方案前先运行 <code>harness review-plan</code> 让另一个模型审一轮，意见与处理记进 spec；它只给建议，不是门禁。</p></div>
     </div>
     <p>默认启用的 <code>plan-first</code> 预设把“停下等授权”变成门禁：</p>
     <ul>
       <li>任务分支写了实施方案（默认 <code>docs/changes/*/plan.md</code>）、还没有授权记录时，Agent 只能写方案与验收清单，写测试和代码会被拦截。</li>
-      <li>你在对话里说“开始实施”之类的话就是授权，不需要执行命令。Agent 会运行 <code>harness approve --branch &lt;分支&gt; --yes --note "&lt;你的原话&gt;"</code> 照录原话。</li>
+      <li>你在对话里说“开始实施”之类的话就是授权，不需要执行命令。Agent 会运行 <code>harness approve --branch &lt;分支&gt; --yes --note "&lt;你的原话&gt;"</code> 照录原话；方案目录里没有 <code>contract.md</code> 时不能记录。</li>
+      <li>授权只绑定核心契约。契约范围内，Agent 按实施中的实际情况修订验收清单与方案，不再停下等你确认；合并输出、交接视图与 PR/MR 描述附上以授权时提交为基线机械生成的修订摘要，独立评审据契约核对修订有没有越界。改变目标、放宽验收底线或扩大权限要先改契约，由你重新确认。</li>
       <li>写了方案、改了库表相关文件或代码改动超过阈值的分支，没有授权记录不能合并（<code>plan_unapproved</code>）。</li>
       <li>合并输出与 <code>harness status</code> 会显示记录下来的原话，你可以随时核对。</li>
-      <li>一个分支交付不完的需求可以写成多阶段方案：方案目录里的 <code>stages.json</code> 按顺序列出阶段。你同意授权覆盖全部阶段时，Agent 用 <code>approve --stages</code> 记下方案级授权；一个阶段合并后，收尾检查提示下一阶段，Agent 用 <code>approve --from-stages</code> 照搬你的原话为新分支记录授权。阶段文件或某个阶段的清单改了，相关授权自动失效，要你重新同意。</li>
+      <li>一个分支交付不完的需求可以写成多阶段方案：方案目录里的 <code>stages.json</code> 按顺序列出阶段。你同意授权覆盖全部阶段时，Agent 用 <code>approve --stages</code> 记下方案级授权；一个阶段合并后，收尾检查提示下一阶段，Agent 用 <code>approve --from-stages</code> 照搬你的原话为新分支记录授权。阶段文件或某个阶段的核心契约改了，相关授权自动失效，要你重新确认。</li>
     </ul>
     <p>实施默认<strong>先红后绿</strong>：先把每条验收写成测试并确认失败，再实现到全部通过。</p>

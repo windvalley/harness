@@ -3,7 +3,7 @@ import { showBlob, statusShort, worktreeEntries } from "./lib/git.mjs";
 import { redact } from "./lib/redact.mjs";
 import { agentAfterConsent, humanExecutes } from "./lib/next-step.mjs";
 import { listEscalations } from "./escalate/escalate.mjs";
-import { planSummary, reapprovalGuidance } from "./plan/plan.mjs";
+import { formatRevisionSummary, planSummary, reapprovalGuidance, revisionSummary } from "./plan/plan.mjs";
 import { branchStatus } from "./status.mjs";
 
 const EVIDENCE_STEPS = new Set([
@@ -151,6 +151,16 @@ export function formatHandoff(handoff) {
   if (summary?.approval?.approved) {
     const record = summary.approval.record;
     lines.push(`- 有效实施授权：${clean(record.note)}（记录人 ${clean(record.by)}，时间 ${record.approvedAt}）。`);
+    let revisions = [];
+    try {
+      revisions = formatRevisionSummary(revisionSummary({ root: handoff.root, record, at: summary.branchCommit }));
+    } catch (error) {
+      revisions = [`授权后修订摘要生成失败：${error.message}`];
+    }
+    if (revisions.length > 0) {
+      lines.push(`- ${clean(revisions[0])}`);
+      for (const line of revisions.slice(1)) lines.push(`  ${clean(line)}`);
+    }
   } else {
     const reason = summary?.approval?.reason ?? handoff.summaryProblem ?? "未读取授权状态";
     const optional = summary?.reasons.length === 0 ? "；按当前改动不需要实施授权" : "";

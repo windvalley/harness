@@ -455,7 +455,11 @@ describe("收尾检查", () => {
     const policy = { version: 1, presets: ["secrets", "git-safety", "gate-self", "plan-first"], disabled: [], rules: [] };
     const repo = setup({ project: { ".harness/config.json": config, ".harness/policy.json": policy } });
     const dir = linkedTask(repo, "feat/login");
-    agentCommit(repo, dir, { "docs/changes/login/plan.md": "# 实施方案\n", ".harness/acceptance/feat-login.md": "- 登录成功后进入首页\n" }, "docs(login): 交付方案\n\n- 验收清单\n- 实施方案");
+    agentCommit(repo, dir, {
+      "docs/changes/login/plan.md": "# 实施方案\n",
+      "docs/changes/login/contract.md": "## 目标与主要方案\n\n- 登录成功后进入首页\n",
+      ".harness/acceptance/feat-login.md": "- 登录成功后进入首页\n",
+    }, "docs(login): 交付方案\n\n- 验收清单\n- 实施方案");
     assert.equal(stop(repo), null, "方案交出后停下等授权");
 
     toolCall(repo, bashCall(`.harness/bin/harness approve --branch feat/login --yes --note "可以，开始实施"`));

@@ -25,7 +25,7 @@ import { describePlan, planReviewers, projectReviewConfig, projectReviewerNote, 
 import { reviewerCommand } from "./review/reviewers-cmd.mjs";
 import { loadLocalReviewers, reviewersFile } from "./review/reviewers.mjs";
 import { approveConfirm, confirmSummary, formatSummary } from "./confirm/confirm.mjs";
-import { amendPlan, approvePlan, formatPlanSummary, planApprovalPreflight, planSummary, riskHints } from "./plan/plan.mjs";
+import { MISSING_CONTRACT, amendPlan, approvePlan, formatPlanSummary, planApprovalPreflight, planSummary, riskHints } from "./plan/plan.mjs";
 import { DEFAULT_PLAN_ATTEMPT_TIMEOUT_SECONDS, DEFAULT_PLAN_MAX_QUERIES, DEFAULT_PLAN_TIMEOUT_SECONDS, reviewPlan } from "./plan/planreview.mjs";
 import { checkCommitMessage, checkStaged, guardReference } from "./githook.mjs";
 import { branchMessageProblems, commitRuleErrorAt } from "./policy/commit-message.mjs";
@@ -69,7 +69,7 @@ const USAGE = `harness <命令> [参数]    任一命令加 --help 查看该命�
   status   --handoff [--branch <名称>]                生成 Markdown 交接视图，复用现有 Git、Worktree 与签名记录，不另写状态
   status   --post-merge [--branch <名称>]            列出到期而未登记的合并后验收义务；有待办时退出码为 1
   confirm  --branch <名称> [--yes]                   查看门禁改动；--yes 仅由人在自己的终端执行
-  approve  --branch <名称> [--yes --note <原话>]     查看任务方案；对话授权后由 Agent 执行 --yes 并照录原话
+  approve  --branch <名称> [--yes --note <原话>]     查看任务方案；对话授权后由 Agent 执行 --yes 并照录原话，方案须含 contract.md
            [--stages <阶段文件> [--stage <阶段>]]     用户同意覆盖全部阶段时，同时记录方案级授权
            --yes --from-stages <阶段文件> --stage <阶段>  Agent 按方案级授权为后续阶段分支记录授权，原话照搬
            --yes --confirm-contract <新hash>          核心契约变化后，仅由人针对新 hash 重新确认
@@ -594,6 +594,10 @@ function cmdApprove(argv) {
     }
     const preflight = planApprovalPreflight({ cwd: process.cwd(), branch: values.branch, stages: values.stages ?? null, stage: values.stage ?? null });
     print(formatPlanSummary(preflight.summary));
+    if (preflight.missingContract) {
+      print(`\n以上为只读摘要。还不能记录授权：${MISSING_CONTRACT}。`);
+      return 0;
+    }
     if (preflight.requiresHumanConfirmation) {
       print(`\n以上为只读摘要。${humanExecutes(preflight.confirmationCommand)}。`);
       return 0;

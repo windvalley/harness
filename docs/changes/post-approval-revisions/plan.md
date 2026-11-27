@@ -23,15 +23,15 @@
 
 | 步骤 | 改动 | 验证方式 | 状态 |
 | --- | --- | --- | --- |
-| 1 | 测试夹具：`test/helpers.mjs` 新增写入旧记录的辅助函数（直接用 `src/lib/store.mjs` 写入与旧版字段一致的签名记录），新增默认带 `contract.md` 的方案提交辅助；把依赖“没有契约也能授权”的用例迁到这两个辅助上 | 迁移后的现有测试全部通过 | 待开始 |
-| 2 | 按上表先写新测试并运行，确认因功能未实现而失败 | 定向 `node --test` 红灯 | 待开始 |
-| 3 | `src/plan/plan.mjs`：`planApprovalPreflight` 与 `approvePlan` 在没有已有记录时要求核心契约；`src/plan/stages.mjs` 的 `prepareGrant` 要求每个阶段有 `contract` | 步骤 2 的授权用例转绿 | 待开始 |
-| 4 | `src/lib/acceptance.mjs` 新增按章节计算删除与新增原文条目的函数；`src/plan/plan.mjs` 新增 `revisionSummary`，从授权记录的 `branchCommit` 还原基线，汇总清单、spec、plan 变化与“授权后修订”章节，输出经 `redact` | 摘要单元与集成用例转绿 | 待开始 |
-| 5 | 接入输出：`src/status.mjs` 计数行、`src/handoff.mjs` 完整摘要、`src/merge/merge.mjs` 成功日志、`src/delivery/submit.mjs` PR/MR 描述 | 对应 CLI 用例转绿 | 待开始 |
-| 6 | `src/review/review.mjs`：`readAcceptance` 区分“已授权且授权后有修订”的来源标签，`buildPrompt` 附契约原文与修订条目，评审说明补充判定要求 | 评审用例转绿 | 待开始 |
-| 7 | 规则与模板：`core.md`、`harness.md`、`method-design-planning.md` 写明分界并消除冲突；`templates/contract.md` 移出内部技术方案；`templates/plan.md` 新增“授权后修订”章节；`src/install/managed.mjs` 托管块加一句 | 规则内容用例转绿 | 待开始 |
-| 8 | 文档：`docs/reference.md`、`docs/content/` 中授权相关段落与原理图标签，运行 `npm run docs:build` 并审查生成差异；按需更新 `assets/golden/builtin.json` | `npm run docs:check` | 待开始 |
-| 9 | 自审 diff，运行全量测试与文档检查，在临时仓库真实走一遍：缺契约被拒、授权、改清单、status、merge 输出摘要 | 命令输出 | 待开始 |
+| 1 | 测试夹具：`test/helpers.mjs` 新增 `legacyPlanRecord`、`legacyStagesGrant`（直接写授权时没有契约的旧记录）与 `patchPlanRecord`；依赖“没有契约也能授权”的用例改为补契约或改用旧记录 | 迁移后的现有测试全部通过 | 完成：plan、stages、risk、stop、handoff 迁移后全部通过 |
+| 2 | 先实现缺契约拒绝，运行受影响测试确认按目标失败，再迁移夹具；新功能用例与实现同步补上 | 定向 `node --test` | 完成：首轮 50 余项按目标失败，迁移后转绿 |
+| 3 | `planApprovalPreflight`、`approvePlan` 与 CLI 预览在没有已有记录时要求核心契约；`prepareGrant` 首次授权要求每个阶段有 `contract`；`planSummary` 识别只有契约的方案目录与已随前序阶段合入的契约 | 授权用例 | 完成 |
+| 4 | `src/lib/acceptance.mjs` 新增 `sectionLineChanges`、`sectionText`；`src/plan/plan.mjs` 新增 `revisionSummary`、`formatRevisionCount`、`formatRevisionSummary` | 摘要用例 | 完成 |
+| 5 | 接入 status 计数行、交接视图、merge 成功日志、submit PR/MR 描述；摘要出错时降级为一行说明 | CLI 用例与 `sectionBody` 单元用例 | 完成 |
+| 6 | `readAcceptance` 新增 `revised` 来源并附契约原文与修订摘要；`buildPrompt` 增加两节；评审说明补充判定要求；`revised` 计入已确认来源 | `test/review.test.mjs`、`test/stages.test.mjs` | 完成 |
+| 7 | 规则、模板与托管块按方案修改，`approve` 帮助文本注明须含 `contract.md` | `test/hooks.test.mjs` 新增规则内容用例 | 完成 |
+| 8 | 更新 `docs/reference.md`、`docs/content/daily.html`、`docs/content/principles.html`，生成文档；黄金任务只覆盖写入门禁，无需修改 | `npm run docs:check` | 完成：10 个页面与搜索索引一致 |
+| 9 | 自审 diff，全量测试与文档检查，临时仓库真实走一遍 | 命令输出 | 完成：见执行记录 |
 
 ## 交付前检查
 
@@ -63,7 +63,10 @@
 
 <!-- 授权后对验收清单或方案的每次修订记一行：改动、类型（细化 / 加严 / 新增 / 删除 / 放宽 / 实现调整）、理由、证据。 -->
 
-- 暂无。
+- 测试夹具不新增“带契约的方案提交辅助”，改为在各用例里直接补 `contract.md`；类型：实现调整；理由：实际只有 5 个测试文件、约 40 处调用需要迁移，远少于预估的 100 处，单独辅助函数收益不大；证据：`test/plan.test.mjs` 等迁移后全部通过。
+- 新增“契约可以只出现在方案目录里”与“契约已随前序阶段合入主分支”两种识别；类型：实现调整；理由：原判定只认改过的 `plan.md` 所在目录，补契约或阶段重新授权时找不到契约；只在本分支改过的方案目录里找，不借用主分支上其他任务的契约；证据：`test/plan.test.mjs` 的“首次授权缺少核心契约时拒绝”、`test/stages.test.mjs` 的重新授权用例。
+- 已授权且授权后有修订时，评审清单来源记为新的 `revised`，并计入已确认来源；类型：细化；理由：验收要求“来源标签写明授权后有修订”，同时保持已授权清单 `partial` 即拒绝的规则；证据：`test/review.test.mjs`、`test/stages.test.mjs`。
+- 多阶段：阶段清单在契约范围内修订不再使方案级授权失效，后续阶段从 `--from-stages` 继承时也只核对契约；类型：细化；理由：这是“授权只绑定核心契约”在多阶段上的直接推论，原有判定代码本就如此，本次补测试锁住；证据：`test/stages.test.mjs` 的携带分支与派生用例。
 
 ## 恢复
 
@@ -71,4 +74,7 @@
 
 ## 执行记录
 
-- 方案已写好，等待用户确认。
+- 用户在对话中回复“同意”后开始实施。
+- 基线 `npm test` 848 项全部通过；实现后 `npm test` 855 项全部通过，`npm run docs:check` 核对 10 个页面与搜索索引通过，`git diff --check` 通过。
+- 临时仓库真实走查：缺契约时 `approve` 预览提示补写、`approve --yes` 退出码 1；补契约后记录成功；授权后改清单与方案，`status` 显示 `plan:revisions` 计数且授权仍有效；`merge` 输出列出新增条目、实施方案章节变化与修订理由。
+- 剩余事项、阻塞与下一步：无；提交、合并到本地 `main` 并普通推送。

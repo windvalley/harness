@@ -322,6 +322,33 @@ describe("安装与自检", () => {
     }
   });
 
+  test("规则、模板与托管块写清授权后自主修订的同一条分界，不再要求改清单先取得同意", () => {
+    const read = (rel) => readFileSync(join(PACKAGE_ROOT_TEST, rel), "utf8");
+    const core = read("assets/rules/core.md");
+    assert.match(core, /先方案后实施的任务一律在方案目录里写唯一的 `contract\.md`，授权只绑定这份核心契约；没有契约时不能记录授权/);
+    assert.match(core, /核心契约范围内，Agent 按实施中的实际情况自主修订验收清单、行为说明与实施方案，不停下等确认/);
+    assert.match(core, /可以自主修订：细化、加严或新增验收条目，换用等价或更强的验证方式，调整实现路径与技术方案，修正方案中的事实错误/);
+    assert.match(core, /必须改核心契约并由人重新确认：改变用户目标或交付结果，删除或放宽验收底线，删除必需证据，扩大权限（新增依赖、外部写入、库表或数据迁移、破坏对外兼容、不可逆操作）/);
+    assert.match(core, /交付汇报原样附上 `harness merge` 或 `status --handoff` 输出的“授权后修订摘要”/);
+
+    const workflow = read("assets/rules/harness.md");
+    assert.doesNotMatch(workflow, /之后要改清单，先向用户说明改动并取得同意/, "不能与契约任务可持续修订的规则冲突");
+    assert.match(workflow, /首次记录授权时方案目录里必须有 `contract\.md`，否则 `approve` 拒绝/);
+    assert.match(workflow, /授权时没有契约的旧记录仍绑定整份验收清单/);
+    assert.match(workflow, /阶段文件里每个阶段都要有 `contract` 字段/);
+
+    const planning = read("assets/rules/method-design-planning.md");
+    assert.match(planning, /内部技术方案写进实施方案，不写进契约/);
+    assert.match(planning, /在“授权后修订”章节记一行：改动、类型（细化 \/ 加严 \/ 新增 \/ 删除 \/ 放宽 \/ 实现调整）、理由、证据/);
+
+    const contract = read("assets/templates/contract.md");
+    assert.doesNotMatch(contract, /技术方案：/, "契约模板不再要求写内部技术方案");
+    assert.match(contract, /用户可见的重要交互选择/);
+    assert.match(read("assets/templates/plan.md"), /^## 授权后修订$/m);
+
+    assert.match(managedBlockBody(), /授权只绑定核心契约 `contract\.md`；契约范围内按实际情况修订验收清单与方案，不停下确认/);
+  });
+
   test("托管块只保留通用上报规则，具体情形由规则与项目配置承载", () => {
     const block = managedBlockBody();
     assert.match(block, /需要人决定的阻塞先 `harness escalate open` 上报/);
