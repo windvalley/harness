@@ -4,6 +4,20 @@
 
 ## [Unreleased]
 
+## [0.28.1] - 2026-11-27
+
+本版修复用项目入口运行 `upgrade` 时提示误导的问题。
+
+### 修复
+
+- 用项目锁定的入口 `.harness/bin/harness upgrade --dry-run` 预览时，运行的就是锁定版本本身，只能刷新到同一版本，却提示“项目安装已是最新”。现在明确说明只能刷新同一版本：本机装了更新的版本时给出 `HARNESS_VERSION=<新版本> .harness/bin/harness upgrade --dry-run`，否则提示用新版本的 harness 源码执行。
+- 正式执行 `upgrade` 时版本没变，不再显示“已升级到”，改为说明已按当前版本刷新、版本未变。
+
+### 升级说明
+
+- 可先运行 `upgrade --dry-run` 查看变更，再执行 `upgrade`；不新增依赖，也不修改 `config.json`、`policy.json` 或 `verify.json`。
+- 新提示随新版本代码生效：项目仍锁定在旧版本时，用 `HARNESS_VERSION=0.28.1 .harness/bin/harness upgrade --dry-run` 或新版本源码执行升级。
+
 ## [0.28.0] - 2026-11-27
 
 本版让已授权任务在核心契约范围内自主修订验收清单与方案，不再中途停下等确认，修订内容在交付时由 harness 机械汇总给用户。
