@@ -4,6 +4,21 @@
 
 ## [Unreleased]
 
+## [0.28.2] - 2026-11-27
+
+本版修复主分支引用保护的两个缺陷：维护操作被误拒，以及删除主分支可以绕过合并令牌。
+
+### 修复
+
+- `git pack-refs`、`git gc` 与 `git maintenance` 整理主分支引用时被 `reference-transaction` 钩子拒绝（报“拒绝直接更新 refs/heads/main(x -> x)”），引用整理一直失败，仓库停在打包条目与松散副本并存的状态。现在主分支指向的提交不变的整理放行：写入 `packed-refs` 时新旧提交相同直接放行，删除冗余松散副本只在 `packed-refs` 已记着同一提交且未被锁住时放行。
+- 不带旧值删除主分支（`git update-ref -d refs/heads/main`、`update-ref --stdin` 的 `delete`、在 Linked Worktree 里 `git branch -D main`）会被钩子当作无变化放行，删除后再用 `update-ref` 新建主分支可以指向任意未经合并的提交，完整绕过主分支保护。现在这些删除都要合并令牌，删除再重建的路径随之关闭。
+
+### 升级说明
+
+- 可先运行 `upgrade --dry-run` 查看变更，再执行 `upgrade`；不新增依赖，也不修改 `config.json`、`policy.json` 或 `verify.json`。
+- 新的钩子判定随新版本代码生效：项目仍锁定在旧版本时，用 `HARNESS_VERSION=0.28.2 .harness/bin/harness upgrade --dry-run` 或新版本源码执行升级。
+- 行为变化：删除主分支引用现在会被拒绝，合法交付仍只走 `harness merge` 或 `harness sync`；确需应急处理时，由人设置 `HARNESS_MAIN_BYPASS=1` 后执行。
+
 ## [0.28.1] - 2026-11-27
 
 本版修复用项目入口运行 `upgrade` 时提示误导的问题。
