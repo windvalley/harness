@@ -172,15 +172,20 @@ export function guardReference({ input, token, cwd, getRef, storage = (ref) => r
     .split("\n")
     .filter(Boolean)
     .map((line) => line.split(" "))
-    .filter(([oldOid, newOid, ref]) => MAIN_REFS.has(ref) && oldOid !== newOid);
+    .filter(([, , ref]) => MAIN_REFS.has(ref));
 
   for (const [hookOld, newOid, ref] of touched) {
+    // 旧值与新值都是具体提交且相同：确实没有变化。
+    // 全零到全零不能这样跳过：不带旧值删除（update-ref -d、branch -D）收到的就是这一行，要按当前值判断。
+    if (hookOld !== ZERO_OID && hookOld === newOid) continue;
+    const current = getRef(ref);
     // 新建引用（例如首次创建 main）不需要令牌，此时没有旧历史可保护。
-    if (hookOld === ZERO_OID && newOid !== ZERO_OID && getRef(ref) === null) continue;
-    const oldOid = hookOld === ZERO_OID ? getRef(ref) : hookOld;
+    if (hookOld === ZERO_OID && newOid !== ZERO_OID && current === null) continue;
+    const oldOid = hookOld === ZERO_OID ? current : hookOld;
+    // 引用不存在时删除它没有可保护的内容。
     if (oldOid === null) continue;
     if (oldOid === newOid) continue;
-    if (newOid === ZERO_OID && hookOld !== ZERO_OID && redundantLooseRef({ ref, oid: oldOid, current: getRef(ref), storage })) continue;
+    if (newOid === ZERO_OID && hookOld !== ZERO_OID && redundantLooseRef({ ref, oid: oldOid, current, storage })) continue;
     const expected = mainUpdateToken(oldOid, newOid);
     if (token !== expected) {
       return {

@@ -160,6 +160,45 @@ describe("git 层钩子", () => {
     assert.equal(git(repo.root, "rev-parse", "refs/heads/main"), moved);
   });
 
+  test("不带旧值删除主分支被拒绝，删除再重建不能绕过合并令牌", () => {
+    const repo = setup();
+    const original = git(repo.root, "rev-parse", "refs/heads/main");
+    git(repo.root, "checkout", "-q", "-b", "task/evil");
+    write(repo.root, "evil.txt", "evil\n");
+    git(repo.root, "add", "-A");
+    git(repo.root, "commit", "-q", "-m", BASIC);
+    const evil = git(repo.root, "rev-parse", "task/evil");
+    git(repo.root, "checkout", "-q", "--detach");
+    const mainNow = () => sh(repo.root, "git", ["rev-parse", "--verify", "--quiet", "refs/heads/main"], repo.env).stdout.trim();
+    const attempt = (label, cwd, args, input) => {
+      const refused = sh(cwd, "git", args, repo.env, input);
+      assert.notEqual(refused.status, 0, `${label} 应被拒绝`);
+      assert.match(refused.stderr, /只允许由 harness merge 更新/, label);
+      assert.equal(mainNow(), original, `${label} 不能删掉主分支`);
+      const recreated = sh(repo.root, "git", ["update-ref", "refs/heads/main", evil], repo.env);
+      assert.notEqual(recreated.status, 0, `${label} 之后不能把主分支改到未经合并的提交`);
+      assert.equal(mainNow(), original);
+    };
+
+    // 钩子对这些删除收到的是全零旧值、全零新值，要按引用当前值判断。
+    attempt("松散引用 update-ref -d", repo.root, ["update-ref", "-d", "refs/heads/main"]);
+    attempt("update-ref --stdin delete", repo.root, ["update-ref", "--stdin"], "delete refs/heads/main\n");
+    const linked = join(repo.root, "..", "linked-delete");
+    git(repo.root, "worktree", "add", "-q", "-b", "task/linked", linked, "main");
+    git(linked, "checkout", "-q", "--detach");
+    attempt("Linked Worktree 里 branch -D main", linked, ["branch", "-D", "main"]);
+    assert.equal(sh(repo.root, "git", ["pack-refs", "--all"], repo.env).status, 0);
+    assert.equal(existsSync(join(repo.root, ".git/refs/heads/main")), false);
+    attempt("已打包后 update-ref -d", repo.root, ["update-ref", "-d", "refs/heads/main"]);
+
+    // 应急开关仍可放行删除；主分支不存在时删除它没有可保护的内容。
+    const bypass = { ...repo.env, HARNESS_MAIN_BYPASS: "1" };
+    assert.equal(sh(repo.root, "git", ["update-ref", "-d", "refs/heads/main"], bypass).status, 0);
+    assert.equal(mainNow(), "");
+    assert.equal(sh(repo.root, "git", ["update-ref", "-d", "refs/heads/main"], repo.env).status, 0, "删除不存在的主分支不拦");
+    assert.equal(sh(repo.root, "git", ["update-ref", "refs/heads/main", original], bypass).status, 0);
+  });
+
   test("目标不变的维护放行不能被用来回退、删除或重写主分支", () => {
     const repo = setup();
     const first = git(repo.root, "rev-parse", "refs/heads/main");
