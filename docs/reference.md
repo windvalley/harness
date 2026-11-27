@@ -1602,6 +1602,7 @@ Docker、dotfiles 这类把配置文件放在仓库外再链接进来的项目�
 `upgrade --dry-run` 列出会新增、更新或删除的目标，包含托管文件、版本标记、入口、`AGENTS.md` 托管块、黄金任务旧副本所在文件、Git 钩子、客户端配置和忽略规则。
 `init`、`upgrade`、`install` 和 `install --local` 的预览与正式执行使用同一套安装计划，正式执行持有仓库安装锁后会重新核对输入。
 预览不写项目、Git 元数据或本机共享安装目录；检查 Git 忽略规则或历史版本时可能使用私有临时目录，检查结束就清理。
+用项目入口 `.harness/bin/harness upgrade` 运行时，执行的就是项目锁定的版本，只能把项目刷新到同一版本；预览与正式执行会明确说明这一点，本机装了更新的版本时给出 `HARNESS_VERSION=<新版本> .harness/bin/harness upgrade --dry-run`，否则提示用新版本的 harness 源码执行。
 预览有冲突时退出码为 1；`upgrade` 只接受 `--dry-run` 与 `--force`，其他参数一律报错，不会被忽略。
 `AGENTS.md` 里的托管块也会刷新，块外的内容保持不动。
 `config.json`、`policy.json`、`verify.json` 保持不动，新版本带来的可选预设与配置要自己加，见 `CHANGELOG.md` 的升级说明。

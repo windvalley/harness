@@ -2,7 +2,8 @@ import { strict as assert } from "node:assert";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
-import { PACKAGE_ROOT, git, makeRepo, write } from "./helpers.mjs";
+import { PACKAGE_ROOT, copyPackage, git, makeRepo, sh, write } from "./helpers.mjs";
+import { packageVersion } from "../src/install/managed.mjs";
 
 let repos = [];
 afterEach(() => {
@@ -14,6 +15,18 @@ function setup() {
   repos.push(repo);
   return repo;
 }
+
+/** 把当前源码改成指定版本号发布进夹具的版本目录，模拟本机装了别的版本。 */
+function publishAs(t, repo, version) {
+  const pkg = copyPackage();
+  t.after(() => rmSync(pkg, { recursive: true, force: true }));
+  const manifest = JSON.parse(readFileSync(join(pkg, "package.json"), "utf8"));
+  write(pkg, "package.json", JSON.stringify({ ...manifest, version }));
+  const published = sh(repo.root, process.execPath, [join(pkg, "bin/harness.mjs"), "publish"], repo.env);
+  assert.equal(published.status, 0, published.stderr);
+}
+
+const escape = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 function snapshot(repo) {
   return {
@@ -141,9 +154,50 @@ describe("upgrade --dry-run", () => {
     const result = repo.rawCli("upgrade", "--dry-run");
     assert.equal(result.status, 0, result.stderr);
     assert.doesNotMatch(result.stdout, /^\s*(新增|更新)\s/m);
-    assert.match(result.stdout, /已是最新/);
+    assert.match(result.stdout, /已是 \S+ 的最新安装/);
     assert.match(result.stdout, /无需继续执行：/);
-    assert.equal((result.stdout.match(/已是最新/g) ?? []).length, 1, "已是最新只提示一次");
+    assert.equal((result.stdout.match(/的最新安装/g) ?? []).length, 1, "已是最新只提示一次");
+  });
+
+  test("用项目锁定的入口预览升级：说明只能刷新到当前运行的版本，并给出本机已装的更新版本的运行方式", (t) => {
+    const repo = setup();
+    const current = packageVersion();
+    publishAs(t, repo, "0.0.9");
+    publishAs(t, repo, "99.0.0");
+    assert.equal(repo.cli("upgrade").status, 0, "先把夹具刷新到当前版本，预览才没有要写的文件");
+    const result = repo.cli("upgrade", "--dry-run");
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, new RegExp(`版本 ${escape(current)} -> ${escape(current)}`));
+    assert.match(result.stdout, new RegExp(`当前运行的 harness 就是项目锁定的 ${escape(current)}`));
+    assert.match(result.stdout, /本机已安装更新的版本 99\.0\.0/);
+    assert.doesNotMatch(result.stdout, /0\.0\.9/, "比锁定版本旧的不提示");
+    assert.ok(result.stdout.includes("HARNESS_VERSION=99.0.0 .harness/bin/harness upgrade --dry-run"), result.stdout);
+    assert.doesNotMatch(result.stdout, /项目安装已是最新/, "不能把“与当前代码一致”说成已是最新版本");
+    assert.match(result.stdout, new RegExp(`已是 ${escape(current)} 的最新安装`));
+
+    const followed = sh(repo.root, join(repo.root, ".harness/bin/harness"), ["upgrade", "--dry-run"], { ...repo.env, HARNESS_VERSION: "99.0.0" });
+    assert.equal(followed.status, 0, followed.stderr);
+    assert.match(followed.stdout, new RegExp(`版本 ${escape(current)} -> 99\\.0\\.0`), "照提示运行就能看到真正的升级");
+    assert.match(followed.stdout, /更新\s+\.harness\/VERSION/);
+  });
+
+  test("本机没有更新的版本时，提示用新版本的 harness 源码执行", () => {
+    const repo = setup();
+    const result = repo.cli("upgrade", "--dry-run");
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /当前运行的 harness 就是项目锁定的/);
+    assert.match(result.stdout, /本机没有比它更新的已安装版本/);
+    assert.match(result.stdout, /node <新版本 harness 源码>\/bin\/harness\.mjs upgrade --dry-run/);
+  });
+
+  test("正式升级时版本没变，不说成已升级", () => {
+    const repo = setup();
+    const current = packageVersion();
+    const result = repo.cli("upgrade");
+    assert.equal(result.status, 0, result.stderr);
+    assert.doesNotMatch(result.stdout, /已升级到/);
+    assert.match(result.stdout, new RegExp(`版本仍是 ${escape(current)}`));
+    assert.match(result.stdout, /当前运行的 harness 就是项目锁定的/);
   });
 
   test("预告将移除的黄金任务旧副本，不改 tasks.json", () => {

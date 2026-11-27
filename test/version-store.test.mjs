@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { shimBody } from "../src/install/install.mjs";
 import { packageVersion } from "../src/install/managed.mjs";
+import { compareVersions } from "../src/install/version-store.mjs";
 import { copyPackage, makeRepo, PACKAGE_ROOT, sh, write } from "./helpers.mjs";
 
 const cli = join(PACKAGE_ROOT, "bin", "harness.mjs");
@@ -198,4 +199,10 @@ test("doctor 区分 CLI、VERSION 与实际入口锁定版本", (t) => {
   const doctor = repo.rawCli("doctor");
   assert.match(doctor.stdout, /\[!!\] project:version: CLI .*VERSION .*shim 0\.0\.9.*两处锁定版本不一致/);
   assert.match(doctor.stdout, /\[!!\] store: 版本 0\.0\.9 未安装/);
+});
+
+test("compareVersions 按语义化版本排序：数字逐段比较，正式版高于同号预发布，忽略构建元数据", () => {
+  const sorted = ["0.28.0", "0.9.4", "0.28.0-rc.10", "0.10.0", "0.28.0-rc.2", "1.0.0", "0.27.1"].sort(compareVersions);
+  assert.deepEqual(sorted, ["0.9.4", "0.10.0", "0.27.1", "0.28.0-rc.2", "0.28.0-rc.10", "0.28.0", "1.0.0"]);
+  assert.equal(compareVersions("0.28.0+build.1", "0.28.0"), 0);
 });

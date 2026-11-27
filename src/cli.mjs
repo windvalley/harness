@@ -41,7 +41,7 @@ import { branchStatus, formatObligations, formatStatus, openPostMergeObligations
 import { branchHandoff, formatHandoff, redactHandoff } from "./handoff.mjs";
 import { stopCheck } from "./stop/stop.mjs";
 import { installAll, installLocal, installVersion, listVersions, pruneVersions, publishVersion, versionDir } from "./install/install.mjs";
-import { planVersionInstall } from "./install/version-store.mjs";
+import { newerVersions, planVersionInstall } from "./install/version-store.mjs";
 import { formatSurvey } from "./install/survey.mjs";
 import { followUps } from "./install/followups.mjs";
 import { doctor, formatDoctor } from "./install/doctor.mjs";
@@ -1119,6 +1119,27 @@ function currentBranchForStatus() {
   return result.status === 0 ? result.stdout.trim() : "";
 }
 
+/**
+ * 项目锁定的版本就是正在运行的代码时，upgrade 只能刷新同一版本：入口 shim 锁住版本，不会自己换成新版本。
+ * 说清这一点，并给出本机已装的更新版本或新源码的运行方式，避免把“与当前代码一致”读成“已是最新版本”。
+ */
+function sameVersionHint(version) {
+  const lines = [`当前运行的 harness 就是项目锁定的 ${version}：upgrade 只会把项目刷新到正在运行的这份代码，不会换成更新的版本。`];
+  let newer = [];
+  try {
+    newer = newerVersions(version);
+  } catch {
+    // 版本目录读不了时只给通用做法，不影响预览结果。
+  }
+  if (newer.length > 0) {
+    const latest = newer.at(-1);
+    lines.push(`本机已安装更新的版本 ${newer.join("、")}；要升级到 ${latest}，在任务 Worktree 里运行：HARNESS_VERSION=${latest} .harness/bin/harness upgrade --dry-run`);
+  } else {
+    lines.push("本机没有比它更新的已安装版本；要升级，先获取新版本的 harness 源码，在任务 Worktree 里运行：node <新版本 harness 源码>/bin/harness.mjs upgrade --dry-run");
+  }
+  return lines;
+}
+
 function cmdUpgrade(argv) {
   const { values } = parseArgs({ args: argv, options: { "dry-run": { type: "boolean", default: false }, force: { type: "boolean", default: false } } });
   const result = upgradeProject({ force: values.force, dryRun: values["dry-run"] });
@@ -1132,11 +1153,21 @@ function cmdUpgrade(argv) {
       print(`存在托管文件冲突，正式升级会拒绝。先迁移项目自己的说明；确认用当前版本覆盖时，${humanExecutes("harness upgrade --force")}。`);
       return 1;
     }
-    if (result.files.length === 0 && result.shared.every(({ action }) => action === "复用")) print(noNextAction("项目安装已是最新，没有需要写入的项目或本机共享文件"));
-    else print(agentContinues("harness upgrade"));
+    const sameVersion = result.pinned === result.version;
+    if (sameVersion) for (const line of sameVersionHint(result.version)) print(line);
+    if (result.files.length === 0 && result.shared.every(({ action }) => action === "复用")) {
+      print(noNextAction(`项目已是 ${result.version} 的最新安装，没有需要写入的项目或本机共享文件`));
+    } else {
+      print(agentContinues("harness upgrade"));
+    }
     return 0;
   }
-  print(`已升级到 ${result.version}，入口 ${result.install.shim}`);
+  if (result.pinned === result.version) {
+    print(`已按 ${result.version} 刷新项目安装，版本仍是 ${result.version}，入口 ${result.install.shim}`);
+    for (const line of sameVersionHint(result.version)) print(`  ${line}`);
+  } else {
+    print(`已升级到 ${result.version}，入口 ${result.install.shim}`);
+  }
   if (result.golden.removed.length > 0) print(`  已从 .harness/golden/tasks.json 移除与内置相同的旧副本: ${result.golden.removed.join(", ")}`);
   if (result.golden.overrides.length > 0) {
     print(`  这些用例覆盖内置用例且与当前内置不同: ${result.golden.overrides.join(", ")}`);

@@ -211,6 +211,29 @@ function candidates() {
     .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
 }
 
+/** 按语义化版本比较：先比主次补丁号，同号时正式版高于预发布版；构建元数据不参与比较。 */
+export function compareVersions(a, b) {
+  const parse = (value) => {
+    const [core, pre = null] = value.split("+")[0].split(/-(.*)/s);
+    return { nums: core.split(".").map(Number), pre };
+  };
+  const left = parse(a);
+  const right = parse(b);
+  for (let i = 0; i < 3; i += 1) if (left.nums[i] !== right.nums[i]) return left.nums[i] - right.nums[i];
+  if (left.pre === right.pre) return 0;
+  if (left.pre === null) return 1;
+  if (right.pre === null) return -1;
+  return left.pre.localeCompare(right.pre, undefined, { numeric: true });
+}
+
+/** 本机已安装且校验通过、比给定版本新的版本，从旧到新；只校验更新的候选，避免逐个哈希全部旧版本。 */
+export function newerVersions(version) {
+  return candidates()
+    .filter((item) => compareVersions(item, version) > 0)
+    .sort(compareVersions)
+    .filter((item) => verifyVersion({ version: item }).ok);
+}
+
 export function listVersions() {
   return candidates().filter((version) => verifyVersion({ version }).ok);
 }
