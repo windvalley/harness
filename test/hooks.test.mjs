@@ -134,6 +134,82 @@ describe("git 层钩子", () => {
     assert.equal(allowed.status, 0, allowed.stderr);
   });
 
+  test("pack-refs 与 gc 整理主分支引用时放行，主分支提交保持不变", () => {
+    const repo = setup();
+    const head = git(repo.root, "rev-parse", "refs/heads/main");
+    const looseMain = join(repo.root, ".git/refs/heads/main");
+    assert.ok(existsSync(looseMain), "夹具里主分支起初是松散引用");
+    const packed = sh(repo.root, "git", ["pack-refs", "--all"], repo.env);
+    assert.equal(packed.status, 0, packed.stderr);
+    assert.doesNotMatch(packed.stderr, /拒绝直接更新/);
+    assert.equal(existsSync(looseMain), false, "两个阶段都放行，松散副本被清掉");
+    assert.match(readFileSync(join(repo.root, ".git/packed-refs"), "utf8"), new RegExp(`^${head} refs/heads/main$`, "m"));
+    assert.equal(git(repo.root, "rev-parse", "refs/heads/main"), head);
+
+    // gc 内部也会整理引用：先让主分支再成为松散引用，确认 gc 不再被钩子拦下。
+    git(repo.root, "checkout", "-q", "-b", "task/gc");
+    write(repo.root, "gc.txt", "gc\n");
+    git(repo.root, "add", "-A");
+    git(repo.root, "commit", "-q", "-m", BASIC);
+    git(repo.root, "checkout", "-q", "main");
+    assert.equal(sh(repo.root, "git", ["update-ref", "refs/heads/main", git(repo.root, "rev-parse", "task/gc")], { ...repo.env, HARNESS_MAIN_BYPASS: "1" }).status, 0);
+    const moved = git(repo.root, "rev-parse", "refs/heads/main");
+    const gc = sh(repo.root, "git", ["gc", "-q"], repo.env);
+    assert.equal(gc.status, 0, gc.stderr);
+    assert.doesNotMatch(gc.stderr, /拒绝直接更新|aborted by hook/);
+    assert.equal(git(repo.root, "rev-parse", "refs/heads/main"), moved);
+  });
+
+  test("目标不变的维护放行不能被用来回退、删除或重写主分支", () => {
+    const repo = setup();
+    const first = git(repo.root, "rev-parse", "refs/heads/main");
+    git(repo.root, "checkout", "-q", "-b", "task/c");
+    write(repo.root, "c.txt", "c\n");
+    git(repo.root, "add", "-A");
+    git(repo.root, "commit", "-q", "-m", BASIC);
+    git(repo.root, "checkout", "-q", "main");
+    const bypass = { ...repo.env, HARNESS_MAIN_BYPASS: "1" };
+    assert.equal(sh(repo.root, "git", ["update-ref", "refs/heads/main", git(repo.root, "rev-parse", "task/c")], bypass).status, 0);
+    const second = git(repo.root, "rev-parse", "refs/heads/main");
+
+    // 重写成同一个提交：没有变化，放行。
+    const same = sh(repo.root, "git", ["update-ref", "refs/heads/main", second], repo.env);
+    assert.equal(same.status, 0, same.stderr);
+
+    // 松散引用时回退或带旧值删除：仍要拒绝。
+    for (const args of [["update-ref", "-d", "refs/heads/main", second], ["update-ref", "refs/heads/main", first], ["update-ref", "refs/heads/main", first, second]]) {
+      const refused = sh(repo.root, "git", args, repo.env);
+      assert.notEqual(refused.status, 0, args.join(" "));
+      assert.match(refused.stderr, /只允许由 harness merge 更新/);
+      assert.equal(git(repo.root, "rev-parse", "refs/heads/main"), second, `${args.join(" ")} 不能改动主分支`);
+    }
+
+    // 主分支已打包、没有松散副本时回退或带旧值删除：同样拒绝，打包状态不能成为绕过入口。
+    assert.equal(sh(repo.root, "git", ["pack-refs", "--all"], repo.env).status, 0);
+    assert.equal(existsSync(join(repo.root, ".git/refs/heads/main")), false);
+    for (const args of [["update-ref", "refs/heads/main", first], ["update-ref", "-d", "refs/heads/main", second]]) {
+      const refused = sh(repo.root, "git", args, repo.env);
+      assert.notEqual(refused.status, 0, `已打包后 ${args.join(" ")}`);
+      assert.match(refused.stderr, /只允许由 harness merge 更新/);
+      assert.equal(git(repo.root, "rev-parse", "refs/heads/main"), second, `已打包后 ${args.join(" ")} 不能改动主分支`);
+    }
+
+    // 打包条目与松散副本同时指向同一提交时，删除的钩子输入与 pack-refs 清理松散副本相同，必须仍被拒绝。
+    write(repo.root, ".git/refs/heads/main", `${second}\n`);
+    assert.match(readFileSync(join(repo.root, ".git/packed-refs"), "utf8"), new RegExp(`^${second} refs/heads/main$`, "m"));
+    const both = sh(repo.root, "git", ["update-ref", "-d", "refs/heads/main", second], repo.env);
+    assert.notEqual(both.status, 0, both.stderr);
+    assert.match(both.stderr, /只允许由 harness merge 更新/);
+    assert.equal(git(repo.root, "rev-parse", "refs/heads/main"), second);
+
+    // 同一事务里先“重写成同值”再改目标，也不能借道放行。
+    const batch = sh(repo.root, "git", ["update-ref", "--stdin"], repo.env, `start\nupdate refs/heads/main ${second}\nprepare\ncommit\n`);
+    assert.equal(batch.status, 0, batch.stderr);
+    const smuggled = sh(repo.root, "git", ["update-ref", "--stdin"], repo.env, `update refs/heads/main ${first} ${second}\n`);
+    assert.notEqual(smuggled.status, 0);
+    assert.equal(git(repo.root, "rev-parse", "refs/heads/main"), second);
+  });
+
   test("任务分支上的提交不受引用保护影响", () => {
     const repo = setup();
     git(repo.root, "checkout", "-q", "-b", "task/b");

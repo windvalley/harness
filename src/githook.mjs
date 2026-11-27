@@ -1,7 +1,7 @@
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { matchAny } from "./lib/glob.mjs";
-import { currentBranch, git, gitOk, isLinkedWorktree, ZERO_OID } from "./lib/git.mjs";
+import { commonDir, currentBranch, git, gitOk, isLinkedWorktree, ZERO_OID } from "./lib/git.mjs";
 import { describeProblems, messageProblems, normalizeMessage, resolveCommitRule } from "./policy/commit-message.mjs";
 import { assertBranchPolicy } from "./policy/branch-name.mjs";
 import { evaluateCommit, formatDenial } from "./policy/engine.mjs";
@@ -129,10 +129,44 @@ export function checkCommitMessage({ root, resolved, config = {}, messageFile })
 }
 
 /**
+ * 引用存储里这条引用的状态：packed-refs 里记录的提交、是否还有松散引用文件、packed-refs 是否正被锁住。
+ * 只认 files 后端；读不到时返回 null，调用方按不能证明是维护操作处理。
+ */
+export function refStorage(cwd, ref) {
+  try {
+    const dir = commonDir(cwd);
+    const packedFile = join(dir, "packed-refs");
+    let packed = null;
+    if (existsSync(packedFile)) {
+      for (const line of readFileSync(packedFile, "utf8").split("\n")) {
+        const match = line.match(/^([0-9a-f]{40}|[0-9a-f]{64}) (\S+)$/);
+        if (match && match[2] === ref) packed = match[1];
+      }
+    }
+    return { packed, loose: existsSync(join(dir, ref)), packedLocked: existsSync(`${packedFile}.lock`) };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 要删除的是不是 pack-refs 留下的冗余松散副本：删除后引用仍由 packed-refs 指向同一提交。
+ * 真正删除主分支时 git 先锁住 packed-refs 去掉打包条目，钩子运行时锁已存在；
+ * pack-refs 清理松散副本时不碰 packed-refs，没有这把锁。锁存在、打包值不同或没有松散副本时都不算。
+ */
+function redundantLooseRef({ ref, oid, current, storage }) {
+  if (current !== oid) return false;
+  const state = storage(ref);
+  return Boolean(state && state.loose && !state.packedLocked && state.packed === oid);
+}
+
+/**
  * 引用保护：只有 harness merge 能更新主分支。
  * update-ref 不带旧值时钩子收到全零，必须以引用当前实际值为准，否则零值会变成绕过。
+ * 目标提交不变的维护操作放行。pack-refs 分两个事务：先以全零旧值把当前提交写进 packed-refs，
+ * 再删除已冗余的松散副本；两步都不改变主分支指向的提交。
  */
-export function guardReference({ input, token, cwd, getRef }) {
+export function guardReference({ input, token, cwd, getRef, storage = (ref) => refStorage(cwd, ref) }) {
   if (process.env.HARNESS_MAIN_BYPASS === "1") return { decision: "allow" };
   const touched = input
     .split("\n")
@@ -145,6 +179,8 @@ export function guardReference({ input, token, cwd, getRef }) {
     if (hookOld === ZERO_OID && newOid !== ZERO_OID && getRef(ref) === null) continue;
     const oldOid = hookOld === ZERO_OID ? getRef(ref) : hookOld;
     if (oldOid === null) continue;
+    if (oldOid === newOid) continue;
+    if (newOid === ZERO_OID && hookOld !== ZERO_OID && redundantLooseRef({ ref, oid: oldOid, current: getRef(ref), storage })) continue;
     const expected = mainUpdateToken(oldOid, newOid);
     if (token !== expected) {
       return {
