@@ -229,7 +229,11 @@ describe("接入已有项目", () => {
     assert.match(dry.stdout, /已被其他工具占用：harness 的证据与账本改放同级的 harness\.d/);
     const metrics = sh(repo.root, process.execPath, [repoCliPath(), "metrics"], env);
     assert.equal(metrics.status, 0, metrics.stderr);
+    assert.equal(existsSync(join(common, "harness.d", "owner.json")), false, "只读 metrics 不创建数据目录或归属文件");
+    const append = sh(repo.root, process.execPath, ["--input-type=module", "-e", `import { appendLedger } from ${JSON.stringify(repoCliPath().replace(/bin\/harness\.mjs$/, "src/lib/store.mjs"))}; appendLedger(process.cwd(), { event: "verify" });`], env);
+    assert.equal(append.status, 0, append.stderr);
     assert.ok(existsSync(join(common, "harness.d", "owner.json")));
+    assert.match(readFileSync(join(common, "harness.d", "ledger.jsonl"), "utf8"), /verify/);
     assert.match(readFileSync(join(common, "harness", "ledger.jsonl"), "utf8"), /legacy/, "原有数据原样保留");
   });
 

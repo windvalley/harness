@@ -1,0 +1,107 @@
+<!doctype html>
+<!-- 本文件由 node docs/build.mjs 生成，请勿直接编辑。 -->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>本机观测 | harness 文档</title>
+<meta name="description" content="汇总已登记项目，通过只读快照和本机 Dashboard 查看使用差异、趋势与改进线索。">
+<link rel="canonical" href="https://windvalley.github.io/harness/observability.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="harness 文档">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:title" content="本机观测 | harness 文档">
+<meta property="og:description" content="汇总已登记项目，通过只读快照和本机 Dashboard 查看使用差异、趋势与改进线索。">
+<meta property="og:url" content="https://windvalley.github.io/harness/observability.html">
+<meta name="color-scheme" content="light dark">
+<script>try{const theme=localStorage.getItem("harness-theme");if(theme==="light"||theme==="dark")document.querySelector('meta[name="color-scheme"]').content=theme;}catch{}</script>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%230f766e' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6z'/%3E%3Cpath d='M8.5 12l2.5 2.5 4.5-5'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="assets/docs.css?v=acdbbf2b96">
+
+<script src="assets/docs.js?v=acdbbf2b96" defer></script>
+</head>
+<body data-page="observability" data-index="42f9706b48">
+<a class="skip-link" href="#main-content">跳到主要内容</a>
+<header class="topbar">
+  <div class="topbar-inner">
+    <a class="brand" href="index.html" aria-label="harness 文档首页"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6z"/><path d="M8.5 12l2.5 2.5 4.5-5"/></svg><span>harness</span></a>
+    <span class="brand-divider" aria-hidden="true"></span><span class="product-area">文档</span>
+    <nav class="topnav" aria-label="主导航">
+      <a class="wide" href="https://github.com/windvalley/harness/blob/main/docs/reference.md">参考手册</a>
+      <a class="wide" href="https://github.com/windvalley/harness">GitHub</a>
+      <button class="search-open" id="search-open" type="button" aria-label="搜索文档" aria-keyshortcuts="Meta+K Control+K"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><span class="wide">搜索文档</span><kbd class="wide" aria-hidden="true">⌘K</kbd></button>
+      <button class="theme-toggle" id="theme-toggle" type="button" data-theme="auto" aria-label="颜色主题：跟随系统，点击切换" title="颜色主题：跟随系统，点击切换"><svg class="i-auto" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg><svg class="i-light" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><svg class="i-dark" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4 8 8 0 1 0 20 14.5z"/></svg></button>
+      <button class="drawer-open" id="drawer-open" type="button" aria-label="打开文档目录" aria-expanded="false" aria-controls="docs-drawer"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg><span>目录</span></button>
+    </nav>
+  </div>
+</header>
+<div class="layout">
+  <aside class="sidebar"><nav class="docs-nav" aria-label="文档导航"><section class="nav-group"><h2>开始使用</h2><ul><li><a href="index.html">概览</a></li><li><a href="quickstart.html">快速开始</a></li><li><a href="daily.html">日常工作流</a></li><li><a href="blocked.html">被拦截时怎么办</a></li></ul></section><section class="nav-group"><h2>核心概念</h2><ul><li><a href="architecture.html">架构总览</a></li><li><a href="principles.html">核心原理</a></li><li><a href="limits.html">信任模型与限制</a></li></ul></section><section class="nav-group"><h2>配置与维护</h2><ul><li><a href="customize.html">按项目定制</a></li><li><a href="observability.html" aria-current="page">本机观测</a></li><li><a href="team.html">团队与多机</a></li></ul></section><section class="nav-group"><h2>参考</h2><ul><li><a href="cheatsheet.html">命令速查</a></li><li><a href="https://github.com/windvalley/harness/blob/main/docs/reference.md">参考手册<svg class="external" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6"/><path d="M20 4 10 14"/><path d="M18 13v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h6"/></svg></a></li></ul></section></nav></aside>
+  <main id="main-content"><header class="page-header"><p class="eyebrow">配置与维护</p><h1 tabindex="-1" id="observability">本机观测</h1><p class="lead">汇总已登记项目，通过只读快照和本机 Dashboard 查看使用差异、趋势与改进线索。</p></header><details class="mobile-page-toc"><summary>本页内容</summary><div class="page-toc-title">本页内容</div><ol><li class="toc-level-2"><a href="#observability-start">登记并打开 Dashboard</a></li><li class="toc-level-2"><a href="#observability-data">数据口径</a></li><li class="toc-level-2"><a href="#observability-json">CLI 与 JSON</a></li><li class="toc-level-2"><a href="#observability-health">健康历史与任务漏斗</a></li><li class="toc-level-2"><a href="#observability-security">本机与隐私边界</a></li></ol></details>
+    <p>本机观测把已登记项目的验证、评审、交付和策略事件汇总成只读快照，帮助你发现接入缺口、反复阻塞和配置差异。它不替代门禁，也不把 CLI 的写操作搬到浏览器。</p>
+
+    <h2 tabindex="-1" id="observability-start">登记并打开 Dashboard</h2>
+    <div class="code"><span class="label">已有项目先显式登记</span><pre><code>cd &lt;项目&gt;
+harness projects add .
+harness projects list</code></pre></div>
+    <p><code>init</code>、<code>install</code> 和 <code>upgrade</code> 成功后也会尽力登记项目。重复添加同一仓库不会产生重复项，同一 Git common dir 下的多个 Worktree 只显示一个项目。</p>
+    <p>harness 不默认扫描整个用户目录。只有已登记项目进入统计范围，未登记不等于未使用。</p>
+    <div class="code"><span class="label">按需启动，Ctrl-C 关闭</span><pre><code>harness dashboard
+harness dashboard --days 30 --no-open</code></pre></div>
+    <p>启动命令输出带随机访问令牌的完整地址。服务只监听 <code>127.0.0.1</code>，默认随机端口并打开浏览器，不会注册常驻服务。</p>
+    <p>页面提供总览、项目比较、趋势、项目详情和问题与改进。每条建议附证据、样本范围和不确定性，建议命令只供查看，不会执行。</p>
+
+    <h2 tabindex="-1" id="observability-data">数据口径</h2>
+    <ul>
+      <li>统计的是关键流程事件，不是全部工具调用或会话时长。</li>
+      <li><code>merge</code>、<code>submit.ready</code>、<code>sync</code> 分开统计，PR/MR 就绪不等于平台已合入。</li>
+      <li>策略拒绝没有全部允许调用的分母，只展示次数和分布，不计算完整拦截率。</li>
+      <li>验证首过率按项目与 tree 的第一次正式验证计算，窗口内重跑不会重新进入分母。</li>
+      <li>跨项目比率按总分子除以总分母计算，不对各项目百分比取平均。</li>
+      <li>分母为零显示“暂无样本”，无账本、无活动、读取失败和未登记是不同状态。</li>
+    </ul>
+    <p>快照同时展示事件时间范围、旧事件数量、坏行、未知事件、重复 ID 和读取失败项目。单个项目数据损坏不会阻断其他项目。</p>
+
+    <h2 tabindex="-1" id="observability-json">CLI 与 JSON</h2>
+    <div class="code"><span class="label">命令行读取同一份数据</span><pre><code>harness metrics --all --days 30 --json
+harness doctor --json
+harness projects list --json</code></pre></div>
+    <p>跨项目窗口可选 7、30、90 天。不带 <code>--all</code> 的 <code>metrics</code> 保持当前项目的原有输出，也支持 <code>--json</code>。</p>
+    <p>仓库移动后使用 <code>harness projects rebind &lt;项目ID&gt; &lt;新路径&gt;</code> 显式关联历史，不按目录名或远程地址自动合并。</p>
+
+    <h2 tabindex="-1" id="observability-health">健康历史与任务漏斗</h2>
+    <p>普通刷新只读取当前健康状态，不写项目。需要分析配置演进时，显式采样一次：</p>
+    <div class="code"><span class="label">明确写入用户级健康快照</span><pre><code>harness metrics --all --capture-health
+harness dashboard --capture-health</code></pre></div>
+    <p>采样保存在用户级观测目录，不改项目账本或证据。Dashboard 启动时指定该选项只采样一次，不会随页面刷新重复写入。没有采样前不展示虚构的健康历史。</p>
+    <p>任务漏斗只关联具有稳定 <code>taskId</code> 的验证、评审和交付事件。无法可靠关联的旧事件单独计数，远程同步还要通过提交祖先关系核对，不能证明时显示未关联。</p>
+
+    <h2 tabindex="-1" id="observability-security">本机与隐私边界</h2>
+    <ul>
+      <li>API 需要每次启动生成的随机令牌，并校验 <code>Host</code>、<code>Origin</code> 和跨站请求。</li>
+      <li>静态资源使用固定映射，不能通过路径参数读取项目或用户文件。</li>
+      <li>默认不返回原始命令、报告全文、提示词、会话内容或证据密钥。</li>
+      <li>打开页面不会运行测试、评审、模型请求或远程平台查询。</li>
+      <li>读取账本不会创建项目数据目录或密钥。缓存和健康采样只写用户级观测目录。</li>
+      <li>账本尽力写入且未签名，是观测数据，不是完整、不可抵赖的审计日志。</li>
+    </ul>
+    <p>完整命令、指标定义、缓存行为和故障降级见<a href="https://github.com/windvalley/harness/blob/main/docs/reference.md#本机跨项目观测与-dashboard">参考手册</a>。</p><nav class="pagination" aria-label="文档分页"><a class="previous" href="customize.html"><span>上一篇</span><strong>按项目定制</strong></a><a class="next" href="team.html"><span>下一篇</span><strong>团队与多机</strong></a></nav></main>
+  <aside class="page-toc"><nav aria-label="本页内容"><div class="page-toc-title">本页内容</div><ol><li class="toc-level-2"><a href="#observability-start">登记并打开 Dashboard</a></li><li class="toc-level-2"><a href="#observability-data">数据口径</a></li><li class="toc-level-2"><a href="#observability-json">CLI 与 JSON</a></li><li class="toc-level-2"><a href="#observability-health">健康历史与任务漏斗</a></li><li class="toc-level-2"><a href="#observability-security">本机与隐私边界</a></li></ol></nav><div class="related-links"><h2>相关链接</h2><a href="https://github.com/windvalley/harness/blob/main/docs/reference.md">参考手册</a><a href="https://github.com/windvalley/harness">GitHub 仓库</a></div></aside>
+</div>
+<footer>harness · MIT 许可 · <a href="https://github.com/windvalley/harness">GitHub</a> · <a href="https://github.com/windvalley/harness/blob/main/docs/reference.md">参考手册</a></footer>
+<dialog class="drawer" id="docs-drawer" aria-label="文档导航">
+  <div class="drawer-scroller">
+    <div class="drawer-sheet">
+      <div class="drawer-header"><strong>文档导航</strong><button id="drawer-close" type="button" aria-label="关闭文档目录" autofocus>关闭</button></div>
+      <nav class="docs-nav" aria-label="移动端文档导航"><section class="nav-group"><h2>开始使用</h2><ul><li><a href="index.html">概览</a></li><li><a href="quickstart.html">快速开始</a></li><li><a href="daily.html">日常工作流</a></li><li><a href="blocked.html">被拦截时怎么办</a></li></ul></section><section class="nav-group"><h2>核心概念</h2><ul><li><a href="architecture.html">架构总览</a></li><li><a href="principles.html">核心原理</a></li><li><a href="limits.html">信任模型与限制</a></li></ul></section><section class="nav-group"><h2>配置与维护</h2><ul><li><a href="customize.html">按项目定制</a></li><li><a href="observability.html" aria-current="page">本机观测</a></li><li><a href="team.html">团队与多机</a></li></ul></section><section class="nav-group"><h2>参考</h2><ul><li><a href="cheatsheet.html">命令速查</a></li><li><a href="https://github.com/windvalley/harness/blob/main/docs/reference.md">参考手册<svg class="external" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6"/><path d="M20 4 10 14"/><path d="M18 13v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h6"/></svg></a></li></ul></section></nav>
+    </div>
+  </div>
+</dialog>
+<dialog class="search-dialog" id="search-dialog" aria-labelledby="search-title">
+  <div class="search-header"><h2 id="search-title">搜索文档</h2><button id="search-close" type="button" aria-label="关闭搜索">关闭</button></div>
+  <label class="search-field"><span class="visually-hidden">搜索关键词</span><input id="search-input" type="search" placeholder="搜索标题、正文或命令" autocomplete="off"></label>
+  <p class="search-status" id="search-status" role="status">输入关键词开始搜索</p>
+  <ul class="search-results" id="search-results"></ul>
+</dialog>
+</body>
+</html>

@@ -1,4 +1,4 @@
-import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import {
   appendFileSync,
   chmodSync,
@@ -14,6 +14,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { commonDir } from "./git.mjs";
 import { agentAfterConsent, humanExecutes } from "./next-step.mjs";
+import { projectIdFor } from "../observability/projects.mjs";
 
 const OWNER_FILE = "owner.json";
 
@@ -22,22 +23,27 @@ const OWNER_FILE = "owner.json";
  * 目录里写一个归属标记：同名目录已被其他工具占用（例如项目原有的门禁）时改用 harness.d，
  * 两边的账本、证据互不混淆，原有工具在退役前也照常工作。选择规则只看标记，结果稳定。
  */
-export function dataDir(cwd) {
-  if (process.env.HARNESS_DATA_DIR) {
-    mkdirSync(process.env.HARNESS_DATA_DIR, { recursive: true });
-    return process.env.HARNESS_DATA_DIR;
-  }
+function resolveDataDir(cwd) {
+  if (process.env.HARNESS_DATA_DIR) return process.env.HARNESS_DATA_DIR;
   const base = commonDir(cwd);
   const primary = join(base, "harness");
   const alternate = join(base, "harness.d");
   const owned = (dir) => existsSync(join(dir, OWNER_FILE));
-  let dir;
-  if (owned(primary)) dir = primary;
-  else if (owned(alternate)) dir = alternate;
-  else if (!existsSync(primary) || readdirSync(primary).length === 0 || signedByUs(primary)) dir = primary;
-  else dir = alternate;
+  if (owned(primary)) return primary;
+  if (owned(alternate)) return alternate;
+  if (!existsSync(primary) || readdirSync(primary).length === 0 || signedByUs(primary)) return primary;
+  return alternate;
+}
+
+export function existingDataDir(cwd) {
+  return resolveDataDir(cwd);
+}
+
+export function dataDir(cwd) {
+  const dir = resolveDataDir(cwd);
+  const owned = existsSync(join(dir, OWNER_FILE));
   mkdirSync(dir, { recursive: true });
-  if (!owned(dir)) writeFileSync(join(dir, OWNER_FILE), `${JSON.stringify({ tool: "harness", createdAt: new Date().toISOString() })}\n`);
+  if (!owned) writeFileSync(join(dir, OWNER_FILE), `${JSON.stringify({ tool: "harness", createdAt: new Date().toISOString() })}\n`);
   return dir;
 }
 
@@ -259,7 +265,10 @@ export function checkRecord(record, kind, key) {
 }
 
 export function readRecord(cwd, kind, key) {
-  const file = recordPath(cwd, kind, key);
+  if (!/^[0-9A-Za-z._-]+$/.test(key)) throw new Error(`非法记录键: ${key}`);
+  const directory = join(existingDataDir(cwd), kind);
+  if (existsSync(directory) && !statSync(directory).isDirectory()) throw new Error(`无法读取 ${kind} 记录目录: ${directory} 不是目录`);
+  const file = join(directory, `${key}.json`);
   if (!existsSync(file)) return { ok: false, code: "missing", reason: `缺少 ${kind} 记录(${key})` };
   let record;
   try {
@@ -274,7 +283,7 @@ export function readRecord(cwd, kind, key) {
 export function scanRecords(cwd) {
   const summary = { total: 0, ok: 0, byCode: {} };
   for (const kind of RECORD_KINDS) {
-    const dir = join(dataDir(cwd), kind);
+    const dir = join(existingDataDir(cwd), kind);
     if (!existsSync(dir)) continue;
     for (const name of readdirSync(dir)) {
       if (!name.endsWith(".json")) continue;
@@ -296,9 +305,21 @@ export function anyRecord(cwd, kind, key) {
   return readRecord(cwd, kind, key);
 }
 
+const HARNESS_VERSION = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")).version;
+
 export function appendLedger(cwd, event) {
   try {
-    const line = JSON.stringify({ at: new Date().toISOString(), ...event });
+    const outcome = event.outcome ?? event.status ?? event.verdict;
+    const projectId = projectIdFor(cwd);
+    const line = JSON.stringify({
+      ...event,
+      at: new Date().toISOString(),
+      schema: 1,
+      id: event.id ?? randomUUID(),
+      projectId: projectId ?? event.projectId,
+      ...(outcome === undefined ? {} : { outcome }),
+      harnessVersion: HARNESS_VERSION,
+    });
     appendFileSync(join(dataDir(cwd), "ledger.jsonl"), `${line}\n`);
   } catch {
     // 账本只用于度量，写入失败不能影响门禁结果。
@@ -306,7 +327,7 @@ export function appendLedger(cwd, event) {
 }
 
 export function readLedger(cwd) {
-  const file = join(dataDir(cwd), "ledger.jsonl");
+  const file = join(existingDataDir(cwd), "ledger.jsonl");
   if (!existsSync(file)) return [];
   return readFileSync(file, "utf8")
     .split("\n")

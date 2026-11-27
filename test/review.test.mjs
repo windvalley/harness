@@ -364,6 +364,18 @@ describe("度量", () => {
     assert.equal(total.verifyReused, 2);
   });
 
+  test("滚动窗口不会把窗口前已经首次验证的 tree 重跑计入首过率", () => {
+    const events = [
+      { at: at(1), event: "verify", status: "failed", tree: "t1" },
+      { at: at(29), event: "verify", status: "passed", tree: "t1" },
+    ];
+    const { total } = computeMetrics(events, { sinceDays: 7, now: Date.parse("2026-10-30T08:00:00.000Z") });
+    assert.equal(total.verifyRuns, 1);
+    assert.equal(total.verifyTrees, 0);
+    assert.equal(total.verifyFirstPass, 0);
+    assert.equal(total.verifyFirstPassRate, null);
+  });
+
   test("分开采集定向验证、探索性评审、预检阻塞与授权修订", () => {
     const events = [
       { at: at(5), event: "verify", status: "passed", tree: "t1", durationMs: 120 },
@@ -394,6 +406,8 @@ describe("度量", () => {
     assert.equal(total.reviewRejected, 0);
     assert.equal(total.reviewRejectRate, 0);
     assert.equal(total.exploratoryReviews, 2);
+    assert.equal(total.reviewCostSamples, 0);
+    assert.equal(total.reviewCostMissing, 3);
   });
 
   test("按周分组，无数据时比率为空", () => {

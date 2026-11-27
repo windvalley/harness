@@ -131,6 +131,7 @@ export function makeRepo({ files = {}, project = {}, install = true, trustCodex 
     HARNESS_KEY_DIR: join(base, "key"),
     HARNESS_STORE: join(base, "store"),
     HARNESS_CACHE_DIR: join(base, "cache"),
+    HARNESS_OBSERVABILITY_DIR: join(base, "observability"),
     // 夹具自带 Codex 用户目录，避免读到本机真实配置，也便于模拟“已信任钩子”。
     CODEX_HOME: join(base, "codex-home"),
     // 同理隔离 DeepSeek Harness 的 profile 目录。

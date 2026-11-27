@@ -2,7 +2,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { gitOk, refExists, resolveCommit } from "../lib/git.mjs";
 import { landedIn } from "../lib/landed.mjs";
-import { appendLedger, checkRecord, dataDir, readRecord, sha256, writeRecord } from "../lib/store.mjs";
+import { appendLedger, checkRecord, existingDataDir, readRecord, sha256, writeRecord } from "../lib/store.mjs";
 
 export const OBLIGATION_KIND = "obligation";
 // 证据类别名在这里写死而不从 verify.mjs 导入：verify.mjs 经由 attestation.mjs 依赖本文件，反向导入会成环。
@@ -13,7 +13,7 @@ export function obligationKey(checkId, branchTip) {
 }
 
 function recordsDir(root) {
-  return join(dataDir(root), OBLIGATION_KIND);
+  return join(existingDataDir(root), OBLIGATION_KIND);
 }
 
 function readRaw(root, key) {
